@@ -15,6 +15,7 @@ import {
   LockOutlined, UnlockOutlined, SafetyOutlined, KeyOutlined,
   EyeOutlined, UserSwitchOutlined, CheckCircleOutlined,
   PhoneOutlined, MailOutlined, BranchesOutlined, ClockCircleOutlined,
+  NumberOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tenantApi } from '../../api/modules';
@@ -52,6 +53,7 @@ export default function UsersPage() {
   const [createOpen,      setCreateOpen]      = useState(false);
   const [editUser,        setEditUser]         = useState(null);
   const [resetPwdUser,    setResetPwdUser]     = useState(null);
+  const [pinUser,         setPinUser]          = useState(null);
   const [changeRoleUser,  setChangeRoleUser]   = useState(null);
   const [permUser,        setPermUser]         = useState(null);
   const [detailUser,      setDetailUser]       = useState(null);
@@ -60,6 +62,7 @@ export default function UsersPage() {
   const [createForm]    = Form.useForm();
   const [editForm]      = Form.useForm();
   const [resetPwdForm]  = Form.useForm();
+  const [pinForm]       = Form.useForm();
   const [roleForm]      = Form.useForm();
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
@@ -102,6 +105,12 @@ export default function UsersPage() {
   const resetPwdMutation = useMutation({
     mutationFn: ({ id, password }) => tenantApi.updateUser(id, { Password: password }),
     onSuccess: () => { message.success('✅ Password reset successfully!'); qc.invalidateQueries(['users']); setResetPwdUser(null); resetPwdForm.resetFields(); },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed.'),
+  });
+
+  const setPinMutation = useMutation({
+    mutationFn: ({ id, pin }) => tenantApi.updateUser(id, { PIN: pin }),
+    onSuccess: () => { message.success(pinForm.getFieldValue('pin') ? '✅ PIN set!' : 'PIN cleared.'); qc.invalidateQueries(['users']); setPinUser(null); pinForm.resetFields(); },
     onError: (err) => message.error(err.response?.data?.message || 'Failed.'),
   });
 
@@ -209,6 +218,13 @@ export default function UsersPage() {
             <Button size="small" icon={<KeyOutlined />}
               style={{ borderColor: '#fa8c16', color: '#fa8c16' }}
               onClick={() => { setResetPwdUser(r); resetPwdForm.resetFields(); }} />
+          </Tooltip>
+
+          {/* Image App Staff PIN */}
+          <Tooltip title={r.Has_Pin ? 'Change/Clear Image App PIN' : 'Set Image App PIN'}>
+            <Button size="small" icon={<NumberOutlined />}
+              style={{ borderColor: r.Has_Pin ? '#13c2c2' : '#8c8c8c', color: r.Has_Pin ? '#13c2c2' : '#8c8c8c' }}
+              onClick={() => { setPinUser(r); pinForm.resetFields(); }} />
           </Tooltip>
 
           {/* Change Role */}
@@ -481,6 +497,44 @@ export default function UsersPage() {
             style={{ background:'#fa8c16', borderColor:'#fa8c16', fontWeight:700 }}>
             🔑 Reset Password
           </Button>
+        </Form>
+      </Modal>
+
+      {/* ════════ Image App Staff PIN Modal ═══════════════════════════════ */}
+      <Modal title={`🔢 Image App PIN — ${pinUser?.Full_Name}`} open={!!pinUser}
+        onCancel={() => { setPinUser(null); pinForm.resetFields(); }}
+        footer={null} width={420} destroyOnClose>
+        <Alert
+          message="What this is for"
+          description="Lets this person identify themselves on the Image App (a shared shop tablet) without a full username/password login every time it changes hands — pick your name, enter this PIN, and every stock edit/image upload is attributed to them by name instead of just the device."
+          type="info" showIcon style={{ marginBottom: 14, fontSize: 11 }}
+        />
+        <Form form={pinForm} layout="vertical"
+          onFinish={v => {
+            if (v.pin && v.pin !== v.confirmPin) { message.error('PINs do not match!'); return; }
+            setPinMutation.mutate({ id: pinUser.User_ID, pin: v.pin || null });
+          }}>
+          <Form.Item name="pin" label="New PIN (4-6 digits)"
+            rules={[{ pattern: /^\d{4,6}$/, message: '4-6 digits only' }]}>
+            <Input.Password placeholder="e.g. 1234" maxLength={6} />
+          </Form.Item>
+          <Form.Item name="confirmPin" label="Confirm PIN"
+            dependencies={['pin']}
+            rules={[{ pattern: /^\d{4,6}$/, message: '4-6 digits only' }]}>
+            <Input.Password placeholder="Re-enter PIN" maxLength={6} />
+          </Form.Item>
+          <Space style={{ width: '100%' }} direction="vertical">
+            <Button type="primary" htmlType="submit" block loading={setPinMutation.isPending}
+              style={{ background:'#13c2c2', borderColor:'#13c2c2', fontWeight:700 }}>
+              🔢 Save PIN
+            </Button>
+            {pinUser?.Has_Pin && (
+              <Popconfirm title="Clear this PIN?" description="They won't be able to identify themselves on the Image App until a new PIN is set."
+                onConfirm={() => setPinMutation.mutate({ id: pinUser.User_ID, pin: null })}>
+                <Button block danger>Clear Existing PIN</Button>
+              </Popconfirm>
+            )}
+          </Space>
         </Form>
       </Modal>
 
