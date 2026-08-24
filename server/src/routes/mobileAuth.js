@@ -12,6 +12,7 @@ const db = require('../db/knex');
 const { sendSuccess, sendError } = require('../utils/response');
 const { auditLog } = require('../utils/auditLogger');
 const { sendSms } = require('../utils/smsService');
+const { authenticate } = require('../middleware/auth');
 
 // ─── Step 1: Validate License Key ─────────────────────────────────────────────
 // POST /api/mobile/validate-license
@@ -729,6 +730,76 @@ router.get('/policies/:tenantId', async (req, res) => {
   } catch (err) {
     console.error('Get policies error:', err.message);
     return sendError(res, 500, 'Failed to load policies.');
+  }
+});
+
+// ─── Staff PIN identification — Image App (shared-device attribution) ────────
+// The Image App's own session (from license-login) has no per-person
+// identity at all — every write is attributed to the device, not whoever's
+// actually holding it. These two routes let a real staff member identify
+// themselves without a full username/password login every time the tablet
+// changes hands: pick your name, enter your PIN, and every stock edit/image
+// upload for the rest of that session is attributed to YOU, not the device.
+//
+// GET /api/mobile/staff-list — requires the device's own token (authenticate)
+// so this can't be enumerated by an unactivated caller. Only lists staff who
+// actually have a PIN set — someone with no PIN can't use this flow at all
+// and correctly doesn't show up as an option.
+router.get('/staff-list', authenticate, async (req, res) => {
+  try {
+    const staff = await db('tbl_user_master')
+      .where({ Tenant_ID: req.user.tenantId, Is_Active: true })
+      .whereNotNull('PIN_Hash')
+      .select('User_ID', 'Full_Name', 'Username')
+      .orderBy('Full_Name');
+    return sendSuccess(res, staff);
+  } catch (err) {
+    console.error('Staff list error:', err.message);
+    return sendError(res, 500, 'Failed to load staff list.');
+  }
+});
+
+// POST /api/mobile/staff-pin-login — body: { userId, pin }. Also requires the
+// device's own token, so a PIN can only ever be tried from an already
+// license-activated device for that same tenant — not brute-forceable from
+// an anonymous caller with no license at all.
+router.post('/staff-pin-login', authenticate, async (req, res) => {
+  const { userId, pin } = req.body;
+  if (!userId || !pin) return sendError(res, 400, 'userId and pin are required.');
+
+  try {
+    const user = await db('tbl_user_master')
+      .where({ User_ID: userId, Tenant_ID: req.user.tenantId, Is_Active: true })
+      .whereNotNull('PIN_Hash')
+      .first();
+    if (!user) return sendError(res, 404, 'Staff member not found or has no PIN set.');
+
+    const valid = await bcrypt.compare(String(pin), user.PIN_Hash);
+    if (!valid) return sendError(res, 401, 'Incorrect PIN.');
+
+    const role = await db('tbl_role_master').where({ Role_ID: user.Role_ID }).first();
+
+    // Short-lived on purpose — this identifies who's using the device for
+    // roughly one shift, not a long-term session like the license-device
+    // token (which stays valid for the same 7d as before, underneath this).
+    const token = jwt.sign({
+      userId: user.User_ID,
+      tenantId: req.user.tenantId,
+      roleId: user.Role_ID,
+      roleName: role?.Role_Name || null,
+      username: user.Username,
+      fullName: user.Full_Name,
+      loginType: 'staff-pin',
+      permissions: {},
+    }, process.env.JWT_SECRET, { expiresIn: '12h' });
+
+    return sendSuccess(res, {
+      token,
+      user: { userId: user.User_ID, fullName: user.Full_Name, username: user.Username, roleName: role?.Role_Name || null },
+    }, `Signed in as ${user.Full_Name}.`);
+  } catch (err) {
+    console.error('Staff PIN login error:', err.message);
+    return sendError(res, 500, 'PIN login failed.');
   }
 });
 

@@ -363,6 +363,9 @@ router.get('/users', authenticate, async (req, res) => {
         'u.Role_ID', 'u.Branch_ID', 'u.Employee_Code', 'u.Department',
         'u.Custom_Permissions', 'u.Login_Attempts', 'u.Locked_Until',
         'r.Role_Name', 'r.Permissions as Role_Permissions',
+        // Never send the actual PIN_Hash to the client — just whether one's
+        // set, same reasoning as passwords never being shown either.
+        db.raw('("u"."PIN_Hash" IS NOT NULL) as "Has_Pin"'),
       );
     return sendSuccess(res, users);
   } catch (err) {
@@ -403,7 +406,7 @@ router.post('/users', authenticate, [
 // ─── PUT /api/tenant/users/:id — Edit user ────────────────────────────────────
 router.put('/users/:id', authenticate, async (req, res) => {
   try {
-    const { Password, Custom_Permissions, ...updateData } = req.body;
+    const { Password, PIN, Custom_Permissions, ...updateData } = req.body;
     // Prevent changing tenant
     delete updateData.Tenant_ID;
 
@@ -416,6 +419,22 @@ router.put('/users/:id', authenticate, async (req, res) => {
       // Default_Password intentionally not written — see auth.js's note.
       updateData.Login_Attempts = 0;
       updateData.Locked_Until = null;
+    }
+
+    // Staff PIN — lets this person be identified on the Image App (a shared
+    // device) without a full login. PIN: null/'' explicitly clears it
+    // (revokes their ability to use the PIN login), a 4-6 digit string sets
+    // a new one; omitted entirely leaves whatever's already there alone.
+    if (PIN !== undefined) {
+      if (PIN === null || PIN === '') {
+        updateData.PIN_Hash = null;
+        updateData.PIN_Set_Date = null;
+      } else {
+        if (!/^\d{4,6}$/.test(PIN)) return sendError(res, 400, 'PIN must be 4-6 digits.');
+        const pinSalt = await bcrypt.genSalt(10);
+        updateData.PIN_Hash = await bcrypt.hash(PIN, pinSalt);
+        updateData.PIN_Set_Date = new Date();
+      }
     }
 
     if (Custom_Permissions !== undefined) {
