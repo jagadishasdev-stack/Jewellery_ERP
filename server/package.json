@@ -1,0 +1,50 @@
+{
+  "name": "jewellery-erp-server",
+  "version": "1.0.0",
+  "description": "JewelSphere ERP Backend - Node.js + Express + PostgreSQL",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "migrate": "knex migrate:latest --knexfile src/db/knexfile.js",
+    "migrate:rollback": "knex migrate:rollback --knexfile src/db/knexfile.js",
+    "seed": "knex seed:run --knexfile src/db/knexfile.js",
+    "test": "NODE_ENV=development jest --runInBand --forceExit"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "<rootDir>/tests/**/*.test.js"
+    ],
+    "testTimeout": 20000
+  },
+  "dependencies": {
+    "bcryptjs": "2.4.3",
+    "compression": "1.7.4",
+    "cors": "2.8.5",
+    "dayjs": "1.11.10",
+    "dotenv": "16.3.1",
+    "express": "4.18.2",
+    "express-rate-limit": "7.1.5",
+    "express-validator": "7.0.1",
+    "firebase-admin": "^13.10.0",
+    "helmet": "7.1.0",
+    "jsonwebtoken": "9.0.2",
+    "knex": "3.1.0",
+    "morgan": "1.10.0",
+    "multer": "^2.2.0",
+    "mysql2": "^3.23.2",
+    "pg": "8.11.3",
+    "puppeteer": "21.5.2",
+    "razorpay": "^2.9.8",
+    "socket.io": "4.6.2",
+    "uuid": "9.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "nodemon": "3.0.2",
+    "supertest": "^7.2.2"
+  }
+}

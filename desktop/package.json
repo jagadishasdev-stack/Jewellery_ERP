@@ -1,0 +1,64 @@
+{
+  "name": "jewellery-erp-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Jewellery ERP packaged as a Windows/macOS desktop app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:all": "electron-builder --mac --win"
+  },
+  "dependencies": {
+    "dotenv": "16.3.1"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "in.kumudu.jewelleryerp",
+    "productName": "Jewellery ERP",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!.env",
+          "!uploads/**",
+          "!node_modules/.cache/**",
+          "!node_modules/.bin/**"
+        ]
+      },
+      {
+        "from": "../client/dist",
+        "to": "client-dist"
+      },
+      {
+        "from": "resources/env.template",
+        "to": "env.template"
+      }
+    ],
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.business"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

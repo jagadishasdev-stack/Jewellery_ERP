@@ -1,0 +1,205 @@
+/**
+ * Customer Reports — Ledger | Purchase History | Outstanding
+ */
+import React, { useState, useRef } from 'react';
+import {
+  Row, Col, Card, Typography, Button, Space, Tag, Tabs, Table,
+  Input, Statistic, Select, message, Progress,
+} from 'antd';
+import { DownloadOutlined, SearchOutlined, TeamOutlined } from '@ant-design/icons';
+import { useQuery } from '@tanstack/react-query';
+import api from '../../api/axios';
+import { customersApi } from '../../api/modules';
+import { formatCurrency } from '../../utils/calculations';
+import PageTour from '../../components/PageTour';
+import dayjs from 'dayjs';
+
+const { Title, Text } = Typography;
+const { Option } = Select;
+
+const exportCSV = (data, filename) => {
+  if (!data?.length) { message.warning('No data.'); return; }
+  const csv = [Object.keys(data[0]).join(','), ...data.map(r=>Object.values(r).map(v=>`"${v??''}"`).join(','))].join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download = `${filename}_${dayjs().format('YYYYMMDD')}.csv`; a.click();
+};
+
+export default function CustomerReportsPage() {
+  const [activeTab, setActiveTab] = useState('ledger');
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
+  const [searchText, setSearchText] = useState('');
+
+  // ── Walkthrough tour refs ───────────────────────────────────────────────────
+  const tabsRef = useRef(null);
+  const tourSteps = [
+    { title: '1. Customer Reports Tabs', description: 'Customer Ledger: this account-wise debit/credit history shows how much a specific customer owes you or has paid — it is separate from the shop\'s own accounting Ledger under Financial Reports. Purchase History: every bill a customer has made. Outstanding: every customer with a pending balance, in one list.', target: () => tabsRef.current },
+    { title: '2. Pick a Customer', description: 'The Ledger and Purchase History tabs need a customer selected first — search by name or mobile number, then pick them from the dropdown.' },
+    { title: '3. Outstanding — No Selection Needed', description: 'The Outstanding tab lists every customer with a pending balance automatically, sorted so the most overdue accounts are easy to spot. CSV export is available in every tab\'s card header.' },
+  ];
+
+  const { data: customers } = useQuery({
+    queryKey: ['all-customers-report'],
+    queryFn: () => customersApi.getAll({ limit: 500 }).then(r => r.data.data?.items || []),
+  });
+
+  const { data: ledgerData, isLoading: ledgerLoading } = useQuery({
+    queryKey: ['customer-ledger', selectedCustomer],
+    queryFn: () => api.get(`/reports/customer-ledger/${selectedCustomer}`).then(r => r.data.data),
+    enabled: !!selectedCustomer,
+  });
+
+  const { data: outstandingData, isLoading: outLoading } = useQuery({
+    queryKey: ['customer-outstanding'],
+    queryFn: () => api.get('/reports/customer-outstanding').then(r => r.data.data || []),
+    enabled: activeTab === 'outstanding',
+  });
+
+  const { data: historyData, isLoading: histLoading } = useQuery({
+    queryKey: ['customer-history', selectedCustomer],
+    queryFn: () => customersApi.getHistory(selectedCustomer).then(r => r.data.data || []),
+    enabled: !!selectedCustomer && activeTab === 'history',
+  });
+
+  const filtered = (customers || []).filter(c =>
+    !searchText || c.Customer_Name?.toLowerCase().includes(searchText.toLowerCase()) ||
+    c.Mobile_1?.includes(searchText)
+  );
+
+  const ledgerCols = [
+    { title: 'Date', dataIndex: 'date', render: v => dayjs(v).format('DD-MMM-YYYY') },
+    { title: 'Invoice No', dataIndex: 'invoice_no', render: v => v ? <Text code style={{fontSize:11}}>{v}</Text> : '-' },
+    { title: 'Particulars', dataIndex: 'particulars' },
+    { title: 'Debit', dataIndex: 'debit', render: v => parseFloat(v||0)>0 ? <Text style={{color:'#ff4d4f',fontWeight:600}}>{formatCurrency(v)}</Text> : '-' },
+    { title: 'Credit', dataIndex: 'credit', render: v => parseFloat(v||0)>0 ? <Text style={{color:'#52c41a',fontWeight:600}}>{formatCurrency(v)}</Text> : '-' },
+    { title: 'Balance', dataIndex: 'balance', render: v => <Text strong style={{color:'#B8860B'}}>{formatCurrency(v||0)}</Text> },
+  ];
+
+  const historyCols = [
+    { title: 'Invoice No', dataIndex: 'Invoice_Number', render: v => <Text code style={{fontSize:11}}>{v}</Text> },
+    { title: 'Date', dataIndex: 'Sale_Date', render: v => dayjs(v).format('DD-MMM-YYYY') },
+    { title: 'Items', dataIndex: 'item_count', width: 70 },
+    { title: 'Amount', dataIndex: 'Net_Payable_Amount', render: v => <Text strong style={{color:'#B8860B'}}>{formatCurrency(v)}</Text> },
+    { title: 'Mode', dataIndex: 'Payment_Mode', render: v => <Tag color="blue">{v}</Tag> },
+    { title: 'Status', dataIndex: 'Payment_Status', render: v => <Tag color={v==='Paid'?'green':v==='Partial'?'orange':'red'}>{v}</Tag> },
+  ];
+
+  const outstandingCols = [
+    { title: 'Customer', dataIndex: 'Customer_Name', render: v => <Text strong>{v}</Text> },
+    { title: 'Mobile', dataIndex: 'Customer_Mobile' },
+    { title: 'Total Purchases', dataIndex: 'total_purchases', render: v => formatCurrency(v) },
+    { title: 'Paid', dataIndex: 'total_paid', render: v => <Text style={{color:'#52c41a'}}>{formatCurrency(v)}</Text> },
+    { title: 'Outstanding', dataIndex: 'outstanding', render: v => <Text strong style={{color:'#ff4d4f'}}>{formatCurrency(v)}</Text> },
+    { title: 'Last Purchase', dataIndex: 'last_purchase_date', render: v => v ? dayjs(v).format('DD-MMM-YYYY') : '-' },
+  ];
+
+  const CustomerSelect = () => (
+    <Card size="small" style={{borderRadius:8,marginBottom:14}}>
+      <Row gutter={12} align="middle">
+        <Col xs={24} md={10}>
+          <Input prefix={<SearchOutlined />} placeholder="Search customer by name or mobile"
+            value={searchText} onChange={e=>setSearchText(e.target.value)} allowClear />
+        </Col>
+        <Col xs={24} md={10}>
+          <Select style={{width:'100%'}} placeholder="Select a customer"
+            value={selectedCustomer} onChange={v=>setSelectedCustomer(v)}
+            showSearch optionFilterProp="children" allowClear>
+            {filtered.map(c=><Option key={c.Customer_ID} value={c.Customer_ID}>{c.Customer_Name} — {c.Mobile_1}</Option>)}
+          </Select>
+        </Col>
+        {selectedCustomer && (() => {
+          const cust = customers?.find(c=>c.Customer_ID===selectedCustomer);
+          return cust ? (
+            <Col xs={24} md={4}>
+              <Space direction="vertical" size={0}>
+                <Tag color="gold">Loyalty: {cust.Loyalty_Points||0} pts</Tag>
+                <Tag color="blue">Purchases: {cust.Total_Purchase_Count||0}</Tag>
+              </Space>
+            </Col>
+          ) : null;
+        })()}
+      </Row>
+    </Card>
+  );
+
+  const tabItems = [
+    {
+      key: 'ledger', label: <span>📋 Customer Ledger</span>,
+      children: (
+        <>
+          <CustomerSelect />
+          {!selectedCustomer ? (
+            <Card style={{borderRadius:8,textAlign:'center',padding:40}}>
+              <TeamOutlined style={{fontSize:48,color:'#d9d9d9'}} />
+              <p style={{color:'#888',marginTop:12}}>Select a customer above to view their ledger</p>
+            </Card>
+          ) : (
+            <>
+              {ledgerData?.summary && (
+                <Row gutter={[10,10]} style={{marginBottom:14}}>
+                  {[
+                    {title:'Total Purchases',value:parseFloat(ledgerData.summary.total_purchases||0),color:'#B8860B',fmt:formatCurrency},
+                    {title:'Total Paid',value:parseFloat(ledgerData.summary.total_paid||0),color:'#52c41a',fmt:formatCurrency},
+                    {title:'Outstanding',value:parseFloat(ledgerData.summary.outstanding||0),color:'#ff4d4f',fmt:formatCurrency},
+                    {title:'Loyalty Points',value:parseInt(ledgerData.summary.loyalty_points||0),color:'#722ed1'},
+                  ].map((c,i)=>(
+                    <Col xs={12} md={6} key={i}>
+                      <Card bodyStyle={{padding:'10px 12px'}} style={{borderRadius:8,border:'none',boxShadow:'0 1px 4px rgba(0,0,0,.07)',borderTop:`3px solid ${c.color}`}}>
+                        <Statistic title={<Text style={{fontSize:11,color:'#888'}}>{c.title}</Text>}
+                          value={c.value} formatter={c.fmt?v=>c.fmt(v):undefined}
+                          valueStyle={{color:c.color,fontSize:16,fontWeight:700}} />
+                      </Card>
+                    </Col>
+                  ))}
+                </Row>
+              )}
+              <Card title="Customer Ledger" bodyStyle={{padding:0}} style={{borderRadius:8}}
+                extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(ledgerData?.transactions||[],'customer_ledger')}>CSV</Button>}>
+                <Table
+            scroll={{ x: "max-content" }} columns={ledgerCols} dataSource={ledgerData?.transactions||[]} rowKey={(r,i)=>i}
+                  size="small" loading={ledgerLoading} pagination={{pageSize:20}} />
+              </Card>
+            </>
+          )}
+        </>
+      ),
+    },
+    {
+      key: 'history', label: <span>🛒 Purchase History</span>,
+      children: (
+        <>
+          <CustomerSelect />
+          <Card title="Purchase History" bodyStyle={{padding:0}} style={{borderRadius:8}}
+            extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(historyData||[],'purchase_history')}>CSV</Button>}>
+            <Table
+            scroll={{ x: "max-content" }} columns={historyCols} dataSource={historyData||[]} rowKey="Sale_ID"
+              size="small" loading={histLoading} pagination={{pageSize:20}} />
+          </Card>
+        </>
+      ),
+    },
+    {
+      key: 'outstanding', label: <span>⚠️ Outstanding</span>,
+      children: (
+        <Card title="Customer Outstanding Balances" bodyStyle={{padding:0}} style={{borderRadius:8}}
+          extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(outstandingData||[],'customer_outstanding')}>CSV</Button>}>
+          <Table
+            scroll={{ x: "max-content" }} columns={outstandingCols} dataSource={outstandingData||[]} rowKey="Customer_ID"
+            size="small" loading={outLoading} pagination={{pageSize:20}} />
+        </Card>
+      ),
+    },
+  ];
+
+  return (
+    <div className="page-wrapper">
+      <div className="page-header">
+        <Title level={4} style={{margin:0}}><TeamOutlined style={{color:'#722ed1',marginRight:8}} />Customer Reports</Title>
+      </div>
+      <div ref={tabsRef}>
+      <Tabs activeKey={activeTab} onChange={setActiveTab} type="card" items={tabItems} />
+      </div>
+
+      <PageTour steps={tourSteps} />
+    </div>
+  );
+}

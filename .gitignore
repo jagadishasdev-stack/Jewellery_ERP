@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+*/node_modules/
+**/node_modules/
+
+# Environment files — never commit secrets
+.env
+.env.local
+.env.*.local
+**/.env
+!**/.env.example
+
+# Build outputs
+client/dist/
+client/build/
+desktop/release/
+savings_app/*/build/
+savings_app/*/dist/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Docker volumes
+postgres-data/
+
+# PDF/uploads (generated at runtime — includes real customer/stock photos)
+server/uploads/
+server/invoices/
+
+# Real local MySQL data directory (server/scripts/import-dlj-legacy-data.js) —
+# binary DB files plus MySQL's own auto-generated TLS private keys
+# (server/local-db/*/data/*.pem). Never belongs in git: it's real migrated
+# customer/stock data, hundreds of MB, and not source code.
+server/local-db/
+
+# Secrets / signing material — belt and suspenders even though the two
+# directories below are excluded wholesale anyway (see next section).
+*.jks
+*.keystore
+*.p12
+*.pem
+google-services.json
+GoogleService-Info.plist
+
+# Image_App and savings_app/{frontend,backend} are each their own separate,
+# already-git-tracked projects with their OWN remotes (Amitkumudu/ImageApp,
+# KumuduDeveloper/SAVING-APP-FRONTEND, KumuduDeveloper/SAVING-BACKEND) —
+# deliberately excluded here rather than folded into this repo, so their
+# existing git history stays exactly where it already lives.
+/Image_App/
+/savings_app/
