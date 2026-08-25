@@ -162,3 +162,24 @@ test('a non-admin (the restricted staff user) cannot grant branch access to anyo
   const res = await request(app).post('/api/branches/access').set(authAs(staffToken)).send({ User_ID: staffUserId, Branch_ID: branchB });
   expect(res.status).toBe(403);
 });
+
+test('the audit trail (previously dormant — the column existed, nothing ever populated it) now records which branch an action actually happened in', async () => {
+  const res = await createOrnament(adminToken, branchA, { Article_Number: 'QAMB-AUDIT-001' });
+  expect(res.status).toBe(201);
+
+  const audit = await db('tbl_audit_log')
+    .where({ Tenant_ID: tenant.tenantId, Table_Name: 'tbl_ornament_master', Record_ID: String(res.body.data.Ornament_ID) })
+    .orderBy('Log_ID', 'desc').first();
+  expect(audit).toBeDefined();
+  expect(audit.Branch_ID).toBe(branchA);
+});
+
+test('an action with no branch context active leaves the audit record\'s branch unattributed, not falsely claimed', async () => {
+  const res = await createOrnament(adminToken, null, { Article_Number: 'QAMB-AUDIT-NOCTX-001' });
+  expect(res.status).toBe(201);
+
+  const audit = await db('tbl_audit_log')
+    .where({ Tenant_ID: tenant.tenantId, Table_Name: 'tbl_ornament_master', Record_ID: String(res.body.data.Ornament_ID) })
+    .orderBy('Log_ID', 'desc').first();
+  expect(audit.Branch_ID).toBeNull();
+});

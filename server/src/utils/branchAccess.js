@@ -53,6 +53,15 @@ const requireValidBranch = async (req, res, next) => {
     if (!access.allBranches && !access.branchIds.includes(req.branchId)) {
       return sendError(res, 403, 'You do not have access to that branch.');
     }
+    // Activates the audit trail's own (already-built, previously dormant)
+    // branch column — auditLogger.js has always read req.user.branchId,
+    // but nothing ever set it, since branch context lives in a per-request
+    // header, not the JWT. This is the actual branch THIS request/action
+    // happened in — a better fit for "which branch did this happen at"
+    // than a static home-branch claim would be, and correctly stays unset
+    // for an 'ALL'-branches or no-branch-context request, which isn't
+    // attributable to any one branch.
+    req.user.branchId = req.branchId;
     next();
   } catch (err) {
     return sendError(res, 500, 'Branch access check failed.');
