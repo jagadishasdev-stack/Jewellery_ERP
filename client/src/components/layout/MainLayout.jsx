@@ -53,12 +53,20 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   }
 
   if (permissions.inventory && isEnabled('inventory')) {
+    const inventoryChildren = [
+      { key: '/inventory', label: 'Stock' },
+      { key: '/inventory/add', label: 'Add Stock' },
+    ];
+    // Special Stock is an operational classification (in-house karigar
+    // production, special collections, reserved pieces), NOT a tax/
+    // accounting concept — visible in both Official and Unofficial mode,
+    // unlike Hidden Stock below which is deliberately mode-gated.
+    if (permissions.tenant_management) {
+      inventoryChildren.push({ key: '/inventory/special-stock', label: '⭐ Special Stock' });
+    }
     items.push({
       key: 'inventory-group', icon: <AppstoreOutlined />, label: 'Inventory',
-      children: [
-        { key: '/inventory', label: 'Stock' },
-        { key: '/inventory/add', label: 'Add Stock' },
-      ],
+      children: inventoryChildren,
     });
   }
 

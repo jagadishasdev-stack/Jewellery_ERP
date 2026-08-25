@@ -52,6 +52,7 @@ import RoleManagementPage from './pages/admin/RoleManagementPage';
 import SuperAdminDashboard from './pages/admin/SuperAdminDashboard';
 import FloorsPage from './pages/floors/FloorsPage';
 import HiddenStockPage from './pages/floors/HiddenStockPage';
+import SpecialStockPage from './pages/inventory/SpecialStockPage';
 import PrinterSettingsPage from './pages/admin/PrinterSettingsPage';
 import ThemeSettingsPage from './pages/admin/ThemeSettingsPage';
 import LabelDesignerPage from './pages/admin/LabelDesignerPage';
@@ -192,6 +193,7 @@ function App() {
         <Route path="/admin/label-designer" element={<ProtectedRoute permission="tenant_management"><LabelDesignerPage /></ProtectedRoute>} />
         <Route path="/floors" element={<FloorsPage />} />
         <Route path="/floors/hidden-stock" element={<ProtectedRoute permission="tenant_management"><HiddenStockPage /></ProtectedRoute>} />
+        <Route path="/inventory/special-stock" element={<ProtectedRoute permission="tenant_management"><SpecialStockPage /></ProtectedRoute>} />
         <Route path="/transfer" element={<TransferPage />} />
         <Route path="/purchase" element={<PurchasePage />} />
         <Route path="/purchase/hub" element={<PurchaseHub />} />

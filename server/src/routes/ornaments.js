@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { body, query, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requirePermission } = require('../middleware/auth');
 const { generateArticleNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
 const { modeFilter, modeVal, applyStockVisibility } = require('../utils/dataModeFilter');
@@ -13,6 +13,7 @@ router.get('/', authenticate, async (req, res) => {
   const {
     typeId, designId, purityId, metalType, isAvailable, isSold,
     minPrice, maxPrice, search, page = 1, limit = 50,
+    classification, floorId, counterId, trayId,
   } = req.query;
 
   try {
@@ -57,6 +58,13 @@ router.get('/', authenticate, async (req, res) => {
     if (isSold !== undefined) qb = qb.where('o.Is_Sold', isSold === 'true');
     if (minPrice) qb = qb.where('o.Total_Price', '>=', parseFloat(minPrice));
     if (maxPrice) qb = qb.where('o.Total_Price', '<=', parseFloat(maxPrice));
+    // Special Stock Isolation — a pure display/operational filter (which
+    // screen an item shows on), never an eligibility check: billing and
+    // reports never look at this column, only this listing endpoint does.
+    if (classification) qb = qb.where('o.Stock_Classification', classification);
+    if (floorId) qb = qb.where('o.Floor_ID', floorId);
+    if (counterId) qb = qb.where('o.Counter_ID', counterId);
+    if (trayId) qb = qb.where('o.Tray_ID', trayId);
     if (search) {
       qb = qb.where(function () {
         this.where('o.Article_Number', 'ilike', `%${search}%`)
@@ -74,6 +82,10 @@ router.get('/', authenticate, async (req, res) => {
     if (metalType) countBase.where('Metal_Type', metalType);
     if (isAvailable !== undefined) countBase.where('Is_Stock_Available', isAvailable === 'true');
     if (isSold !== undefined) countBase.where('Is_Sold', isSold === 'true');
+    if (classification) countBase.where('Stock_Classification', classification);
+    if (floorId) countBase.where('Floor_ID', floorId);
+    if (counterId) countBase.where('Counter_ID', counterId);
+    if (trayId) countBase.where('Tray_ID', trayId);
     const [{ count }] = await countBase.count('Ornament_ID as count');
     const data = await qb.orderBy('o.Created_Date', 'desc').limit(parseInt(limit)).offset(offset);
 
@@ -267,6 +279,103 @@ router.put('/catalog-visibility', authenticate, [
   }
 });
 
+// ─── PUT /api/ornaments/stock-classification — Special Stock Isolation ───────
+// Bulk item-level classify (Normal <-> Special), by explicit Ornament_IDs.
+// This is an OPERATIONAL/DISPLAY tag only — which screen an item shows up on
+// by default. It never touches Is_Active/Is_Hidden/Is_Sold/Data_Mode/
+// Show_In_Catalog, so billing (sales.js), GST/accounting, and every report
+// stay completely unaffected: a Special Stock item bills through the exact
+// same POST /api/sales/create, same invoice numbering, same everything.
+// One inventory ledger, one barcode, one accounting system — see this
+// migration's own header comment (20260826000000_add_stock_classification.js).
+// Registered ahead of PUT /:id below for the same reason the earlier
+// /catalog-visibility route was: Express matches '/:id' against literally
+// any path segment, including this one's name.
+router.put('/stock-classification', authenticate, requirePermission('tenant_management'), [
+  body('ornamentIds').isArray({ min: 1 }).withMessage('ornamentIds must be a non-empty array.'),
+  body('classification').isIn(['Normal', 'Special']).withMessage('classification must be Normal or Special.'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+
+  const { ornamentIds, classification, specialType, reason } = req.body;
+  try {
+    const before = await db('tbl_ornament_master')
+      .where('Tenant_ID', req.user.tenantId).whereIn('Ornament_ID', ornamentIds)
+      .select('Ornament_ID', 'Article_Number', 'Stock_Classification', 'Special_Stock_Type');
+
+    const updated = await db('tbl_ornament_master')
+      .where('Tenant_ID', req.user.tenantId)
+      .whereIn('Ornament_ID', ornamentIds)
+      .update({
+        Stock_Classification: classification,
+        Special_Stock_Type: classification === 'Special' ? (specialType || null) : null,
+        Last_Updated_By: req.user.username,
+        Last_Updated_Date: new Date(),
+      })
+      .returning(['Ornament_ID', 'Article_Number']);
+
+    await auditLog({
+      tenantId: req.user.tenantId, userId: req.user.userId, tableName: 'tbl_ornament_master',
+      recordId: null, actionType: 'STOCK_CLASSIFY',
+      oldData: before, newData: { ornamentIds, classification, specialType: specialType || null, count: updated.length },
+      description: reason || null, req,
+    });
+
+    return sendSuccess(res, { updatedCount: updated.length, items: updated },
+      `${updated.length} item(s) classified as ${classification} Stock.`);
+  } catch (err) {
+    console.error('Stock classification update error:', err.message);
+    return sendError(res, 500, 'Failed to update stock classification.');
+  }
+});
+
+// ─── PUT /api/ornaments/stock-classification/by-location ─────────────────────
+// Bulk classify EVERY currently-active item under a given floor/counter/tray
+// in one call — sections 11-13 of the spec (counter-level, tray-level,
+// floor-level selection). Uses the SAME Floor_ID/Counter_ID/Tray_ID location
+// hierarchy the Floor Management module already has; no new location tables.
+router.put('/stock-classification/by-location', authenticate, requirePermission('tenant_management'), [
+  body('classification').isIn(['Normal', 'Special']).withMessage('classification must be Normal or Special.'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+
+  const { floorId, counterId, trayId, classification, specialType, reason } = req.body;
+  if (!floorId && !counterId && !trayId) {
+    return sendError(res, 400, 'At least one of floorId, counterId, or trayId is required.');
+  }
+  try {
+    let qb = db('tbl_ornament_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true);
+    if (floorId) qb = qb.where('Floor_ID', floorId);
+    if (counterId) qb = qb.where('Counter_ID', counterId);
+    if (trayId) qb = qb.where('Tray_ID', trayId);
+
+    const before = await qb.clone().select('Ornament_ID', 'Article_Number', 'Stock_Classification', 'Special_Stock_Type');
+    if (!before.length) return sendError(res, 400, 'No active stock found at that location.');
+
+    const updated = await qb.update({
+      Stock_Classification: classification,
+      Special_Stock_Type: classification === 'Special' ? (specialType || null) : null,
+      Last_Updated_By: req.user.username,
+      Last_Updated_Date: new Date(),
+    }).returning(['Ornament_ID', 'Article_Number']);
+
+    await auditLog({
+      tenantId: req.user.tenantId, userId: req.user.userId, tableName: 'tbl_ornament_master',
+      recordId: null, actionType: 'STOCK_CLASSIFY',
+      oldData: before, newData: { floorId, counterId, trayId, classification, specialType: specialType || null, count: updated.length },
+      description: reason || null, req,
+    });
+
+    return sendSuccess(res, { updatedCount: updated.length, items: updated },
+      `${updated.length} item(s) at that location classified as ${classification} Stock.`);
+  } catch (err) {
+    console.error('Stock classification by-location error:', err.message);
+    return sendError(res, 500, 'Failed to update stock classification.');
+  }
+});
+
 // ─── PUT /api/ornaments/:id ───────────────────────────────────────────────────
 router.put('/:id', authenticate, async (req, res) => {
   try {
@@ -279,7 +388,12 @@ router.put('/:id', authenticate, async (req, res) => {
     // audit trail; Data_Mode is fixed at creation. Without this guard a
     // plain PUT could flip an item hidden/visible with no location, no
     // reason, and none of the reporting consequences that flow from it.
-    const { Is_Hidden, Data_Mode, Hidden_Location_ID, Hidden_By, Hidden_Date, Hidden_Reason, Restored_By, Restored_Date, ...safeBody } = req.body;
+    // Stock_Classification/Special_Stock_Type have their own dedicated,
+    // permission-gated, audit-logged endpoint (PUT /stock-classification[/
+    // by-location] above) for the same reason — every classification
+    // change must leave a real audit record per the Special Stock spec's
+    // own requirement, which a silent field on this generic update would bypass.
+    const { Is_Hidden, Data_Mode, Hidden_Location_ID, Hidden_By, Hidden_Date, Hidden_Reason, Restored_By, Restored_Date, Stock_Classification, Special_Stock_Type, ...safeBody } = req.body;
 
     const [updated] = await db('tbl_ornament_master')
       .where({ Ornament_ID: req.params.id })

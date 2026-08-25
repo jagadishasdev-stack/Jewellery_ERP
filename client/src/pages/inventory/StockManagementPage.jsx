@@ -15,7 +15,7 @@ import {
   PlusOutlined, SearchOutlined, BarcodeOutlined, EditOutlined,
   EyeOutlined, DeleteOutlined, SwapOutlined, UploadOutlined,
   FilterOutlined, DownloadOutlined, PrinterOutlined, QrcodeOutlined,
-  EyeInvisibleOutlined,
+  EyeInvisibleOutlined, StarOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -341,7 +341,7 @@ export default function StockManagementPage() {
   // Filters
   const [filters, setFilters] = useState({
     search: '', typeId: '', purityId: '', metalType: '', isAvailable: '', isSold: '',
-    minPrice: '', maxPrice: '', page: 1, limit: 50,
+    minPrice: '', maxPrice: '', classification: '', page: 1, limit: 50,
   });
   const [activeTab, setActiveTab] = useState('available');
   const [entryModal, setEntryModal] = useState(null); // entry type string
@@ -349,6 +349,8 @@ export default function StockManagementPage() {
   const [detailId, setDetailId] = useState(null);
   const [barcodeSearch, setBarcodeSearch] = useState('');
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+  const [specialStockModal, setSpecialStockModal] = useState(false);
+  const [specialStockForm] = Form.useForm();
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const addStockRef = useRef(null);
@@ -420,6 +422,25 @@ export default function StockManagementPage() {
       qc.invalidateQueries(['ornaments']);
     },
     onError: (err) => message.error(err.response?.data?.message || 'Failed to update catalog visibility.'),
+  });
+
+  // Special Stock Isolation — an operational/display classification only
+  // (which screen an item shows on by default). Never touches Is_Active/
+  // Is_Hidden/Is_Sold/Data_Mode/Show_In_Catalog — billing, GST, and every
+  // report stay completely unaffected either way. See the migration
+  // comment (20260826000000_add_stock_classification.js) for the full
+  // rationale — one inventory ledger, one barcode, one accounting system.
+  const classificationMutation = useMutation({
+    mutationFn: ({ classification, specialType, reason }) =>
+      ornamentsApi.setStockClassification({ ornamentIds: selectedRowKeys, classification, specialType, reason }),
+    onSuccess: (res) => {
+      message.success(res.data.message || 'Classification updated.');
+      setSelectedRowKeys([]);
+      setSpecialStockModal(false);
+      specialStockForm.resetFields();
+      qc.invalidateQueries(['ornaments']);
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to update classification.'),
   });
 
   const handleBarcodeSearch = async () => {
@@ -503,6 +524,19 @@ export default function StockManagementPage() {
       render: v => v === false
         ? <Tag icon={<EyeInvisibleOutlined />} color="default">Hidden</Tag>
         : <Tag color="cyan">Visible</Tag>,
+    },
+    {
+      title: 'Classification',
+      dataIndex: 'Stock_Classification',
+      width: 130,
+      render: (v, r) => v === 'Special'
+        ? (
+          <Space direction="vertical" size={0}>
+            <Tag icon={<StarOutlined />} color="gold">Special</Tag>
+            {r.Special_Stock_Type && <Text style={{ fontSize: 10, color: '#888' }}>{r.Special_Stock_Type}</Text>}
+          </Space>
+        )
+        : <Tag color="default">Normal</Tag>,
     },
     {
       title: 'Actions',
@@ -616,6 +650,10 @@ export default function StockManagementPage() {
           <Select placeholder="Metal Type" style={{ minWidth: 120 }} allowClear onChange={v => setFilters(f => ({ ...f, metalType: v || '', page: 1 }))}>
             {METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}
           </Select>
+          <Select placeholder="Classification" style={{ minWidth: 130 }} allowClear onChange={v => setFilters(f => ({ ...f, classification: v || '', page: 1 }))}>
+            <Option value="Normal">Normal Stock</Option>
+            <Option value="Special">Special Stock</Option>
+          </Select>
           <Input.Search
             placeholder="Search article, type, design..."
             style={{ minWidth: 200 }}
@@ -664,6 +702,18 @@ export default function StockManagementPage() {
             >
               Show in Catalog
             </Button>
+            <Button
+              icon={<StarOutlined />}
+              onClick={() => setSpecialStockModal(true)}
+            >
+              Classify as Special Stock
+            </Button>
+            <Button
+              loading={classificationMutation.isPending}
+              onClick={() => classificationMutation.mutate({ classification: 'Normal' })}
+            >
+              Classify as Normal Stock
+            </Button>
             <Button type="text" onClick={() => setSelectedRowKeys([])}>Clear</Button>
           </Space>
         </Card>
@@ -683,6 +733,39 @@ export default function StockManagementPage() {
         onSuccess={()=>qc.invalidateQueries(['ornaments'])} />
       <EditOrnamentModal ornamentId={editId} open={!!editId} onClose={()=>setEditId(null)} />
       <OrnamentDetailDrawer ornamentId={detailId} open={!!detailId} onClose={()=>setDetailId(null)} />
+
+      {/* Classify as Special Stock — captures an optional type/reason so
+          the audit log (Section 24 of the Special Stock spec) records WHY,
+          not just what changed. Billing/GST/accounting are unaffected
+          either way — this is purely which screen the item shows on. */}
+      <Modal
+        title={<Space><StarOutlined style={{ color: '#B8860B' }} />Classify as Special Stock</Space>}
+        open={specialStockModal}
+        onCancel={() => setSpecialStockModal(false)}
+        footer={null}
+        destroyOnClose
+      >
+        <Form
+          form={specialStockForm}
+          layout="vertical"
+          onFinish={v => classificationMutation.mutate({ classification: 'Special', ...v })}
+        >
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {selectedRowKeys.length} item(s) selected. This only changes which screen these items show on by
+            default — billing, GST, and accounting are completely unaffected.
+          </Text>
+          <Form.Item name="specialType" label="Special Stock Type (optional)" style={{ marginTop: 16 }}>
+            <Input placeholder="e.g. In-house Karigar, Special Collection, Reserved" />
+          </Form.Item>
+          <Form.Item name="reason" label="Reason (for the audit log)">
+            <Input.TextArea rows={2} placeholder="Why is this stock being classified as Special?" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block loading={classificationMutation.isPending}
+            style={{ background: '#B8860B', borderColor: '#B8860B' }}>
+            Classify {selectedRowKeys.length} Item(s) as Special Stock
+          </Button>
+        </Form>
+      </Modal>
 
       <PageTour steps={tourSteps} />
     </div>

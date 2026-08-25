@@ -252,16 +252,28 @@ router.get('/gst-summary', authenticate, async (req, res) => {
 
 // ─── GET /api/reports/item-wise-sales ─────────────────────────────────────────
 router.get('/item-wise-sales', authenticate, async (req, res) => {
-  const { fromDate, toDate } = req.query;
+  const { fromDate, toDate, classification } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const data = await excludeHiddenStockSales(db('tbl_sales_details as sd')
+    let qb = db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled');
+    // Optional operational filter (Special Stock spec, section 19) — this
+    // narrows which rows are SHOWN, nothing more. It joins the ornament's
+    // CURRENT Stock_Classification (a display tag that can be changed
+    // after the sale), not a snapshot taken at sale time, so it's an
+    // operational convenience, not a historical/audit record. Never
+    // excludes anything from the underlying sales/accounting data itself —
+    // that's a completely separate, unaffected table this filter doesn't touch.
+    if (classification) {
+      qb = qb.join('tbl_ornament_master as o', 'sd.Ornament_ID', 'o.Ornament_ID')
+        .where('o.Stock_Classification', classification);
+    }
+    const data = await excludeHiddenStockSales(qb, req, 'sh')
       .groupBy('sd.Item_Type_Name')
       .select('sd.Item_Type_Name as Type_Name', db.raw('COUNT(*) as qty_sold'), db.raw('SUM("sd"."Gross_Weight") as total_weight'), db.raw('SUM("sd"."Total_Line_Price") as revenue'), db.raw('SUM("sd"."GST_Amount") as gst'))
       .orderBy('revenue', 'desc');
@@ -968,6 +980,57 @@ router.get('/catalog-hidden-stock', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Catalog-hidden stock report error:', err.message);
     return sendError(res, 500, 'Failed to generate catalog-hidden stock report.');
+  }
+});
+
+// ─── GET /api/reports/stock-classification-summary ───────────────────────────
+// Normal vs Special Stock breakdown, overall and per metal — the
+// "800 + 175 = 975" reconciliation from the Special Stock spec, made an
+// explicit, checkable number rather than something someone has to add up
+// by hand across two screens. Stock_Classification is a pure display tag
+// (see its migration's header comment) — this report reads the exact same
+// live tbl_ornament_master every other stock report reads, just grouped
+// by that one extra column. No permission gate beyond normal report
+// access — unlike /floors/hidden-stock and its siblings, there is nothing
+// here that needs hiding from anyone.
+router.get('/stock-classification-summary', authenticate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const dm = modeVal(req);
+    const rows = await db('tbl_ornament_master')
+      .where('Tenant_ID', tenantId).where('Is_Active', true).where('Is_Sold', false)
+      .where('Data_Mode', dm)
+      .groupBy('Stock_Classification', 'Metal_Type')
+      .select(
+        'Stock_Classification', 'Metal_Type',
+        db.raw('COUNT(*) as pieces'),
+        db.raw('SUM("Gross_Weight") as total_weight'),
+        db.raw('SUM("Total_Price") as total_value'),
+      );
+
+    const byMetal = {};
+    const overall = { Normal: { pieces: 0, weight: 0, value: 0 }, Special: { pieces: 0, weight: 0, value: 0 } };
+    for (const r of rows) {
+      const cls = r.Stock_Classification;
+      const metal = r.Metal_Type || 'Gold';
+      byMetal[metal] = byMetal[metal] || { Normal: { pieces: 0, weight: 0, value: 0 }, Special: { pieces: 0, weight: 0, value: 0 } };
+      const entry = { pieces: parseInt(r.pieces), weight: parseFloat(r.total_weight || 0), value: parseFloat(r.total_value || 0) };
+      byMetal[metal][cls] = entry;
+      overall[cls].pieces += entry.pieces;
+      overall[cls].weight += entry.weight;
+      overall[cls].value += entry.value;
+    }
+
+    const combined = {
+      pieces: overall.Normal.pieces + overall.Special.pieces,
+      weight: Math.round((overall.Normal.weight + overall.Special.weight) * 1000) / 1000,
+      value: Math.round((overall.Normal.value + overall.Special.value) * 100) / 100,
+    };
+
+    return sendSuccess(res, { normal: overall.Normal, special: overall.Special, combined, byMetal });
+  } catch (err) {
+    console.error('Stock classification summary error:', err.message);
+    return sendError(res, 500, 'Failed to generate stock classification summary.');
   }
 });
 

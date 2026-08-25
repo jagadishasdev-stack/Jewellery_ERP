@@ -6,7 +6,7 @@ import {
   Row, Col, Card, Typography, Button, Space, Tag, Tabs, Table, Select,
   Statistic, Progress, Alert, Badge,
 } from 'antd';
-import { DownloadOutlined, GoldOutlined, WarningOutlined, RiseOutlined, FallOutlined, SwapOutlined, ApartmentOutlined, AppstoreOutlined, InboxOutlined, EyeInvisibleOutlined, ShopOutlined } from '@ant-design/icons';
+import { DownloadOutlined, GoldOutlined, WarningOutlined, RiseOutlined, FallOutlined, SwapOutlined, ApartmentOutlined, AppstoreOutlined, InboxOutlined, EyeInvisibleOutlined, ShopOutlined, StarOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../api/axios';
 import { formatCurrency } from '../../utils/calculations';
@@ -81,6 +81,13 @@ export default function InventoryReportsPage() {
   const { data: catalogHiddenReport, isLoading: catalogHiddenLoading } = useQuery({
     queryKey: ['inv-catalog-hidden'],
     queryFn: () => api.get('/reports/catalog-hidden-stock').then(r => r.data.data),
+  });
+  // Special Stock Isolation — a display/operational classification, always
+  // visible regardless of Official/Unofficial mode (unlike the Hidden
+  // Stock tab below, which is a genuinely different, mode-gated feature).
+  const { data: stockClassification, isLoading: stockClassificationLoading } = useQuery({
+    queryKey: ['inv-stock-classification'],
+    queryFn: () => api.get('/reports/stock-classification-summary').then(r => r.data.data),
   });
 
   const byType = currentStock?.byType || [];
@@ -384,6 +391,53 @@ export default function InventoryReportsPage() {
             extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(catalogHiddenReport?.items||[],'catalog_hidden_stock')}>CSV</Button>}>
             <Table
             scroll={{ x: "max-content" }} columns={catalogHiddenCols} dataSource={catalogHiddenReport?.items||[]} rowKey="Ornament_ID" size="small" loading={catalogHiddenLoading} pagination={{pageSize:20}} />
+          </Card>
+        </>
+      ),
+    },
+    {
+      key: 'stock-classification', label: <span><StarOutlined style={{color:'#B8860B'}} /> Special Stock</span>,
+      children: (
+        <>
+          <Alert
+            type="info" showIcon style={{marginBottom:12,borderRadius:8}}
+            message="Normal Stock + Special Stock = Total Physical Inventory — always, no exceptions"
+            description="Special Stock (in-house karigar production, special collections, reserved pieces) is a display classification only. Every sale, from either classification, bills through the exact same GST/accounting/reports — this reconciliation is here so the totals are always checkable, not just asserted."
+          />
+          <Row gutter={[10,10]} style={{marginBottom:14}}>
+            {[
+              {title:'Normal Stock',d:stockClassification?.normal,color:'#52c41a'},
+              {title:'Special Stock',d:stockClassification?.special,color:'#B8860B'},
+              {title:'Combined Physical Inventory',d:stockClassification?.combined,color:'#1890ff'},
+            ].map((c,i)=>(
+              <Col xs={24} md={8} key={i}>
+                <Card bodyStyle={{padding:'12px 14px'}} style={{borderRadius:8,border:'none',boxShadow:'0 1px 4px rgba(0,0,0,.07)',borderTop:`3px solid ${c.color}`}}>
+                  <Statistic title={<Text style={{fontSize:11,color:'#888'}}>{c.title}</Text>}
+                    value={parseInt(c.d?.pieces||0)} suffix="pcs"
+                    valueStyle={{color:c.color,fontSize:17,fontWeight:700}} />
+                  <div style={{marginTop:4,fontSize:12,color:'#888'}}>
+                    {parseFloat(c.d?.weight||0).toFixed(3)}g &middot; {formatCurrency(c.d?.value||0)}
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+          <Card title="By Metal" bodyStyle={{padding:0}} style={{borderRadius:8}} loading={stockClassificationLoading}>
+            <Table
+              scroll={{ x: "max-content" }}
+              rowKey="metal"
+              pagination={false}
+              dataSource={Object.entries(stockClassification?.byMetal || {}).map(([metal, v]) => ({ metal, ...v }))}
+              columns={[
+                { title: 'Metal', dataIndex: 'metal', render: v => <Tag color={METAL_TYPE_COLORS[v]||'default'}>{v}</Tag> },
+                { title: 'Normal — Pieces', render: (_,r) => r.Normal?.pieces || 0 },
+                { title: 'Normal — Weight', render: (_,r) => `${(r.Normal?.weight||0).toFixed(3)}g` },
+                { title: 'Normal — Value', render: (_,r) => formatCurrency(r.Normal?.value||0) },
+                { title: 'Special — Pieces', render: (_,r) => r.Special?.pieces || 0 },
+                { title: 'Special — Weight', render: (_,r) => `${(r.Special?.weight||0).toFixed(3)}g` },
+                { title: 'Special — Value', render: (_,r) => formatCurrency(r.Special?.value||0) },
+              ]}
+            />
           </Card>
         </>
       ),

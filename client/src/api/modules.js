@@ -39,6 +39,9 @@ export const ornamentsApi = {
   update: (id, data) => api.put(`/ornaments/${id}`, data),
   setCatalogVisibility: (ornamentIds, showInCatalog) =>
     api.put('/ornaments/catalog-visibility', { ornamentIds, showInCatalog }),
+  setStockClassification: (data) => api.put('/ornaments/stock-classification', data),
+  setStockClassificationByLocation: (data) => api.put('/ornaments/stock-classification/by-location', data),
+  classificationSummary: () => api.get('/reports/stock-classification-summary'),
 };
 
 // ─── Customers ────────────────────────────────────────────────────────────────
