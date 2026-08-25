@@ -25,6 +25,28 @@ export default function RepairPage() {
   const [form] = Form.useForm();
   const qc = useQueryClient();
 
+  // ── original-sale/karigar lookup (which karigar made this item?) ────────────
+  const [invoiceInput, setInvoiceInput] = useState('');
+  const [lookupResult, setLookupResult] = useState(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [selectedOrnamentId, setSelectedOrnamentId] = useState(null);
+
+  const runInvoiceLookup = async () => {
+    if (!invoiceInput.trim()) return;
+    setLookupLoading(true);
+    setLookupResult(null);
+    setSelectedOrnamentId(null);
+    try {
+      const res = await repairApi.lookupByInvoice(invoiceInput.trim());
+      setLookupResult(res.data.data);
+      if (res.data.data.items.length === 1) setSelectedOrnamentId(res.data.data.items[0].Ornament_ID);
+    } catch (err) {
+      message.error(err.response?.data?.message || 'Invoice not found.');
+    } finally {
+      setLookupLoading(false);
+    }
+  };
+
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const filterRef = useRef(null);
   const newBtnRef = useRef(null);
@@ -54,6 +76,7 @@ export default function RepairPage() {
       qc.invalidateQueries(['repairs']);
       setCreateModal(false);
       form.resetFields();
+      setInvoiceInput(''); setLookupResult(null); setSelectedOrnamentId(null);
     },
     onError: (err) => message.error(err.response?.data?.message || 'Failed.'),
   });
@@ -68,7 +91,10 @@ export default function RepairPage() {
     onSuccess: () => { message.success('Item delivered to customer!'); qc.invalidateQueries(['repairs']); setDetailModal(null); },
   });
 
-  const closeCreateModal = () => { setCreateModal(false); form.resetFields(); };
+  const closeCreateModal = () => {
+    setCreateModal(false); form.resetFields();
+    setInvoiceInput(''); setLookupResult(null); setSelectedOrnamentId(null);
+  };
   const karigarLookup = useF2Lookup();
   useActionShortcuts({
     onNew: () => setCreateModal(true),
@@ -83,7 +109,13 @@ export default function RepairPage() {
     { title: 'Job Card', dataIndex: 'Job_Card_Number', render: v => <Text code style={{ fontSize: 11 }}>{v}</Text> },
     { title: 'Customer', dataIndex: 'Customer_Name', render: (v, r) => v || r.Customer_Name_Direct || '-' },
     { title: 'Item', dataIndex: 'Item_Description', render: v => <Text ellipsis style={{ maxWidth: 150 }}>{v}</Text> },
-    { title: 'Karigar', dataIndex: 'Karigar_Name', render: v => v || 'Unassigned' },
+    { title: 'Repair Karigar', dataIndex: 'Karigar_Name', render: v => v || 'Unassigned' },
+    {
+      title: 'Original Maker', dataIndex: 'Original_Karigar_Name',
+      render: (v, r) => v
+        ? <Tag color="gold">{v}</Tag>
+        : (r.Original_Invoice_Number ? <Text type="secondary" style={{ fontSize: 11 }}>Not on record</Text> : '-'),
+    },
     { title: 'Expected', dataIndex: 'Expected_Delivery', render: v => v ? dayjs(v).format('DD-MMM') : '-' },
     { title: 'Charges', dataIndex: 'Total_Charge', render: v => formatCurrency(v) },
     {
@@ -143,7 +175,50 @@ export default function RepairPage() {
       {/* Create Modal */}
       <Modal title="New Repair Job Card" open={createModal}
         onCancel={closeCreateModal} footer={null} width={600}>
-        <Form form={form} layout="vertical" onFinish={v => createMutation.mutate(v)}>
+        <Form form={form} layout="vertical" onFinish={v => createMutation.mutate({
+          ...v,
+          Original_Invoice_Number: lookupResult ? invoiceInput.trim() : undefined,
+          Original_Ornament_ID: lookupResult ? selectedOrnamentId : undefined,
+        })}>
+          {/* Was this item originally sold by us? If so, find which karigar
+              made it — feeds karigar quality-of-work analytics (repair
+              rate) in Reports → Karigar Report. Purely informational;
+              nothing here blocks creating the job card either way. */}
+          <Form.Item label="Original Sale Invoice Number (optional — if we sold this item)">
+            <Space.Compact style={{ width: '100%' }}>
+              <Input
+                placeholder="e.g. INV-DLJ-20260801-0012"
+                value={invoiceInput}
+                onChange={e => setInvoiceInput(e.target.value)}
+                onPressEnter={runInvoiceLookup}
+              />
+              <Button loading={lookupLoading} onClick={runInvoiceLookup}>Find</Button>
+            </Space.Compact>
+          </Form.Item>
+          {lookupResult && (
+            <Card size="small" style={{ marginBottom: 16, background: '#fafafa' }}>
+              <Text style={{ fontSize: 12, color: '#888' }}>
+                Sold {dayjs(lookupResult.Sale_Date).format('DD-MMM-YYYY')} to {lookupResult.Customer_Name || 'Walk-in'}
+              </Text>
+              {lookupResult.items.length > 1 ? (
+                <Select style={{ width: '100%', marginTop: 8 }} placeholder="Which item is this repair for?"
+                  value={selectedOrnamentId} onChange={setSelectedOrnamentId}>
+                  {lookupResult.items.map(i => (
+                    <Option key={i.Ornament_ID} value={i.Ornament_ID}>
+                      {i.Article_Number} — {i.Type_Name || 'Item'} — Made by {i.Karigar_Name || 'Unknown'}
+                    </Option>
+                  ))}
+                </Select>
+              ) : (
+                <div style={{ marginTop: 4 }}>
+                  <Text strong>{lookupResult.items[0]?.Article_Number}</Text>
+                  {' — Made by '}
+                  <Tag color="gold">{lookupResult.items[0]?.Karigar_Name || 'Unknown'}</Tag>
+                </div>
+              )}
+            </Card>
+          )}
+
           <Row gutter={16}>
             <Col xs={12}>
               <Form.Item name="Customer_Name" label="Customer Name"><Input /></Form.Item>

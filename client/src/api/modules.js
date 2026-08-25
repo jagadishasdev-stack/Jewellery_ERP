@@ -140,6 +140,8 @@ export const reportsApi = {
   approvalOutstanding: (params) => api.get('/reports/approval-outstanding', { params }),
   closingReport: (params) => api.get('/reports/closing-report', { params }),
   closingReportPdf: (params) => api.get('/reports/closing-report/pdf', { params, responseType: 'blob' }),
+  karigarPerformance: () => api.get('/reports/karigar-performance'),
+  designPerformance: () => api.get('/reports/design-performance'),
 };
 
 // ─── Floors & Counters ────────────────────────────────────────────────────────
@@ -191,6 +193,7 @@ export const repairApi = {
   create: (data) => api.post('/repair', data),
   update: (id, data) => api.put(`/repair/${id}`, data),
   deliver: (id) => api.post(`/repair/${id}/deliver`),
+  lookupByInvoice: (invoiceNumber) => api.get(`/repair/lookup-by-invoice/${invoiceNumber}`),
 };
 
 // ─── Gold Saving Scheme ───────────────────────────────────────────────────────

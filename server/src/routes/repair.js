@@ -13,6 +13,38 @@ const genJobCard = async (tenantId) => nextNumber({
   prefix: 'JOB', tenantCode: tenantId.replace('_',''), padWidth: 4,
 });
 
+// ── GET /api/repair/lookup-by-invoice/:invoiceNumber ──────────────────────────
+// Resolves a sales invoice number to the item(s) sold on it, each annotated
+// with the karigar who actually manufactured that specific piece
+// (tbl_ornament_master.Karigar_ID — the MANUFACTURING karigar, distinct
+// from Assigned_Karigar_ID on the repair order, which is whoever does the
+// repair work). Staff uses this at repair intake to answer "which karigar
+// made this?" without hunting through the original sale by hand. Returns
+// an array — a single invoice can cover multiple items.
+router.get('/lookup-by-invoice/:invoiceNumber', authenticate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const sale = await db('tbl_sales_header')
+      .where({ Tenant_ID: tenantId, Invoice_Number: req.params.invoiceNumber }).first();
+    if (!sale) return sendError(res, 404, 'No sale found with that invoice number.');
+
+    const items = await db('tbl_sales_details as sd')
+      .join('tbl_ornament_master as o', 'sd.Ornament_ID', 'o.Ornament_ID')
+      .leftJoin('tbl_vendor_master as k', 'o.Karigar_ID', 'k.Vendor_ID')
+      .leftJoin('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
+      .where('sd.Sale_ID', sale.Sale_ID)
+      .select(
+        'o.Ornament_ID', 'o.Article_Number', 't.Type_Name',
+        'o.Karigar_ID', 'k.Vendor_Name as Karigar_Name',
+        'sd.Total_Line_Price', 'sd.Gross_Weight',
+      );
+
+    return sendSuccess(res, { Sale_ID: sale.Sale_ID, Invoice_Number: sale.Invoice_Number, Sale_Date: sale.Sale_Date, Customer_Name: sale.Customer_Name, items });
+  } catch (err) {
+    return sendError(res, 500, 'Failed to look up invoice.');
+  }
+});
+
 // ── GET /api/repair  ──────────────────────────────────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   const { status, page = 1, limit = 30 } = req.query;
@@ -20,8 +52,9 @@ router.get('/', authenticate, async (req, res) => {
     let qb = db('tbl_repair_orders as r')
       .leftJoin('tbl_customer_master as c', 'r.Customer_ID', 'c.Customer_ID')
       .leftJoin('tbl_vendor_master as k', 'r.Assigned_Karigar_ID', 'k.Vendor_ID')
+      .leftJoin('tbl_vendor_master as ok', 'r.Original_Karigar_ID', 'ok.Vendor_ID')
       .where('r.Tenant_ID', req.user.tenantId)
-      .select('r.*', 'c.Customer_Name as Cust_Name', 'k.Vendor_Name as Karigar_Name');
+      .select('r.*', 'c.Customer_Name as Cust_Name', 'k.Vendor_Name as Karigar_Name', 'ok.Vendor_Name as Original_Karigar_Name');
     if (status) qb = qb.where('r.Status', status);
     // Clean count to avoid GROUP BY issue with JOINs
     const countQb = db('tbl_repair_orders').where('Tenant_ID', req.user.tenantId);
@@ -44,9 +77,28 @@ router.post('/', authenticate, [
     const jobCardNumber = await genJobCard(tenantId);
     // Payment_Mode/Bank_Account_ID aren't real columns on this table —
     // pulled out before insert; only used below if an advance was collected.
-    const { Payment_Mode, Bank_Account_ID, ...orderData } = req.body;
+    const { Payment_Mode, Bank_Account_ID, Original_Invoice_Number, Original_Ornament_ID, ...orderData } = req.body;
+
+    // Resolve the original-sale link server-side — never trust a client-
+    // supplied Original_Sale_ID/Original_Karigar_ID directly, so a repair
+    // can't be forged to claim a karigar link that doesn't actually exist
+    // for that invoice, within this tenant.
+    let originalSaleId = null, originalKarigarId = null;
+    if (Original_Invoice_Number && Original_Ornament_ID) {
+      const link = await db('tbl_sales_details as sd')
+        .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
+        .join('tbl_ornament_master as o', 'sd.Ornament_ID', 'o.Ornament_ID')
+        .where('sh.Tenant_ID', tenantId).where('sh.Invoice_Number', Original_Invoice_Number)
+        .where('sd.Ornament_ID', Original_Ornament_ID)
+        .select('sh.Sale_ID', 'o.Karigar_ID').first();
+      if (link) { originalSaleId = link.Sale_ID; originalKarigarId = link.Karigar_ID; }
+    }
+
     const [repair] = await db('tbl_repair_orders').insert({
       ...orderData, Tenant_ID: tenantId, Job_Card_Number: jobCardNumber,
+      Original_Invoice_Number: Original_Invoice_Number || null,
+      Original_Sale_ID: originalSaleId, Original_Ornament_ID: originalSaleId ? Original_Ornament_ID : null,
+      Original_Karigar_ID: originalKarigarId,
       Status: 'Received', Created_By: req.user.username,
     }).returning('*');
 

@@ -1,11 +1,11 @@
 import React, { useState, useRef } from 'react';
 import {
   Table, Card, Typography, DatePicker, Button, Space, Tag, Row, Col,
-  Statistic, Descriptions, Modal, Divider, message,
+  Statistic, Descriptions, Modal, Divider, message, Tabs, Alert, Tooltip,
 } from 'antd';
-import { DownloadOutlined, PrinterOutlined, EyeOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PrinterOutlined, EyeOutlined, TrophyOutlined, ToolOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { karigarApi } from '../../api/modules';
+import { karigarApi, reportsApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -47,6 +47,14 @@ export default function KarigarReportPage() {
     queryKey: ['karigar-issue-detail', detailIssue?.Issue_ID],
     queryFn: () => karigarApi.getIssueById(detailIssue.Issue_ID).then(r => r.data.data),
     enabled: !!detailIssue,
+  });
+
+  // "Which karigar's items sell fastest, and whose work comes back for
+  // repair most" — see reports.js's karigar-performance route for how
+  // repair_rate is derived (real repair-order links, not a manual rating).
+  const { data: performance, isLoading: perfLoading } = useQuery({
+    queryKey: ['karigar-performance'],
+    queryFn: () => reportsApi.karigarPerformance().then(r => r.data.data),
   });
 
   const filtered = (issues || []).filter(p => {
@@ -102,63 +110,125 @@ export default function KarigarReportPage() {
     { title: '', width: 60, render: (_, r) => <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailIssue(r)} /> },
   ];
 
+  const perfColumns = [
+    { title: 'Karigar', dataIndex: 'Vendor_Name', render: (v, r) => <Space><Text strong>{v}</Text><Text type="secondary" style={{ fontSize: 11 }}>{r.Vendor_Code}</Text></Space> },
+    { title: 'Manufactured', dataIndex: 'pieces_manufactured', width: 110, render: v => <Tag color="blue">{v} pcs</Tag> },
+    { title: 'Sold', dataIndex: 'pieces_sold', width: 90, render: v => <Tag color="green">{v} pcs</Tag> },
+    { title: 'In Stock', dataIndex: 'pieces_in_stock', width: 90 },
+    { title: 'Sell-Through', dataIndex: 'sell_through_rate', width: 120, render: v => <Tag color={v >= 70 ? 'green' : v >= 40 ? 'orange' : 'red'}>{v}%</Tag> },
+    { title: 'Avg Days to Sell', dataIndex: 'avg_days_to_sell', width: 130, render: v => v == null ? '-' : `${v}d` },
+    { title: 'Revenue', dataIndex: 'revenue', render: v => <Text strong style={{ color: '#B8860B' }}>{formatCurrency(v)}</Text> },
+    {
+      title: (
+        <Space size={4}>
+          Repair Rate
+          <Tooltip title="Share of this karigar's SOLD pieces that later came back for repair, based on the invoice number entered at repair intake. A quality proxy derived from real records, not a manual score — lower is better. Blank means nothing sold yet.">
+            <InfoCircleOutlined style={{ color: '#888' }} />
+          </Tooltip>
+        </Space>
+      ),
+      dataIndex: 'repair_rate', width: 140,
+      render: v => v == null ? <Text type="secondary">-</Text> : <Tag color={v <= 5 ? 'green' : v <= 15 ? 'orange' : 'red'}>{v}% ({v <= 5 ? 'Good' : v <= 15 ? 'Watch' : 'Review'})</Tag>,
+    },
+  ];
+
   return (
     <div className="page-wrapper">
       <div className="page-header">
-        <Title level={4} style={{ margin: 0 }}>Karigar Issue / Return Register</Title>
-        <div ref={dateRangeRef}>
-        <Space>
-          <RangePicker value={dateRange} onChange={d => d && setDateRange(d)} format="DD-MMM-YYYY" />
-          <Button icon={<DownloadOutlined />} onClick={() => exportCSV(filtered.map(r => ({
-            'Issue Number': r.Issue_Number,
-            'Date': dayjs(r.Issue_Date).format('DD-MMM-YYYY'),
-            'Karigar': r.Karigar_Name,
-            'Issued (g)': r.Gold_Weight_Issued,
-            'Returned (g)': r.Returned_Weight,
-            'Wastage (g)': r.Wastage_Used,
-            'Status': r.Status,
-            'Wages Paid': r.Final_Wages_Paid,
-          })), 'karigar_register')}>Export CSV</Button>
-          <Button icon={<PrinterOutlined />} onClick={() => window.print()}>Print</Button>
-        </Space>
-        </div>
+        <Title level={4} style={{ margin: 0 }}>Karigar Reports</Title>
       </div>
 
-      {/* Summary cards */}
-      <Row ref={summaryRef} gutter={[12, 12]} style={{ marginBottom: 16 }}>
-        {[
-          { title: 'Total Issues', value: filtered.length, color: '#B8860B' },
-          { title: 'Gold Issued (g)', value: `${totalIssued.toFixed(3)}g`, color: '#fa8c16' },
-          { title: 'Gold Returned (g)', value: `${totalReturned.toFixed(3)}g`, color: '#52c41a' },
-          { title: 'Pending with Karigar', value: `${totalPending.toFixed(3)}g`, color: totalPending > 0 ? '#ff4d4f' : '#52c41a' },
-          { title: 'Total Wages Paid', value: totalWages, formatter: formatCurrency, color: '#1890ff' },
-        ].map((s, i) => (
-          <Col xs={12} md={6} lg={4} key={i}>
-            <Card bodyStyle={{ padding: '12px 14px' }}
-              style={{ borderRadius: 8, border: 'none', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', borderTop: `3px solid ${s.color}` }}>
-              <Statistic title={<Text style={{ fontSize: 11, color: '#888' }}>{s.title}</Text>}
-                value={s.value}
-                formatter={s.formatter ? v => s.formatter(v) : undefined}
-                valueStyle={{ color: s.color, fontSize: 16, fontWeight: 700 }} />
-            </Card>
-          </Col>
-        ))}
-      </Row>
+      <Tabs
+        defaultActiveKey="register"
+        items={[
+          {
+            key: 'register',
+            label: <span><ToolOutlined /> Issue / Return Register</span>,
+            children: (
+              <>
+                <div ref={dateRangeRef} style={{ marginBottom: 16 }}>
+                <Space>
+                  <RangePicker value={dateRange} onChange={d => d && setDateRange(d)} format="DD-MMM-YYYY" />
+                  <Button icon={<DownloadOutlined />} onClick={() => exportCSV(filtered.map(r => ({
+                    'Issue Number': r.Issue_Number,
+                    'Date': dayjs(r.Issue_Date).format('DD-MMM-YYYY'),
+                    'Karigar': r.Karigar_Name,
+                    'Issued (g)': r.Gold_Weight_Issued,
+                    'Returned (g)': r.Returned_Weight,
+                    'Wastage (g)': r.Wastage_Used,
+                    'Status': r.Status,
+                    'Wages Paid': r.Final_Wages_Paid,
+                  })), 'karigar_register')}>Export CSV</Button>
+                  <Button icon={<PrinterOutlined />} onClick={() => window.print()}>Print</Button>
+                </Space>
+                </div>
 
-      <div ref={tableRef}>
-      <Card style={{ borderRadius: 8, border: 'none' }} bodyStyle={{ padding: 0 }}>
-        <Table
-          columns={columns}
-          dataSource={filtered}
-          loading={isLoading}
-          rowKey="Issue_ID"
-          size="small"
-          pagination={{ pageSize: 20 }}
-          scroll={{ x: 1100 }}
-          rowClassName={r => r.Status === 'Issued' && r.Expected_Return_Date && dayjs(r.Expected_Return_Date).isBefore(dayjs()) ? 'ant-table-row-warning' : ''}
-        />
-      </Card>
-      </div>
+                {/* Summary cards */}
+                <Row ref={summaryRef} gutter={[12, 12]} style={{ marginBottom: 16 }}>
+                  {[
+                    { title: 'Total Issues', value: filtered.length, color: '#B8860B' },
+                    { title: 'Gold Issued (g)', value: `${totalIssued.toFixed(3)}g`, color: '#fa8c16' },
+                    { title: 'Gold Returned (g)', value: `${totalReturned.toFixed(3)}g`, color: '#52c41a' },
+                    { title: 'Pending with Karigar', value: `${totalPending.toFixed(3)}g`, color: totalPending > 0 ? '#ff4d4f' : '#52c41a' },
+                    { title: 'Total Wages Paid', value: totalWages, formatter: formatCurrency, color: '#1890ff' },
+                  ].map((s, i) => (
+                    <Col xs={12} md={6} lg={4} key={i}>
+                      <Card bodyStyle={{ padding: '12px 14px' }}
+                        style={{ borderRadius: 8, border: 'none', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', borderTop: `3px solid ${s.color}` }}>
+                        <Statistic title={<Text style={{ fontSize: 11, color: '#888' }}>{s.title}</Text>}
+                          value={s.value}
+                          formatter={s.formatter ? v => s.formatter(v) : undefined}
+                          valueStyle={{ color: s.color, fontSize: 16, fontWeight: 700 }} />
+                      </Card>
+                    </Col>
+                  ))}
+                </Row>
+
+                <div ref={tableRef}>
+                <Card style={{ borderRadius: 8, border: 'none' }} bodyStyle={{ padding: 0 }}>
+                  <Table
+                    columns={columns}
+                    dataSource={filtered}
+                    loading={isLoading}
+                    rowKey="Issue_ID"
+                    size="small"
+                    pagination={{ pageSize: 20 }}
+                    scroll={{ x: 1100 }}
+                    rowClassName={r => r.Status === 'Issued' && r.Expected_Return_Date && dayjs(r.Expected_Return_Date).isBefore(dayjs()) ? 'ant-table-row-warning' : ''}
+                  />
+                </Card>
+                </div>
+              </>
+            ),
+          },
+          {
+            key: 'performance',
+            label: <span><TrophyOutlined /> Performance & Quality</span>,
+            children: (
+              <>
+                <Alert
+                  type="info" showIcon style={{ marginBottom: 12, borderRadius: 8 }}
+                  message="Sell-through and repair rate, from real records"
+                  description="Manufactured/sold/in-stock counts come from actual stock and sales data. Repair Rate is derived from the original-sale link entered on each repair job card (Repair Orders → New Repair → Original Sale Invoice Number) — not a manual score, so it's only as complete as staff entering that invoice number at intake."
+                />
+                <Card style={{ borderRadius: 8, border: 'none' }} bodyStyle={{ padding: 0 }}
+                  extra={<Button size="small" icon={<DownloadOutlined />} onClick={() => exportCSV(performance || [], 'karigar_performance')}>CSV</Button>}
+                  title="Per-Karigar Performance">
+                  <Table
+                    scroll={{ x: 'max-content' }}
+                    columns={perfColumns}
+                    dataSource={performance || []}
+                    loading={perfLoading}
+                    rowKey="Karigar_ID"
+                    size="small"
+                    pagination={{ pageSize: 20 }}
+                  />
+                </Card>
+              </>
+            ),
+          },
+        ]}
+      />
 
       {/* Issue Detail Modal */}
       <Modal

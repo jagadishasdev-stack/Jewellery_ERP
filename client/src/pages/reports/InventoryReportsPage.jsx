@@ -6,9 +6,10 @@ import {
   Row, Col, Card, Typography, Button, Space, Tag, Tabs, Table, Select,
   Statistic, Progress, Alert, Badge,
 } from 'antd';
-import { DownloadOutlined, GoldOutlined, WarningOutlined, RiseOutlined, FallOutlined, SwapOutlined, ApartmentOutlined, AppstoreOutlined, InboxOutlined, EyeInvisibleOutlined, ShopOutlined, StarOutlined } from '@ant-design/icons';
+import { DownloadOutlined, GoldOutlined, WarningOutlined, RiseOutlined, FallOutlined, SwapOutlined, ApartmentOutlined, AppstoreOutlined, InboxOutlined, EyeInvisibleOutlined, ShopOutlined, StarOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../api/axios';
+import { reportsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import { message } from 'antd';
 import PageTour from '../../components/PageTour';
@@ -88,6 +89,11 @@ export default function InventoryReportsPage() {
   const { data: stockClassification, isLoading: stockClassificationLoading } = useQuery({
     queryKey: ['inv-stock-classification'],
     queryFn: () => api.get('/reports/stock-classification-summary').then(r => r.data.data),
+  });
+  // "Which design is good" — real sell-through/velocity per design.
+  const { data: designPerf, isLoading: designPerfLoading } = useQuery({
+    queryKey: ['inv-design-performance'],
+    queryFn: () => reportsApi.designPerformance().then(r => r.data.data),
   });
 
   const byType = currentStock?.byType || [];
@@ -436,6 +442,38 @@ export default function InventoryReportsPage() {
                 { title: 'Special — Pieces', render: (_,r) => r.Special?.pieces || 0 },
                 { title: 'Special — Weight', render: (_,r) => `${(r.Special?.weight||0).toFixed(3)}g` },
                 { title: 'Special — Value', render: (_,r) => formatCurrency(r.Special?.value||0) },
+              ]}
+            />
+          </Card>
+        </>
+      ),
+    },
+    {
+      key: 'design-performance', label: <span><TrophyOutlined style={{color:'#B8860B'}} /> Design Performance</span>,
+      children: (
+        <>
+          <Alert
+            type="info" showIcon style={{marginBottom:12,borderRadius:8}}
+            message="Which design is good — real sell-through, not guesswork"
+            description="Pieces sold vs. manufactured, and average days a piece of this design sits in stock before selling. Ranked fastest-selling first."
+          />
+          <Card title={`By Design (${(designPerf||[]).length})`} bodyStyle={{padding:0}} style={{borderRadius:8}}
+            extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(designPerf||[],'design_performance')}>CSV</Button>}>
+            <Table
+              scroll={{ x: "max-content" }}
+              loading={designPerfLoading}
+              dataSource={designPerf||[]}
+              rowKey="Design_ID"
+              size="small"
+              pagination={{pageSize:20}}
+              columns={[
+                { title: 'Design', dataIndex: 'Design_Name', render: (v,r) => <Space direction="vertical" size={0}><Text strong>{v}</Text><Text type="secondary" style={{fontSize:11}}>{r.Design_Code}</Text></Space> },
+                { title: 'Manufactured', dataIndex: 'pieces_manufactured', width: 110, render: v => <Tag color="blue">{v} pcs</Tag> },
+                { title: 'Sold', dataIndex: 'pieces_sold', width: 90, render: v => <Tag color="green">{v} pcs</Tag> },
+                { title: 'In Stock', dataIndex: 'pieces_in_stock', width: 90 },
+                { title: 'Sell-Through', dataIndex: 'sell_through_rate', width: 120, render: v => <Tag color={v>=70?'green':v>=40?'orange':'red'}>{v}%</Tag> },
+                { title: 'Avg Days to Sell', dataIndex: 'avg_days_to_sell', width: 130, render: v => v==null ? '-' : `${v}d` },
+                { title: 'Revenue', dataIndex: 'revenue', render: v => <Text strong style={{color:'#B8860B'}}>{formatCurrency(v)}</Text> },
               ]}
             />
           </Card>

@@ -20,12 +20,26 @@ import {
 } from 'antd';
 import {
   StarOutlined, UndoOutlined, PlusOutlined, DeleteOutlined, SearchOutlined,
+  DownloadOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { floorsApi, ornamentsApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { METAL_TYPE_COLORS } from '../../utils/metalTypes';
 import PageTour from '../../components/PageTour';
+import dayjs from 'dayjs';
+
+const exportCSV = (data, filename) => {
+  if (!data?.length) { message.warning('No data.'); return; }
+  const headers = Object.keys(data[0]).join(',');
+  const rows = data.map(r => Object.values(r).map(v => `"${v ?? ''}"`).join(','));
+  const blob = new Blob([[headers, ...rows].join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${filename}_${dayjs().format('YYYYMMDD')}.csv`;
+  a.click();
+};
 
 const { Title, Text } = Typography;
 const { TabPane } = Tabs;
@@ -41,6 +55,7 @@ const friendlyError = (err, fallback) => {
 
 export default function SpecialStockPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('classify');
   const [classifyLevel, setClassifyLevel] = useState('item');
   const [form] = Form.useForm();
@@ -205,6 +220,9 @@ export default function SpecialStockPage() {
         <Title level={4} style={{ margin: 0 }}>
           <Space><StarOutlined style={{ color: GOLD }} />Special Stock Management</Space>
         </Title>
+        <Button icon={<SyncOutlined />} onClick={() => navigate('/tally')}>
+          Export Vouchers to Tally →
+        </Button>
       </div>
 
       <div ref={purposeRef}>
@@ -370,10 +388,19 @@ export default function SpecialStockPage() {
           <Card style={{ borderRadius: 8, border: 'none' }} bodyStyle={{ padding: 0 }}
             title={`Special Stock Items (${(specialStock || []).length})`}
             extra={
-              <Button icon={<UndoOutlined />} disabled={selectedRowKeys.length === 0}
-                onClick={() => setReclassifyModal(true)}>
-                Reclassify as Normal ({selectedRowKeys.length})
-              </Button>
+              <Space>
+                <Button icon={<DownloadOutlined />} onClick={() => exportCSV((specialStock || []).map(r => ({
+                  'Article Number': r.Article_Number, 'Type': r.Type_Name, 'Metal': r.Metal_Type,
+                  'Weight (g)': r.Gross_Weight, 'Value': r.Total_Price, 'Special Type': r.Special_Stock_Type || '',
+                  'Status': r.Is_Sold ? 'Sold' : 'In Stock',
+                })), 'special_stock')}>
+                  Export CSV
+                </Button>
+                <Button icon={<UndoOutlined />} disabled={selectedRowKeys.length === 0}
+                  onClick={() => setReclassifyModal(true)}>
+                  Reclassify as Normal ({selectedRowKeys.length})
+                </Button>
+              </Space>
             }>
             <Table
               scroll={{ x: 'max-content' }}

@@ -1034,4 +1034,120 @@ router.get('/stock-classification-summary', authenticate, async (req, res) => {
   }
 });
 
+// ─── GET /api/reports/karigar-performance ─────────────────────────────────────
+// "Which karigar's items sell fastest, and whose work comes back for
+// repair most" — per-karigar analytics built from data that already
+// exists (manufacturing attribution on tbl_ornament_master.Karigar_ID,
+// actual sales, and the repair-order original-karigar link added in
+// 20260826120000_add_repair_original_sale_link.js). Repair_Rate is a
+// DERIVED quality proxy (repairs traced back to this karigar's own work,
+// as a share of what they've sold) — not a manual rating, since it's
+// computable from real records rather than relying on someone remembering
+// to score it.
+router.get('/karigar-performance', authenticate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const manufactured = await db('tbl_ornament_master as o')
+      .join('tbl_vendor_master as v', 'o.Karigar_ID', 'v.Vendor_ID')
+      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).whereNotNull('o.Karigar_ID')
+      .groupBy('o.Karigar_ID', 'v.Vendor_Name', 'v.Vendor_Code')
+      .select('o.Karigar_ID', 'v.Vendor_Name', 'v.Vendor_Code', db.raw('COUNT(*) as pieces_manufactured'));
+
+    const sold = await db('tbl_ornament_master as o')
+      .join('tbl_sales_details as sd', 'sd.Ornament_ID', 'o.Ornament_ID')
+      .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
+      .where('o.Tenant_ID', tenantId).whereNotNull('o.Karigar_ID')
+      .whereNot('sh.Payment_Status', 'Cancelled')
+      .groupBy('o.Karigar_ID')
+      .select(
+        'o.Karigar_ID',
+        db.raw('COUNT(*) as pieces_sold'),
+        db.raw('SUM("sd"."Total_Line_Price") as revenue'),
+        db.raw('AVG(EXTRACT(EPOCH FROM ("sh"."Sale_Date" - "o"."Created_Date")) / 86400) as avg_days_to_sell'),
+      );
+
+    const repairs = await db('tbl_repair_orders')
+      .where('Tenant_ID', tenantId).whereNotNull('Original_Karigar_ID')
+      .groupBy('Original_Karigar_ID')
+      .select('Original_Karigar_ID as Karigar_ID', db.raw('COUNT(*) as repair_count'));
+
+    const soldMap = Object.fromEntries(sold.map(r => [r.Karigar_ID, r]));
+    const repairMap = Object.fromEntries(repairs.map(r => [r.Karigar_ID, parseInt(r.repair_count)]));
+
+    const data = manufactured.map(m => {
+      const s = soldMap[m.Karigar_ID] || {};
+      const piecesSold = parseInt(s.pieces_sold || 0);
+      const piecesManufactured = parseInt(m.pieces_manufactured);
+      const repairCount = repairMap[m.Karigar_ID] || 0;
+      return {
+        Karigar_ID: m.Karigar_ID, Vendor_Name: m.Vendor_Name, Vendor_Code: m.Vendor_Code,
+        pieces_manufactured: piecesManufactured,
+        pieces_sold: piecesSold,
+        pieces_in_stock: piecesManufactured - piecesSold,
+        revenue: parseFloat(s.revenue || 0),
+        avg_days_to_sell: s.avg_days_to_sell != null ? Math.round(parseFloat(s.avg_days_to_sell)) : null,
+        sell_through_rate: piecesManufactured > 0 ? Math.round((piecesSold / piecesManufactured) * 1000) / 10 : 0,
+        repair_count: repairCount,
+        // Quality proxy — repairs traced to this karigar's own work, as a
+        // share of what they've sold. Null (not 0) when nothing's sold yet
+        // — a 0% repair rate with zero sales is meaningless, not "perfect."
+        repair_rate: piecesSold > 0 ? Math.round((repairCount / piecesSold) * 1000) / 10 : null,
+      };
+    }).sort((a, b) => b.revenue - a.revenue);
+
+    return sendSuccess(res, data);
+  } catch (err) {
+    console.error('Karigar performance report error:', err.message);
+    return sendError(res, 500, 'Failed to generate karigar performance report.');
+  }
+});
+
+// ─── GET /api/reports/design-performance ──────────────────────────────────────
+// "Which design is good" — per-design sell-through and velocity, same
+// shape as karigar-performance above.
+router.get('/design-performance', authenticate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const manufactured = await db('tbl_ornament_master as o')
+      .join('tbl_design_master as d', 'o.Design_ID', 'd.Design_ID')
+      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).whereNotNull('o.Design_ID')
+      .groupBy('o.Design_ID', 'd.Design_Name', 'd.Design_Code')
+      .select('o.Design_ID', 'd.Design_Name', 'd.Design_Code', db.raw('COUNT(*) as pieces_manufactured'));
+
+    const sold = await db('tbl_ornament_master as o')
+      .join('tbl_sales_details as sd', 'sd.Ornament_ID', 'o.Ornament_ID')
+      .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
+      .where('o.Tenant_ID', tenantId).whereNotNull('o.Design_ID')
+      .whereNot('sh.Payment_Status', 'Cancelled')
+      .groupBy('o.Design_ID')
+      .select(
+        'o.Design_ID',
+        db.raw('COUNT(*) as pieces_sold'),
+        db.raw('SUM("sd"."Total_Line_Price") as revenue'),
+        db.raw('AVG(EXTRACT(EPOCH FROM ("sh"."Sale_Date" - "o"."Created_Date")) / 86400) as avg_days_to_sell'),
+      );
+    const soldMap = Object.fromEntries(sold.map(r => [r.Design_ID, r]));
+
+    const data = manufactured.map(m => {
+      const s = soldMap[m.Design_ID] || {};
+      const piecesSold = parseInt(s.pieces_sold || 0);
+      const piecesManufactured = parseInt(m.pieces_manufactured);
+      return {
+        Design_ID: m.Design_ID, Design_Name: m.Design_Name, Design_Code: m.Design_Code,
+        pieces_manufactured: piecesManufactured,
+        pieces_sold: piecesSold,
+        pieces_in_stock: piecesManufactured - piecesSold,
+        revenue: parseFloat(s.revenue || 0),
+        avg_days_to_sell: s.avg_days_to_sell != null ? Math.round(parseFloat(s.avg_days_to_sell)) : null,
+        sell_through_rate: piecesManufactured > 0 ? Math.round((piecesSold / piecesManufactured) * 1000) / 10 : 0,
+      };
+    }).sort((a, b) => b.pieces_sold - a.pieces_sold);
+
+    return sendSuccess(res, data);
+  } catch (err) {
+    console.error('Design performance report error:', err.message);
+    return sendError(res, 500, 'Failed to generate design performance report.');
+  }
+});
+
 module.exports = router;

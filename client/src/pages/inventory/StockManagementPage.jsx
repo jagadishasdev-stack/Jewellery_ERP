@@ -341,7 +341,12 @@ export default function StockManagementPage() {
   // Filters
   const [filters, setFilters] = useState({
     search: '', typeId: '', purityId: '', metalType: '', isAvailable: '', isSold: '',
-    minPrice: '', maxPrice: '', classification: '', page: 1, limit: 50,
+    // Screen 1 (this page) defaults to Normal Stock only — Special Stock
+    // (in-house karigar/reserved/etc.) lives on its own screen (Inventory
+    // → Special Stock), which shows the full reconciliation (Normal +
+    // Special = Combined). Clear this filter here to see everything on
+    // this screen too — it's a default, not a restriction.
+    minPrice: '', maxPrice: '', classification: 'Normal', page: 1, limit: 50,
   });
   const [activeTab, setActiveTab] = useState('available');
   const [entryModal, setEntryModal] = useState(null); // entry type string
@@ -650,10 +655,13 @@ export default function StockManagementPage() {
           <Select placeholder="Metal Type" style={{ minWidth: 120 }} allowClear onChange={v => setFilters(f => ({ ...f, metalType: v || '', page: 1 }))}>
             {METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}
           </Select>
-          <Select placeholder="Classification" style={{ minWidth: 130 }} allowClear onChange={v => setFilters(f => ({ ...f, classification: v || '', page: 1 }))}>
-            <Option value="Normal">Normal Stock</Option>
-            <Option value="Special">Special Stock</Option>
-          </Select>
+          <Tooltip title="Defaults to Normal Stock — clear or switch to see Special Stock here too. The full breakdown always lives on the Special Stock screen (Inventory menu).">
+            <Select value={filters.classification || undefined} placeholder="All Stock" style={{ minWidth: 130 }} allowClear
+              onChange={v => setFilters(f => ({ ...f, classification: v || '', page: 1 }))}>
+              <Option value="Normal">Normal Stock</Option>
+              <Option value="Special">Special Stock</Option>
+            </Select>
+          </Tooltip>
           <Input.Search
             placeholder="Search article, type, design..."
             style={{ minWidth: 200 }}
