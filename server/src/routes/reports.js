@@ -928,4 +928,47 @@ router.get('/closing-report/pdf', authenticate, async (req, res) => {
   }
 });
 
+// ─── GET /api/reports/catalog-hidden-stock ────────────────────────────────────
+// Isolated view of items currently hidden from the customer-facing catalog
+// (Show_In_Catalog=false — see productCatalog.js's file-level note). This is
+// purely a filter on the SAME sales data every other report reads (left
+// join to tbl_sales_details/tbl_sales_header, same Data_Mode scoping as
+// item-wise-sales above) — nothing here is excluded from, or missing from,
+// the normal sales/GST reports. No special permission or Unofficial-mode
+// gate, unlike /floors/reports/hidden-stock-sales (a different, unrelated
+// feature — see that route's own comment for why it IS gated).
+router.get('/catalog-hidden-stock', authenticate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const dm = modeVal(req);
+    const items = await db('tbl_ornament_master as o')
+      .leftJoin('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
+      .leftJoin('tbl_sales_details as sd', 'o.Ornament_ID', 'sd.Ornament_ID')
+      .leftJoin('tbl_sales_header as sh', function () {
+        this.on('sd.Sale_ID', '=', 'sh.Sale_ID').andOnVal('sh.Payment_Status', '!=', 'Cancelled');
+      })
+      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true)
+      .where('o.Show_In_Catalog', false)
+      .where('o.Data_Mode', dm)
+      .select(
+        'o.Ornament_ID', 'o.Article_Number', 't.Type_Name', 'o.Gross_Weight', 'o.Total_Price',
+        'o.Is_Sold', 'o.Last_Updated_By', 'o.Last_Updated_Date',
+        'sh.Invoice_Number', 'sh.Sale_Date', 'sh.Customer_Name', 'sd.Total_Line_Price'
+      )
+      .orderBy('o.Last_Updated_Date', 'desc');
+
+    const summary = {
+      total_hidden: items.length,
+      sold_count: items.filter(i => i.Is_Sold).length,
+      available_count: items.filter(i => !i.Is_Sold).length,
+      total_weight: items.reduce((s, i) => s + parseFloat(i.Gross_Weight || 0), 0),
+      total_value: items.reduce((s, i) => s + parseFloat(i.Total_Price || 0), 0),
+    };
+    return sendSuccess(res, { summary, items });
+  } catch (err) {
+    console.error('Catalog-hidden stock report error:', err.message);
+    return sendError(res, 500, 'Failed to generate catalog-hidden stock report.');
+  }
+});
+
 module.exports = router;

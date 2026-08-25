@@ -80,6 +80,34 @@ router.get('/export/ledgers', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to generate Tally ledger XML: ' + err.message); }
 });
 
+// Resolves which journals to export — an explicit date range, or (with
+// neither from/to given) exactly what's Pending in the sync log. Shared by
+// both /export/vouchers (XML) and /export/vouchers-excel (CSV) below so the
+// two formats are always built from the identical, complete journal —
+// every real posted entry, full amounts, nothing filtered out or excluded
+// (unlike the Official-mode report queries elsewhere in this app that
+// deliberately exclude hidden-stock sales — see reports.js/dataModeFilter.js
+// — the accounting journal itself never applies that exclusion, so this
+// export is always the true, complete books).
+async function resolveJournalsForExport(tenantId, from, to) {
+  let journalIds;
+  if (from || to) {
+    let qb = db('tbl_accounting_journal').where({ Tenant_ID: tenantId });
+    if (from) qb = qb.where('Entry_Date', '>=', from);
+    if (to) qb = qb.where('Entry_Date', '<=', to);
+    journalIds = (await qb.select('Journal_ID')).map((r) => r.Journal_ID);
+  } else {
+    const pending = await db('tbl_tally_sync_log').where({ Tenant_ID: tenantId, Status: 'Pending', Reference_Table: 'tbl_accounting_journal' });
+    journalIds = pending.map((r) => r.Reference_ID);
+  }
+  if (!journalIds.length) return [];
+  const journals = await db('tbl_accounting_journal').whereIn('Journal_ID', journalIds).orderBy('Entry_Date');
+  const entries = await db('tbl_accounting_entries').whereIn('Journal_ID', journalIds);
+  const byJournal = {};
+  for (const e of entries) (byJournal[e.Journal_ID] = byJournal[e.Journal_ID] || []).push(e);
+  return journals.filter((j) => byJournal[j.Journal_ID]?.length).map((j) => ({ journal: j, entries: byJournal[j.Journal_ID] }));
+}
+
 // ── GET /api/tally/export/vouchers ──────────────────────────────────────────────
 // ?from=&to= exports every journal in that date range; with neither, exports
 // exactly the Pending rows in tbl_tally_sync_log (i.e. only what's actually
@@ -91,27 +119,13 @@ router.get('/export/vouchers', authenticate, async (req, res) => {
   const { from, to } = req.query;
   try {
     const config = await db('tbl_tally_config').where({ Tenant_ID: tenantId }).first();
-    let journalIds;
-    if (from || to) {
-      let qb = db('tbl_accounting_journal').where({ Tenant_ID: tenantId });
-      if (from) qb = qb.where('Entry_Date', '>=', from);
-      if (to) qb = qb.where('Entry_Date', '<=', to);
-      journalIds = (await qb.select('Journal_ID')).map((r) => r.Journal_ID);
-    } else {
-      const pending = await db('tbl_tally_sync_log').where({ Tenant_ID: tenantId, Status: 'Pending', Reference_Table: 'tbl_accounting_journal' });
-      journalIds = pending.map((r) => r.Reference_ID);
-    }
-    if (!journalIds.length) return sendError(res, 400, 'Nothing to export — no journals in range (or no Pending sync entries queued).');
-
-    const journals = await db('tbl_accounting_journal').whereIn('Journal_ID', journalIds).orderBy('Entry_Date');
-    const entries = await db('tbl_accounting_entries').whereIn('Journal_ID', journalIds);
-    const byJournal = {};
-    for (const e of entries) (byJournal[e.Journal_ID] = byJournal[e.Journal_ID] || []).push(e);
-    const journalsWithEntries = journals.filter((j) => byJournal[j.Journal_ID]?.length).map((j) => ({ journal: j, entries: byJournal[j.Journal_ID] }));
+    const journalsWithEntries = await resolveJournalsForExport(tenantId, from, to);
+    if (!journalsWithEntries.length) return sendError(res, 400, 'Nothing to export — no journals in range (or no Pending sync entries queued).');
 
     const xml = buildVouchersXml(config?.Tally_Company_Name || req.user.companyName || tenantId, journalsWithEntries);
 
     if (!from && !to) {
+      const journalIds = journalsWithEntries.map(({ journal }) => journal.Journal_ID);
       await db('tbl_tally_sync_log').where({ Tenant_ID: tenantId, Status: 'Pending', Reference_Table: 'tbl_accounting_journal' }).whereIn('Reference_ID', journalIds)
         .update({ Status: 'Synced', Synced_Date: new Date() });
     }
@@ -120,6 +134,45 @@ router.get('/export/vouchers', authenticate, async (req, res) => {
     res.set('Content-Disposition', `attachment; filename="${tenantId}-tally-vouchers.xml"`);
     return res.send(xml);
   } catch (err) { return sendError(res, 500, 'Failed to generate Tally voucher XML: ' + err.message); }
+});
+
+// ── GET /api/tally/export/vouchers-excel ────────────────────────────────────────
+// A plain, human-readable CSV (opens directly in Excel) of the exact same
+// complete journal the XML export above uses — one row per ledger entry —
+// for manual review, handing to a bookkeeper, or reconciling against Tally
+// after import. Always requires an explicit date range: unlike the XML
+// route, this is a read-only companion and deliberately never marks
+// anything Synced, so downloading it can never interfere with the XML
+// export's Pending-queue bookkeeping.
+router.get('/export/vouchers-excel', authenticate, async (req, res) => {
+  const tenantId = req.user.tenantId;
+  const { from, to } = req.query;
+  if (!from || !to) return sendError(res, 400, 'from and to date are both required.');
+  try {
+    const journalsWithEntries = await resolveJournalsForExport(tenantId, from, to);
+    if (!journalsWithEntries.length) return sendError(res, 400, 'Nothing to export — no journals in that range.');
+
+    const headers = ['Voucher_Number', 'Date', 'Voucher_Type', 'Narration', 'Ledger_Account', 'Dr_Cr', 'Amount'];
+    const rows = [headers.join(',')];
+    for (const { journal, entries } of journalsWithEntries) {
+      const dateStr = (journal.Entry_Date instanceof Date ? journal.Entry_Date : new Date(journal.Entry_Date)).toISOString().slice(0, 10);
+      for (const e of entries) {
+        rows.push([
+          journal.Reference || journal.Journal_Number,
+          dateStr,
+          journal.Source_Type || 'Journal',
+          journal.Narration || '',
+          e.Ledger_Account,
+          e.Entry_Type,
+          parseFloat(e.Amount).toFixed(2),
+        ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
+      }
+    }
+
+    res.set('Content-Type', 'text/csv');
+    res.set('Content-Disposition', `attachment; filename="${tenantId}-tally-vouchers_${from}_to_${to}.csv"`);
+    return res.send(rows.join('\n'));
+  } catch (err) { return sendError(res, 500, 'Failed to generate voucher Excel export: ' + err.message); }
 });
 
 // ── POST /api/tally/push ────────────────────────────────────────────────────────

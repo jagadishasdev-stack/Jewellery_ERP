@@ -37,6 +37,8 @@ export const ornamentsApi = {
   getStockAlerts: () => api.get('/ornaments/stock-level'),
   create: (data) => api.post('/ornaments', data),
   update: (id, data) => api.put(`/ornaments/${id}`, data),
+  setCatalogVisibility: (ornamentIds, showInCatalog) =>
+    api.put('/ornaments/catalog-visibility', { ornamentIds, showInCatalog }),
 };
 
 // ─── Customers ────────────────────────────────────────────────────────────────
@@ -114,6 +116,8 @@ export const superAdminApi = {
   createTenantUser: (tenantId, data) => api.post(`/super-admin/tenant/${tenantId}/users`, data),
   getTenantShortcuts: (tenantId) => api.get(`/super-admin/tenant/${tenantId}/shortcuts`),
   updateTenantShortcuts: (tenantId, overrides) => api.put(`/super-admin/tenant/${tenantId}/shortcuts`, { overrides }),
+  getPaymentGateway: (tenantId) => api.get(`/super-admin/tenant/${tenantId}/payment-gateway`),
+  savePaymentGateway: (tenantId, data) => api.put(`/super-admin/tenant/${tenantId}/payment-gateway`, data),
 };
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
@@ -571,6 +575,10 @@ export const tallyApi = {
   getSyncLog: (params) => api.get('/tally/sync-log', { params }),
   queueSync: (data) => api.post('/tally/sync', data),
   updateSyncLog: (id, data) => api.put(`/tally/sync-log/${id}`, data),
+  exportLedgersXml: () => api.get('/tally/export/ledgers', { responseType: 'blob' }),
+  exportVouchersXml: (params) => api.get('/tally/export/vouchers', { params, responseType: 'blob' }),
+  exportVouchersExcel: (params) => api.get('/tally/export/vouchers-excel', { params, responseType: 'blob' }),
+  pushToTally: () => api.post('/tally/push'),
 };
 
 // ─── Accounting — Chart of Accounts, Ledger/TB/Day-Book/Cash-Book/Bank-Book/

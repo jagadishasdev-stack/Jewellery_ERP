@@ -15,6 +15,7 @@ import {
   PlusOutlined, SearchOutlined, BarcodeOutlined, EditOutlined,
   EyeOutlined, DeleteOutlined, SwapOutlined, UploadOutlined,
   FilterOutlined, DownloadOutlined, PrinterOutlined, QrcodeOutlined,
+  EyeInvisibleOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -347,6 +348,7 @@ export default function StockManagementPage() {
   const [editId, setEditId] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [barcodeSearch, setBarcodeSearch] = useState('');
+  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const addStockRef = useRef(null);
@@ -404,6 +406,20 @@ export default function StockManagementPage() {
     mutationFn: (id) => ornamentsApi.update(id, { Is_Active: false }),
     onSuccess: () => { message.success('Removed from stock.'); qc.invalidateQueries(['ornaments']); },
     onError: () => message.error('Failed.'),
+  });
+
+  // Catalog visibility only — does NOT touch Is_Active/Is_Hidden/Is_Sold, so
+  // billing, inventory counts, and GST/sales reports are unaffected either
+  // way. Selected items simply stop (or start) appearing in the
+  // customer-facing catalog (routes/productCatalog.js).
+  const catalogVisibilityMutation = useMutation({
+    mutationFn: (showInCatalog) => ornamentsApi.setCatalogVisibility(selectedRowKeys, showInCatalog),
+    onSuccess: (res, showInCatalog) => {
+      message.success(res.data.message || `${selectedRowKeys.length} item(s) updated.`);
+      setSelectedRowKeys([]);
+      qc.invalidateQueries(['ornaments']);
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to update catalog visibility.'),
   });
 
   const handleBarcodeSearch = async () => {
@@ -480,6 +496,14 @@ export default function StockManagementPage() {
       },
     },
     { title: 'Location', dataIndex: 'Physical_Location', width: 100, render: v => <Text style={{fontSize:11,fontFamily:'monospace'}}>{v || '-'}</Text> },
+    {
+      title: 'Catalog',
+      dataIndex: 'Show_In_Catalog',
+      width: 90,
+      render: v => v === false
+        ? <Tag icon={<EyeInvisibleOutlined />} color="default">Hidden</Tag>
+        : <Tag color="cyan">Visible</Tag>,
+    },
     {
       title: 'Actions',
       width: 160,
@@ -621,10 +645,35 @@ export default function StockManagementPage() {
         ]}
       />
 
+      {/* Bulk catalog-visibility toolbar — appears once anything is selected */}
+      {selectedRowKeys.length > 0 && (
+        <Card size="small" style={{ marginBottom: 10, background: '#fafafa' }} bodyStyle={{ padding: '8px 16px' }}>
+          <Space wrap>
+            <Text strong>{selectedRowKeys.length} selected</Text>
+            <Button
+              icon={<EyeInvisibleOutlined />}
+              loading={catalogVisibilityMutation.isPending}
+              onClick={() => catalogVisibilityMutation.mutate(false)}
+            >
+              Hide from Catalog
+            </Button>
+            <Button
+              icon={<EyeOutlined />}
+              loading={catalogVisibilityMutation.isPending}
+              onClick={() => catalogVisibilityMutation.mutate(true)}
+            >
+              Show in Catalog
+            </Button>
+            <Button type="text" onClick={() => setSelectedRowKeys([])}>Clear</Button>
+          </Space>
+        </Card>
+      )}
+
       <Card style={{borderRadius:8,border:'none'}} bodyStyle={{padding:0}}>
         <Table
             scroll={{ x: "max-content" }} columns={columns} dataSource={inventoryData?.items||[]} loading={isLoading}
           rowKey="Ornament_ID" size="small"
+          rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
           pagination={{ total:inventoryData?.total||0, pageSize:filters.limit, current:filters.page,
             onChange:p=>setFilters(f=>({...f,page:p})), showTotal:t=>`${t} items`, showSizeChanger:false }} />
       </Card>

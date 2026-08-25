@@ -110,7 +110,11 @@ router.post('/loans', authenticate, [
     // asset (money owed back by the customer, secured by the pledge), not
     // an expense — Dr the receivable, Cr wherever the cash actually came from.
     const ledger = await resolveLedgerForPayment(db, tenantId, Payment_Mode || 'Cash', Bank_Account_ID);
-    postJournal({
+    // Awaited — was fire-and-forget, so the response could go out before
+    // this journal was guaranteed committed (see sales.js's identical fix
+    // for the concrete failure mode: an export/report run immediately
+    // after could otherwise miss the entry entirely).
+    await postJournal({
       tenantId, sourceType: 'JOURNAL', sourceId: loan.Loan_ID, reference: loan.Loan_Number,
       narration: `Pawn loan disbursed — ${loan.Loan_Number}`, createdBy: req.user.username,
       lines: [
@@ -166,7 +170,9 @@ router.post('/loans/:id/transactions', authenticate, [
     // This used to only move tbl_pawn_loan_header's own running balance —
     // real cash/bank collected from (or, for a Top-Up, paid back out to)
     // the customer, never touching the actual double-entry ledger.
-    (async () => {
+    // Awaited (the IIFE itself, not just the postJournal call inside it) —
+    // was fire-and-forget, same fix as the disbursement journal above.
+    await (async () => {
       const ledger = await resolveLedgerForPayment(db, tenantId, Payment_Mode || 'Cash', req.body.Bank_Account_ID);
       const narration = `${Txn_Type} on loan ${loan.Loan_Number}${Remarks ? ' | ' + Remarks : ''}`;
       const lines = Txn_Type === 'Top-Up'
@@ -233,7 +239,9 @@ router.post('/loans/:id/auction', authenticate, [body('Auction_Sale_Value').isFl
     ];
     if (shortfall > 0) lines.push({ account: 'Pawn Auction Shortfall Expense Account', group: 'Expenses', sub: 'Indirect Expense', type: 'Dr', amount: shortfall });
     if (surplus > 0) lines.push({ account: 'Auction Surplus Payable Account', group: 'Liabilities', sub: 'Payable', type: 'Cr', amount: surplus });
-    postJournal({
+    // Awaited — same fire-and-forget fix as the disbursement/transaction
+    // journals above.
+    await postJournal({
       // Distinct from the disbursement journal's reference (which also
       // uses the bare Loan_Number) — otherwise two entirely different
       // postings for the same loan share one reference with no way to

@@ -52,10 +52,34 @@ async function recordSchemeCollection({
   createdBy = 'system',
 }) {
   const trx = await db.transaction();
-  let txn, receiptNumber, isComplete, member, bonusGroup;
+  let txn, receiptNumber, isComplete, member, bonusGroup, isDuplicate = false;
   try {
     member = await trx('tbl_scheme_members').where({ Member_ID: memberId, Tenant_ID: tenantId }).first();
     if (!member) { await trx.rollback(); throw Object.assign(new Error('Member not found.'), { statusCode: 404 }); }
+
+    // Idempotency — ONLY when a real external reference is given (a gateway
+    // payment ID, a cheque number). Counter cash collections legitimately
+    // have no reference at all, so they're never de-duplicated against —
+    // this only guards the case a client retry, or the Razorpay webhook
+    // reconciling the same payment the app already recorded, would
+    // otherwise double-credit a member for one real payment.
+    if (paymentReference) {
+      const existing = await trx('tbl_scheme_transactions')
+        .where({ Tenant_ID: tenantId, Member_ID: memberId, Payment_Reference: paymentReference })
+        .first();
+      if (existing) {
+        isDuplicate = true;
+        txn = existing;
+        receiptNumber = existing.Receipt_Number;
+        isComplete = member.Status === 'Matured' || (member.Installments_Paid >= member.Total_Installments);
+      }
+    }
+
+    if (isDuplicate) {
+      await trx.commit();
+      return { txn, receiptNumber, isComplete, duplicate: true, accounting: null };
+    }
+
     if (member.Status !== 'Active') {
       await trx.rollback();
       throw Object.assign(new Error(`Cannot collect — member status: ${member.Status}`), { statusCode: 400 });

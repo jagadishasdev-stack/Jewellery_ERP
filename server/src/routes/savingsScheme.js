@@ -4,6 +4,7 @@ const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const dayjs = require('dayjs');
+const crypto = require('crypto');
 const { modeVal } = require('../utils/dataModeFilter');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
@@ -622,21 +623,59 @@ router.put('/pdc/:id/status', authenticate, async (req, res) => {
 // ════════════════════════════════════════════════════════════════════════
 // LUCKY DRAW
 // ════════════════════════════════════════════════════════════════════════
-router.post('/draw/conduct', authenticate, async (req, res) => {
+router.post('/draw/conduct', authenticate, requirePermission('tenant_management'), async (req, res) => {
   const { Scheme_ID, Group_ID, Draw_Date, Draw_Type, Draw_Name, Prize_Type, Prize_Value, Prize_Description } = req.body;
+  const drawType = Draw_Type || 'Monthly';
   try {
     const tid = req.user.tenantId;
+
+    // Both flags default false — a scheme/group must EXPLICITLY opt into
+    // draws (Enable_Draw / Draw_Applicable, set on the scheme/group itself).
+    // Previously neither was ever checked here at all, so a draw could run
+    // against a scheme/group that had the feature turned off.
+    if (Scheme_ID) {
+      const scheme = await db('tbl_scheme_master').where({ Scheme_ID, Tenant_ID: tid }).first();
+      if (!scheme) return sendError(res, 404, 'Scheme not found.');
+      if (!scheme.Enable_Draw) return sendError(res, 400, `"${scheme.Scheme_Name}" does not have Lucky Draw enabled.`);
+    }
+    if (Group_ID) {
+      const group = await db('tbl_scheme_groups').where({ Group_ID, Tenant_ID: tid }).first();
+      if (!group) return sendError(res, 404, 'Group not found.');
+      if (!group.Draw_Applicable) return sendError(res, 400, `"${group.Group_Name}" is not eligible for Lucky Draw.`);
+    }
+
+    // Recurring draw types (Monthly/Quarterly) must not run twice for the
+    // same scheme/group in the same period — Festival/Special draws are
+    // named, one-off events and are exempt from this check on purpose.
+    if (drawType === 'Monthly' || drawType === 'Quarterly') {
+      const drawDate = dayjs(Draw_Date || new Date());
+      const periodStart = drawType === 'Monthly'
+        ? drawDate.startOf('month')
+        : drawDate.startOf('month').subtract((drawDate.month() % 3), 'month').startOf('month');
+      const periodEnd = drawType === 'Monthly' ? drawDate.endOf('month') : periodStart.add(3, 'month').subtract(1, 'day').endOf('day');
+      let dupQb = db('tbl_scheme_draws').where({ Tenant_ID: tid, Draw_Type: drawType })
+        .whereBetween('Draw_Date', [periodStart.toDate(), periodEnd.toDate()]);
+      dupQb = Scheme_ID ? dupQb.where('Scheme_ID', Scheme_ID) : dupQb.whereNull('Scheme_ID');
+      dupQb = Group_ID ? dupQb.where('Group_ID', Group_ID) : dupQb.whereNull('Group_ID');
+      const existing = await dupQb.first();
+      if (existing) {
+        return sendError(res, 400, `A ${drawType.toLowerCase()} draw for this scheme/group already ran this period (${existing.Draw_Date}).`);
+      }
+    }
+
     // Get eligible members (Active, paid at least 1 installment)
     let eligibleQb = db('tbl_scheme_members').where({ Tenant_ID: tid, Status: 'Active' }).where('Installments_Paid', '>', 0);
     if (Scheme_ID) eligibleQb = eligibleQb.where('Scheme_ID', Scheme_ID);
     if (Group_ID) eligibleQb = eligibleQb.where('Group_ID', Group_ID);
     const eligible = await eligibleQb;
     if (eligible.length === 0) return sendError(res, 400, 'No eligible members for draw.');
-    // Random winner
-    const winner = eligible[Math.floor(Math.random() * eligible.length)];
+    // Random winner — crypto.randomInt (not Math.random) so the pick isn't
+    // derived from a predictable PRNG seed; still a fair uniform pick, just
+    // not one a caller could feasibly influence/predict.
+    const winner = eligible[crypto.randomInt(0, eligible.length)];
     const [draw] = await db('tbl_scheme_draws').insert({
       Tenant_ID: tid, Scheme_ID, Group_ID, Draw_Date: Draw_Date || new Date(),
-      Draw_Type: Draw_Type || 'Monthly', Draw_Name, Winner_Member_ID: winner.Member_ID,
+      Draw_Type: drawType, Draw_Name, Winner_Member_ID: winner.Member_ID,
       Prize_Type, Prize_Value, Prize_Description, Eligible_Members: eligible.length,
       Conducted_By: req.user.username,
     }).returning('*');

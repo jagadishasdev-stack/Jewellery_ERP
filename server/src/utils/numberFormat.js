@@ -60,17 +60,45 @@ const nextNumber = async ({ tenantId, table, column, prefix, tenantCode, padWidt
     ? `${prefix}-`
     : `${prefix}-${tenantSegment}${dayjs().format('YYYYMMDD')}-`;
 
-  const last = await db(table)
-    .where('Tenant_ID', tenantId)
-    .whereRaw(`"${column}" ~ ?`, [`^${escapeRegex(pattern)}[0-9]+$`])
-    .orderBy(column, 'desc')
-    .first();
+  // Atomic — see tbl_document_number_counter's own migration comment for
+  // why this replaced a read-then-write SELECT MAX + increment. Fast path:
+  // the counter for this exact (tenant, pattern) already exists — one
+  // UPDATE, no read of the real document table at all, serialized by
+  // Postgres itself so two concurrent callers can never land on the same
+  // sequence number.
+  let rows = (await db.raw(
+    `UPDATE "tbl_document_number_counter" SET "Last_Seq" = "Last_Seq" + 1
+     WHERE "Tenant_ID" = ? AND "Sequence_Key" = ? RETURNING "Last_Seq"`,
+    [tenantId, pattern]
+  )).rows;
 
-  let seq = 1;
-  if (last) {
-    const lastSeq = parseInt(String(last[column]).slice(pattern.length), 10);
-    seq = isNaN(lastSeq) ? 1 : lastSeq + 1;
+  if (!rows.length) {
+    // First-ever call for this exact key (or a Full-format pattern that
+    // just rolled over to a new calendar day) — seed from the real
+    // table's own current max, the same lookup this used to do on every
+    // single call, so numbering continues from where it already was
+    // instead of restarting at 1 and colliding with real existing rows.
+    // The ON CONFLICT below still covers a concurrent "first caller" race:
+    // whichever request's INSERT loses increments the ACTUAL now-stored
+    // value, never its own (possibly stale) seed guess, so this stays
+    // correct even if two requests compute different seeds for the same
+    // brand-new key at the same moment.
+    const last = await db(table)
+      .where('Tenant_ID', tenantId)
+      .whereRaw(`"${column}" ~ ?`, [`^${escapeRegex(pattern)}[0-9]+$`])
+      .orderBy(column, 'desc')
+      .first();
+    const seed = last ? (parseInt(String(last[column]).slice(pattern.length), 10) || 0) : 0;
+
+    rows = (await db.raw(
+      `INSERT INTO "tbl_document_number_counter" ("Tenant_ID", "Sequence_Key", "Last_Seq") VALUES (?, ?, ?)
+       ON CONFLICT ("Tenant_ID", "Sequence_Key") DO UPDATE SET "Last_Seq" = "tbl_document_number_counter"."Last_Seq" + 1
+       RETURNING "Last_Seq"`,
+      [tenantId, pattern, seed + 1]
+    )).rows;
   }
+
+  const seq = rows[0].Last_Seq;
   return `${pattern}${String(seq).padStart(padWidth, '0')}`;
 };
 

@@ -223,7 +223,10 @@ router.post('/settle', authenticate, requirePermission('karigar_management'), as
     // Balance, Cash Book, and P&L. Dr the wage expense, Cr wherever the
     // money actually came from.
     const ledger = await resolveLedgerForPayment(db, tenantId, paymentMode || 'Cash', bankAccountId);
-    postJournal({
+    // Awaited — was fire-and-forget, so the response could go out before
+    // this journal was guaranteed committed (see sales.js's identical fix
+    // for the concrete failure mode this caused).
+    await postJournal({
       tenantId, sourceType: 'JOURNAL', reference: `KARIGAR-SETTLE-${karigarId}-${Date.now()}`,
       narration: `Karigar wages settled — ${karigar.Vendor_Name}${remarks ? ' | ' + remarks : ''}`, createdBy: req.user.username,
       lines: [

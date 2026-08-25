@@ -369,12 +369,22 @@ razorpayV2Router.post('/create-order', async (req, res) => {
 });
 
 // ─── POST /api/razorpay/v2/verify-payment ───────────────────────────────────
-// Verifies the Razorpay signature entirely server-side — the client
-// never has, and never sends, the secret used here — then simply
-// confirms success. The actual collection gets recorded by the
-// SEPARATE POST /api/core/payForScheme call the frontend already makes
-// right after this one succeeds (see payForScheme below), so this route
-// intentionally does not touch tbl_scheme_transactions itself.
+// Two verification paths, both entirely server-side:
+//   - checkout.js (web) sends a real HMAC signature — verified against it.
+//   - Native (iOS/Android SDK) sends "native_flow_no_signature" because
+//     those SDKs don't produce a checkout.js-style signature at all. This
+//     USED TO mean no verification whatsoever — any caller who knew (or
+//     guessed) an order_id/payment_id pair could claim success and the
+//     frontend would go straight on to record a real installment for it.
+//     Now: a real server-to-server call to Razorpay's Payments API
+//     confirms the payment actually exists, is captured, belongs to the
+//     claimed order, and its amount matches what create-order recorded —
+//     the same trust boundary the signature check gives the web flow.
+// The actual collection gets recorded by the SEPARATE POST /api/core/
+// payForScheme call the frontend already makes right after this one
+// succeeds (see payForScheme below) — recordSchemeCollection's own
+// idempotency check (schemeCollection.js) means a retry or the webhook
+// reconciling the same payment later can never double-credit it.
 razorpayV2Router.post('/verify-payment', async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, amount, store_id } = req.body;
   if (!store_id || !razorpay_order_id || !razorpay_payment_id) {
@@ -396,14 +406,43 @@ razorpayV2Router.post('/verify-payment', async (req, res) => {
         if (expected !== razorpay_signature) {
           return { error: 'Payment signature verification failed.' };
         }
+      } else {
+        const rzp = new Razorpay({ key_id: config.Key_ID, key_secret: config.Key_Secret });
+        let payment;
+        try {
+          payment = await rzp.payments.fetch(razorpay_payment_id);
+        } catch (fetchErr) {
+          return { error: `Could not verify payment with Razorpay: ${fetchErr.message}` };
+        }
+        if (payment.order_id !== razorpay_order_id) {
+          return { error: 'Payment does not belong to the claimed order.' };
+        }
+        if (payment.status !== 'captured') {
+          return { error: `Payment is not captured (status: ${payment.status}).` };
+        }
+        // Cross-check against what create-order actually asked Razorpay to
+        // collect — closes the gap of a caller claiming a real payment_id
+        // but a fabricated (larger or smaller) amount for it.
+        const orderTrack = await tenantDb('tbl_pg_order_track')
+          .where({ Tenant_ID: store_id, Order_ID: razorpay_order_id }).first();
+        if (orderTrack && Math.round(parseFloat(orderTrack.Amount) * 100) !== payment.amount) {
+          return { error: 'Payment amount does not match the order.' };
+        }
       }
 
-      await tenantDb('tbl_pg_transactions').insert({
-        Tenant_ID: store_id, Gateway: 'razorpay', Order_ID: razorpay_order_id,
-        Payment_ID: razorpay_payment_id, Signature: razorpay_signature || 'native',
-        Amount: parseFloat(amount || 0) / 100, Currency: 'INR', Status: 'success',
-        Purpose: 'Scheme Payment', Created_By: 'savings-app-member',
-      }).catch(() => {});
+      // Idempotent insert — a retried verify-payment call (or the webhook
+      // seeing the same payment later) must not create a second row for
+      // the same real payment.
+      const already = await tenantDb('tbl_pg_transactions')
+        .where({ Tenant_ID: store_id, Gateway: 'razorpay', Payment_ID: razorpay_payment_id }).first();
+      if (!already) {
+        await tenantDb('tbl_pg_transactions').insert({
+          Tenant_ID: store_id, Gateway: 'razorpay', Order_ID: razorpay_order_id,
+          Payment_ID: razorpay_payment_id, Signature: razorpay_signature || 'native',
+          Amount: parseFloat(amount || 0) / 100, Currency: 'INR', Status: 'success',
+          Purpose: 'Scheme Payment', Created_By: 'savings-app-member',
+        }).catch(() => {});
+      }
 
       return { success: true, order: { amount }, razorpay_payment_id, razorpay_order_id };
     });
@@ -469,6 +508,34 @@ router.post('/payForScheme', async (req, res) => {
     console.error('payForScheme error:', err.message);
     const statusCode = err.statusCode || 500;
     return res.status(statusCode).json({ error: `Failed to record payment: ${err.message}` });
+  }
+});
+
+// ─── GET /api/core/myDraws?store_id=&mobile= ───────────────────────────────
+// The member-facing side of Lucky Draw — a genuine blank slate before this:
+// draws were only ever visible to staff (savingsScheme.js's /draw/history).
+// Public + mobile-scoped, same trust model as every other route in this
+// file (see file header) — looks the member up by mobile first, so a
+// bare mobile number with no matching member just returns an empty list
+// rather than erroring.
+router.get('/myDraws', async (req, res) => {
+  const tenantId = req.query.store_id || req.query.storeID;
+  const mobile = req.query.mobile;
+  if (!tenantId || !mobile) return res.json([]);
+
+  try {
+    const member = await db('tbl_scheme_members').where({ Tenant_ID: tenantId, Mobile: mobile }).first('Member_ID');
+    if (!member) return res.json([]);
+
+    const draws = await db('tbl_scheme_draws')
+      .where({ Tenant_ID: tenantId, Winner_Member_ID: member.Member_ID })
+      .select('Draw_ID', 'Draw_Name', 'Draw_Type', 'Draw_Date', 'Prize_Type', 'Prize_Value', 'Prize_Description')
+      .orderBy('Draw_Date', 'desc');
+
+    return res.json(draws);
+  } catch (err) {
+    console.error('myDraws error:', err.message);
+    return res.json([]);
   }
 });
 

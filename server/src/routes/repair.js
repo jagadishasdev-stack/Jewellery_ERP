@@ -55,7 +55,10 @@ router.post('/', authenticate, [
     const advance = parseFloat(repair.Advance_Paid || 0);
     if (advance > 0) {
       const ledger = await resolveLedgerForPayment(db, tenantId, Payment_Mode || 'Cash', Bank_Account_ID);
-      postJournal({
+      // Awaited — was fire-and-forget, so the response could go out before
+      // this journal was guaranteed committed (see sales.js's identical
+      // fix for the concrete failure mode this caused).
+      await postJournal({
         tenantId, sourceType: 'JOURNAL', sourceId: repair.Repair_ID, reference: jobCardNumber,
         narration: `Repair advance collected — ${jobCardNumber}`, createdBy: req.user.username,
         lines: [
@@ -108,7 +111,8 @@ router.post('/:id/deliver', authenticate, async (req, res) => {
     // never be recorded anywhere, not even which payment mode was used.
     if (collected > 0) {
       const ledger = await resolveLedgerForPayment(db, tenantId, req.body.Payment_Mode || 'Cash', req.body.Bank_Account_ID);
-      postJournal({
+      // Awaited — same fire-and-forget fix as the advance journal above.
+      await postJournal({
         tenantId, sourceType: 'JOURNAL', sourceId: order.Repair_ID, reference: order.Job_Card_Number,
         narration: `Repair delivered — ${order.Job_Card_Number}`, createdBy: req.user.username,
         lines: [

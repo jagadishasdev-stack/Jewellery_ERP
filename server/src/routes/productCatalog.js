@@ -3,6 +3,14 @@
  * Migrated from Image App PHP backend
  * Integrates with tbl_ornament_master (existing ERP table)
  * New endpoints for image management, exhibition, barcode search
+ *
+ * Show_In_Catalog (tbl_ornament_master, added 20260825000000): a pure
+ * catalog-display toggle, deliberately independent of Is_Hidden/Data_Mode
+ * (dataModeFilter.js's applyStockVisibility, an owner's-reserve/accounting
+ * concern) and never checked by billing (sales.js) or reports.js. It's
+ * meant to gate ONLY the customer-facing browse/order surfaces below
+ * (/exhibition, /public/:barcode) — the staff-facing /search route
+ * intentionally ignores it so staff can still find and manage a hidden item.
  */
 const router = require('express').Router();
 const db = require('../db/knex');
@@ -47,6 +55,13 @@ router.get('/search', authenticate, async (req, res) => {
         if (req.user.roleName !== 'Super Admin') this.where('o.Tenant_ID', tenantId);
       })
       .where('o.Is_Active', true)
+      // NOT filtered by Show_In_Catalog on purpose — this route is the
+      // staff-facing barcode/tag/design search used by the Image App to
+      // FIND and manage stock (photos, exhibition flag, etc.), including
+      // items an owner has deliberately hidden from the customer catalog.
+      // Hiding an item here too would make it impossible for staff to find
+      // and re-show it. See /exhibition and /public/:barcode below for the
+      // actual customer-facing surfaces this flag is meant to gate.
       .select(
         'o.Ornament_ID', 'o.Article_Number', 'o.RFID_Tag', 'o.HUID_Number',
         'o.Gross_Weight', 'o.Net_Gold_Weight', 'o.Stone_Weight',
@@ -307,7 +322,10 @@ router.get('/exhibition', authenticate, async (req, res) => {
       .leftJoin('tbl_purity_master as p', 'o.Purity_ID', 'p.Purity_ID')
       .where('o.Tenant_ID', req.user.tenantId)
       .where('o.Is_Active', true)
-      .where('o.Is_On_Display', true);
+      .where('o.Is_On_Display', true)
+      // Customer-facing exhibition/browse screen — honors Show_In_Catalog
+      // (see productCatalog.js's file-level note on the flag).
+      .where('o.Show_In_Catalog', true);
     qb = applyStockVisibility(qb, req, 'o');
     const items = await qb
       .select('o.Ornament_ID', 'o.Article_Number', 'o.Product_Image_URL', 'o.Gross_Weight',
@@ -471,6 +489,10 @@ router.get('/public/:barcode', async (req, res) => {
       .where('o.Article_Number', req.params.barcode)
       .where('o.Is_Active', true)
       .where('o.Is_Hidden', false)
+      // Customer-facing public product page — honors Show_In_Catalog too
+      // (independent of Is_Hidden above, see productCatalog.js's file-level
+      // note on the flag).
+      .where('o.Show_In_Catalog', true)
       .where('o.Data_Mode', 3)
       .select(
         'o.Ornament_ID', 'o.Article_Number', 'o.RFID_Tag', 'o.HUID_Number',

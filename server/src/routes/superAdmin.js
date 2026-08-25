@@ -223,15 +223,34 @@ router.put('/tenant/:id/settings', authenticate, requireSuperAdmin, async (req, 
 router.get('/tenant/:id/payment-gateway', authenticate, requireSuperAdmin, async (req, res) => {
   try {
     const rows = await db('tbl_payment_gateway_config').where({ Tenant_ID: req.params.id });
+    const webhookUrlFor = (gateway) => gateway === 'razorpay'
+      ? `${process.env.PUBLIC_SERVER_URL || `${req.protocol}://${req.get('host')}`}/api/webhooks/razorpay/${req.params.id}`
+      : null;
     const masked = rows.map((r) => ({
       configId: r.Config_ID,
       gateway: r.Gateway,
       keyId: r.Key_ID,
       keySecretMasked: r.Key_Secret ? `••••${r.Key_Secret.slice(-4)}` : null,
+      webhookSecretMasked: r.Webhook_Secret ? `••••${r.Webhook_Secret.slice(-4)}` : null,
       merchantId: r.Merchant_ID,
       environment: r.Environment,
       isActive: r.Is_Active,
+      // Not stored — the exact URL to paste into Razorpay's own dashboard
+      // (Settings → Webhooks) for this tenant. Same value every time for a
+      // given gateway+tenant, computed rather than persisted so it always
+      // reflects wherever this server is actually reachable from.
+      webhookUrl: webhookUrlFor(r.Gateway),
     }));
+    // No row yet at all for razorpay (brand new tenant) — still hand back a
+    // virtual entry so the admin UI has something to build a form around,
+    // and can show the webhook URL even before the first save.
+    if (!masked.some((m) => m.gateway === 'razorpay')) {
+      masked.push({
+        configId: null, gateway: 'razorpay', keyId: null, keySecretMasked: null,
+        webhookSecretMasked: null, merchantId: null, environment: 'test', isActive: true,
+        webhookUrl: webhookUrlFor('razorpay'),
+      });
+    }
     return sendSuccess(res, masked);
   } catch (err) {
     console.error('payment-gateway list error:', err.message);
@@ -245,7 +264,7 @@ router.get('/tenant/:id/payment-gateway', authenticate, requireSuperAdmin, async
 // omit it to change other fields (environment, isActive) without having to
 // re-paste the secret every time.
 router.put('/tenant/:id/payment-gateway', authenticate, requireSuperAdmin, async (req, res) => {
-  const { gateway, keyId, keySecret, merchantId, saltKey, saltIndex, environment, isActive } = req.body;
+  const { gateway, keyId, keySecret, webhookSecret, merchantId, saltKey, saltIndex, environment, isActive } = req.body;
   if (!gateway) return sendError(res, 400, 'gateway is required (e.g. "razorpay").');
 
   try {
@@ -264,6 +283,7 @@ router.put('/tenant/:id/payment-gateway', authenticate, requireSuperAdmin, async
     };
     if (keyId !== undefined) update.Key_ID = keyId;
     if (keySecret !== undefined && keySecret !== '') update.Key_Secret = keySecret;
+    if (webhookSecret !== undefined && webhookSecret !== '') update.Webhook_Secret = webhookSecret;
     if (merchantId !== undefined) update.Merchant_ID = merchantId;
     if (saltKey !== undefined) update.Salt_Key = saltKey;
     if (saltIndex !== undefined) update.Salt_Index = saltIndex;
@@ -288,7 +308,11 @@ router.put('/tenant/:id/payment-gateway', authenticate, requireSuperAdmin, async
     return sendSuccess(res, {
       configId: row.Config_ID, gateway: row.Gateway, keyId: row.Key_ID,
       keySecretMasked: row.Key_Secret ? `••••${row.Key_Secret.slice(-4)}` : null,
+      webhookSecretMasked: row.Webhook_Secret ? `••••${row.Webhook_Secret.slice(-4)}` : null,
       merchantId: row.Merchant_ID, environment: row.Environment, isActive: row.Is_Active,
+      webhookUrl: row.Gateway === 'razorpay'
+        ? `${process.env.PUBLIC_SERVER_URL || `${req.protocol}://${req.get('host')}`}/api/webhooks/razorpay/${req.params.id}`
+        : null,
     }, existing ? 'Payment gateway updated.' : 'Payment gateway configured.');
   } catch (err) {
     console.error('payment-gateway upsert error:', err.message);

@@ -6,7 +6,7 @@ import {
   Row, Col, Card, Typography, Button, Space, Tag, Tabs, Table, Select,
   Statistic, Progress, Alert, Badge,
 } from 'antd';
-import { DownloadOutlined, GoldOutlined, WarningOutlined, RiseOutlined, FallOutlined, SwapOutlined, ApartmentOutlined, AppstoreOutlined, InboxOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
+import { DownloadOutlined, GoldOutlined, WarningOutlined, RiseOutlined, FallOutlined, SwapOutlined, ApartmentOutlined, AppstoreOutlined, InboxOutlined, EyeInvisibleOutlined, ShopOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import api from '../../api/axios';
 import { formatCurrency } from '../../utils/calculations';
@@ -74,6 +74,14 @@ export default function InventoryReportsPage() {
     queryFn: () => api.get('/floors/reports/visibility-comparison').then(r => r.data.data),
     enabled: isUnofficial,
   });
+  // Catalog-hidden stock — a display-only flag (Show_In_Catalog), unrelated
+  // to the Unofficial-mode "Hidden Stock" tab below. Visible in every mode,
+  // no special permission — it's a filter on ordinary sales data, not a
+  // separate accounting book.
+  const { data: catalogHiddenReport, isLoading: catalogHiddenLoading } = useQuery({
+    queryKey: ['inv-catalog-hidden'],
+    queryFn: () => api.get('/reports/catalog-hidden-stock').then(r => r.data.data),
+  });
 
   const byType = currentStock?.byType || [];
   const overall = currentStock?.overall || {};
@@ -131,6 +139,18 @@ export default function InventoryReportsPage() {
     { title: 'Hidden By', dataIndex: 'Hidden_By' },
     { title: 'Hidden Date', dataIndex: 'Hidden_Date', width: 110, render: v => v ? dayjs(v).format('DD-MMM-YYYY') : '-' },
     { title: 'Reason', dataIndex: 'Hidden_Reason' },
+  ];
+
+  const catalogHiddenCols = [
+    { title: 'Article No', dataIndex: 'Article_Number', render: v => <Text code style={{fontSize:11}}>{v}</Text> },
+    { title: 'Item Type', dataIndex: 'Type_Name' },
+    { title: 'Weight', dataIndex: 'Gross_Weight', width: 90, render: v => `${parseFloat(v||0).toFixed(3)}g` },
+    { title: 'MRP', dataIndex: 'Total_Price', render: v => formatCurrency(v) },
+    { title: 'Status', dataIndex: 'Is_Sold', width: 100, render: v => v ? <Tag color="red">Sold</Tag> : <Tag color="green">In Stock</Tag> },
+    { title: 'Invoice No', dataIndex: 'Invoice_Number', render: v => v || '-' },
+    { title: 'Sale Date', dataIndex: 'Sale_Date', width: 110, render: v => v ? dayjs(v).format('DD-MMM-YYYY') : '-' },
+    { title: 'Customer', dataIndex: 'Customer_Name', render: v => v || '-' },
+    { title: 'Last Updated By', dataIndex: 'Last_Updated_By', render: v => v || '-' },
   ];
 
   const makeLocationSummary = (data) => ({
@@ -332,6 +352,40 @@ export default function InventoryReportsPage() {
           message="Hidden stock details are hidden in Official mode"
           description="Switch to Unofficial mode (Ctrl+F5) to view visibility totals and the hidden stock list."
         />
+      ),
+    },
+    {
+      key: 'catalog-hidden', label: <span><ShopOutlined style={{color:'#722ed1'}} /> Hidden From Catalog</span>,
+      children: (
+        <>
+          <Alert
+            type="info" showIcon style={{marginBottom:12,borderRadius:8}}
+            message="Items hidden from the customer-facing catalog only"
+            description="These items are fully normal in billing, inventory counts, and GST/sales reports — this list just isolates the ones marked not to appear in the online/app catalog, whether sold or still in stock."
+          />
+          <Row gutter={[10,10]} style={{marginBottom:14}}>
+            {[
+              {title:'Total Hidden',value:catalogHiddenReport?.summary?.total_hidden,color:'#722ed1'},
+              {title:'Still In Stock',value:catalogHiddenReport?.summary?.available_count,color:'#52c41a'},
+              {title:'Sold',value:catalogHiddenReport?.summary?.sold_count,color:'#ff4d4f'},
+              {title:'Total Value',value:catalogHiddenReport?.summary?.total_value,color:'#B8860B',fmt:formatCurrency},
+            ].map((c,i)=>(
+              <Col xs={12} md={6} key={i}>
+                <Card bodyStyle={{padding:'12px 14px'}} style={{borderRadius:8,border:'none',boxShadow:'0 1px 4px rgba(0,0,0,.07)',borderTop:`3px solid ${c.color}`}}>
+                  <Statistic title={<Text style={{fontSize:11,color:'#888'}}>{c.title}</Text>}
+                    value={c.fmt ? parseFloat(c.value||0) : parseInt(c.value||0)}
+                    formatter={c.fmt ? v=>c.fmt(v) : undefined}
+                    valueStyle={{color:c.color,fontSize:17,fontWeight:700}} />
+                </Card>
+              </Col>
+            ))}
+          </Row>
+          <Card title={`Hidden From Catalog (${(catalogHiddenReport?.items||[]).length} items)`} bodyStyle={{padding:0}} style={{borderRadius:8}}
+            extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(catalogHiddenReport?.items||[],'catalog_hidden_stock')}>CSV</Button>}>
+            <Table
+            scroll={{ x: "max-content" }} columns={catalogHiddenCols} dataSource={catalogHiddenReport?.items||[]} rowKey="Ornament_ID" size="small" loading={catalogHiddenLoading} pagination={{pageSize:20}} />
+          </Card>
+        </>
       ),
     },
   ];

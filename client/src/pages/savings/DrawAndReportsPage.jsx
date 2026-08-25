@@ -47,6 +47,12 @@ export default function DrawAndReportsPage() {
 
   const { data: schemes } = useQuery({ queryKey: ['savings-schemes'], queryFn: () => savingsApi.getSchemes().then(r => r.data.data) });
   const { data: groups } = useQuery({ queryKey: ['savings-groups'], queryFn: () => savingsApi.getGroups().then(r => r.data.data) });
+  // Only schemes/groups that have actually opted into Lucky Draw — the
+  // conduct-draw route itself now rejects a Scheme_ID/Group_ID that hasn't
+  // (Enable_Draw / Draw_Applicable), so don't offer ones that would just
+  // bounce back an error.
+  const drawSchemes = (schemes || []).filter(s => s.Enable_Draw);
+  const drawGroups = (groups || []).filter(g => g.Draw_Applicable);
 
   const drawMutation = useMutation({
     mutationFn: (d) => savingsApi.conductDraw(d),
@@ -224,10 +230,17 @@ export default function DrawAndReportsPage() {
       {/* Draw Modal */}
       <Modal title="🎲 Conduct Lucky Draw" open={drawModal} onCancel={() => { setDrawModal(false); drawForm.resetFields(); }} footer={null} width={500}>
         <Alert message="System randomly selects an eligible Active member with at least 1 paid installment." type="info" showIcon style={{ marginBottom: 16 }} />
+        {drawSchemes.length === 0 && drawGroups.length === 0 && (
+          <Alert
+            message="No scheme or group has Lucky Draw enabled yet"
+            description='Turn on "Enable Draw" on a scheme (Scheme settings) or "Draw Applicable" on a group (Manage Groups) first — otherwise this can still run tenant-wide (leave both below blank), just not narrowed to one.'
+            type="warning" showIcon style={{ marginBottom: 16 }}
+          />
+        )}
         <Form form={drawForm} layout="vertical" onFinish={v => drawMutation.mutate({ ...v, Draw_Date: v.Draw_Date?.format('YYYY-MM-DD') })}>
           <Row gutter={16}>
-            <Col xs={12}><Form.Item name="Scheme_ID" label="Scheme (optional)"><Select allowClear>{(schemes || []).map(s => <Option key={s.Scheme_ID} value={s.Scheme_ID}>{s.Scheme_Name}</Option>)}</Select></Form.Item></Col>
-            <Col xs={12}><Form.Item name="Group_ID" label="Group (optional)"><Select allowClear>{(groups || []).map(g => <Option key={g.Group_ID} value={g.Group_ID}>{g.Group_Name}</Option>)}</Select></Form.Item></Col>
+            <Col xs={12}><Form.Item name="Scheme_ID" label="Scheme (optional — only draw-enabled schemes listed)"><Select allowClear placeholder="Tenant-wide if left blank">{drawSchemes.map(s => <Option key={s.Scheme_ID} value={s.Scheme_ID}>{s.Scheme_Name}</Option>)}</Select></Form.Item></Col>
+            <Col xs={12}><Form.Item name="Group_ID" label="Group (optional — only draw-eligible groups listed)"><Select allowClear placeholder="Tenant-wide if left blank">{drawGroups.map(g => <Option key={g.Group_ID} value={g.Group_ID}>{g.Group_Name}</Option>)}</Select></Form.Item></Col>
           </Row>
           <Row gutter={16}>
             <Col xs={12}><Form.Item name="Draw_Name" label="Draw Name" rules={[{ required: true }]}><Input placeholder="Monthly Draw — June 2026" /></Form.Item></Col>

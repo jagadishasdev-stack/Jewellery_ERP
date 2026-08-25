@@ -513,7 +513,16 @@ router.post('/create', authenticate, requirePermission('sales'), [
     if (totalBonusAdjustment > 0) ledgerPayments.push({ Payment_Mode: 'Bonus Adjustment', Amount: totalBonusAdjustment });
     if (balance > 0) ledgerPayments.push({ Payment_Mode: 'Customer Receivable', Amount: balance });
 
-    postSaleAccountingEntries({
+    // Awaited (not fire-and-forget) — this used to return the sale response
+    // BEFORE the journal insert was guaranteed committed, a real race that
+    // showed up concretely as: a Tally export run immediately after a sale
+    // could miss that sale's journal entirely, since it queries the same
+    // table from a separate request with no guarantee the fire-and-forget
+    // write had landed yet. Still non-fatal to the sale itself on failure
+    // (the sale already committed, and blocking/rolling it back over a
+    // bookkeeping-side error would be worse) — just guaranteed to have
+    // finished, one way or the other, before the response goes out.
+    await postSaleAccountingEntries({
       tenantId, saleId: sale.Sale_ID, invoiceNumber,
       payments: ledgerPayments,
       subtotal,

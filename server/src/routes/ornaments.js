@@ -223,6 +223,50 @@ router.post('/', authenticate, [
   }
 });
 
+// ─── PUT /api/ornaments/catalog-visibility — bulk hide/show in catalog ────────
+// Only touches Show_In_Catalog — does NOT affect Is_Active, Is_Hidden,
+// Is_Stock_Available, or Data_Mode, so billing (sales.js), inventory counts,
+// and GST/sales reports are completely unaffected either way. This is a
+// catalog-display toggle, not an accounting-book operation.
+// MUST be registered before PUT /:id below — Express matches routes in
+// registration order, and '/:id' matches literally any path segment
+// (including the string "catalog-visibility"), so this would otherwise
+// never be reached and every call would silently hit the generic
+// single-item update instead (and 500, since Ornament_ID is an integer
+// column and "catalog-visibility" isn't a valid integer for it).
+router.put('/catalog-visibility', authenticate, [
+  body('ornamentIds').isArray({ min: 1 }).withMessage('ornamentIds must be a non-empty array.'),
+  body('showInCatalog').isBoolean().withMessage('showInCatalog must be true or false.'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+
+  const { ornamentIds, showInCatalog } = req.body;
+  try {
+    const updated = await db('tbl_ornament_master')
+      .where('Tenant_ID', req.user.tenantId)
+      .whereIn('Ornament_ID', ornamentIds)
+      .update({
+        Show_In_Catalog: showInCatalog,
+        Last_Updated_By: req.user.username,
+        Last_Updated_Date: new Date(),
+      })
+      .returning(['Ornament_ID', 'Article_Number']);
+
+    await auditLog({
+      tenantId: req.user.tenantId, userId: req.user.userId, tableName: 'tbl_ornament_master',
+      recordId: null, actionType: showInCatalog ? 'CATALOG_SHOW' : 'CATALOG_HIDE',
+      oldData: null, newData: { ornamentIds, showInCatalog, count: updated.length }, req,
+    });
+
+    return sendSuccess(res, { updatedCount: updated.length, items: updated },
+      `${updated.length} item(s) ${showInCatalog ? 'restored to' : 'hidden from'} the catalog.`);
+  } catch (err) {
+    console.error('Catalog visibility update error:', err.message);
+    return sendError(res, 500, 'Failed to update catalog visibility.');
+  }
+});
+
 // ─── PUT /api/ornaments/:id ───────────────────────────────────────────────────
 router.put('/:id', authenticate, async (req, res) => {
   try {

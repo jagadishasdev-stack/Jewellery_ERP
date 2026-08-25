@@ -82,7 +82,11 @@ router.post('/close', authenticate, async (req, res) => {
     // as one generic "Other Expenses" line; a category-aware Day Close
     // form would let this split into real expense accounts instead).
     if (cashExpenses > 0) {
-      postJournal({
+      // Awaited — was fire-and-forget, so the response could go out before
+      // this journal was guaranteed committed (see sales.js's identical fix
+      // for the concrete failure mode this caused: an export/report run
+      // immediately after could miss the entry entirely).
+      await postJournal({
         tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}`,
         narration: `Cash expenses on ${today}`, createdBy: req.user.username, dataMode: dm,
         lines: [
@@ -102,7 +106,8 @@ router.post('/close', authenticate, async (req, res) => {
     // every entry going the other way.
     if (Math.abs(difference) > 0.01) {
       const isShort = difference < 0;
-      postJournal({
+      // Awaited — see the cash-expenses fix just above for why.
+      await postJournal({
         tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}-DIFF`,
         narration: `Cash ${isShort ? 'shortage' : 'excess'} found at day close ${today}`, createdBy: req.user.username, dataMode: dm,
         lines: isShort ? [

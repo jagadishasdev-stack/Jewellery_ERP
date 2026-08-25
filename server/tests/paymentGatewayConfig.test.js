@@ -41,10 +41,15 @@ afterAll(async () => {
   await db.destroy();
 });
 
-test('GET returns an empty list before anything is configured', async () => {
+test('GET returns a virtual (unsaved) razorpay entry before anything is configured, with its webhook URL', async () => {
   const res = await request(app).get(`/api/super-admin/tenant/${tenant.tenantId}/payment-gateway`).set(saAuth());
   expect(res.status).toBe(200);
-  expect(res.body.data).toEqual([]);
+  expect(res.body.data).toHaveLength(1);
+  const [virtual] = res.body.data;
+  expect(virtual.configId).toBeNull();
+  expect(virtual.gateway).toBe('razorpay');
+  expect(virtual.keyId).toBeNull();
+  expect(virtual.webhookUrl).toContain(`/api/webhooks/razorpay/${tenant.tenantId}`);
 });
 
 test('PUT creates a new gateway config; the response never contains the raw secret', async () => {
@@ -77,6 +82,25 @@ test('PUT without keySecret updates other fields without clobbering the stored s
 
   const row = await db('tbl_payment_gateway_config').where({ Tenant_ID: tenant.tenantId, Gateway: 'razorpay' }).first();
   expect(row.Key_Secret).toBe('super_secret_value_123'); // unchanged
+});
+
+test('webhookSecret is masked in every response and never appears raw', async () => {
+  const res = await request(app).put(`/api/super-admin/tenant/${tenant.tenantId}/payment-gateway`).set(saAuth()).send({
+    gateway: 'razorpay', webhookSecret: 'whsec_super_secret_456',
+  });
+  expect(res.status).toBe(200);
+  expect(res.body.data.webhookSecretMasked).toBe('••••_456');
+  expect(JSON.stringify(res.body)).not.toContain('whsec_super_secret_456');
+
+  const row = await db('tbl_payment_gateway_config').where({ Tenant_ID: tenant.tenantId, Gateway: 'razorpay' }).first();
+  expect(row.Webhook_Secret).toBe('whsec_super_secret_456');
+
+  // Omitting it on a later PUT must not clobber it.
+  const res2 = await request(app).put(`/api/super-admin/tenant/${tenant.tenantId}/payment-gateway`).set(saAuth()).send({
+    gateway: 'razorpay', isActive: true,
+  });
+  const row2 = await db('tbl_payment_gateway_config').where({ Tenant_ID: tenant.tenantId, Gateway: 'razorpay' }).first();
+  expect(row2.Webhook_Secret).toBe('whsec_super_secret_456');
 });
 
 test('a non-Super-Admin cannot read or write gateway config', async () => {

@@ -16,7 +16,7 @@ import {
   PlusOutlined, EyeOutlined, EditOutlined, DeleteOutlined,
   ApiOutlined, CheckCircleOutlined, InfoCircleOutlined,
   TeamOutlined, KeyOutlined, UserOutlined, LockOutlined, UnlockOutlined,
-  ControlOutlined, ApartmentOutlined, MessageOutlined, BellOutlined,
+  ControlOutlined, ApartmentOutlined, MessageOutlined, BellOutlined, CreditCardOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tenantApi, superAdminApi, smsApi, pushApi } from '../../api/modules';
@@ -115,6 +115,14 @@ export default function TenantManagePage() {
   const [pushLoading, setPushLoading] = useState(false);
   const [pushForm] = Form.useForm();
   const [testDeviceToken, setTestDeviceToken] = useState('');
+
+  // Payment gateway (Razorpay) management state — same pattern again: one
+  // real merchant key/secret + webhook secret per tenant, secrets masked,
+  // Super-Admin-only.
+  const [payTenant, setPayTenant] = useState(null);
+  const [payGateway, setPayGateway] = useState(null);
+  const [payLoading, setPayLoading] = useState(false);
+  const [payForm] = Form.useForm();
 
   // Create wizard state — 3 separate Form instances, data merged on submit
   const [wizardStep,  setWizardStep]  = useState(0);
@@ -436,6 +444,35 @@ export default function TenantManagePage() {
     onError: (err) => message.error(err.response?.data?.message || 'Test send failed.'),
   });
 
+  const fetchPayGateway = async (tenant) => {
+    setPayTenant(tenant);
+    setPayLoading(true);
+    try {
+      const res = await superAdminApi.getPaymentGateway(tenant.Tenant_ID);
+      const rzp = (res.data.data || []).find((g) => g.gateway === 'razorpay');
+      setPayGateway(rzp || null);
+      payForm.setFieldsValue({
+        keyId: rzp?.keyId || '', keySecret: '', webhookSecret: '',
+        merchantId: rzp?.merchantId || '', environment: rzp?.environment || 'test',
+        isActive: rzp?.isActive !== false,
+      });
+    } catch (err) {
+      message.error('Failed to load payment gateway config: ' + err.message);
+      setPayGateway(null);
+    } finally {
+      setPayLoading(false);
+    }
+  };
+
+  const savePayGatewayMutation = useMutation({
+    mutationFn: (values) => superAdminApi.savePaymentGateway(payTenant.Tenant_ID, { gateway: 'razorpay', ...values }),
+    onSuccess: () => {
+      message.success('Payment gateway saved — the Pay button now uses these credentials for this tenant.');
+      fetchPayGateway(payTenant);
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to save payment gateway config.'),
+  });
+
   const fetchUsers = async (tenant) => {
     setUsersTenant(tenant);
     setTenantUsersLoading(true);
@@ -524,7 +561,7 @@ export default function TenantManagePage() {
     { title: 'Users', dataIndex: 'Max_Users', width: 65, render: v => <Tag>{v}</Tag> },
     { title: 'Status', dataIndex: 'Is_Active', width: 90,
       render: v => <Badge status={v ? 'success' : 'error'} text={v ? 'Active' : 'Inactive'} /> },
-    { title: 'Actions', fixed: 'right', width: 352,
+    { title: 'Actions', fixed: 'right', width: 388,
       render: (_, r) => (
         <Space size={4}>
           <Tooltip title="View"><Button size="small" icon={<EyeOutlined />} onClick={() => setDetailTenant(r)} /></Tooltip>
@@ -540,6 +577,9 @@ export default function TenantManagePage() {
           </Tooltip>
           <Tooltip title="Push Notifications (Firebase)">
             <Button size="small" icon={<BellOutlined />} style={{ borderColor: '#faad14', color: '#faad14' }} onClick={() => fetchPushConfig(r)} />
+          </Tooltip>
+          <Tooltip title="Payment Gateway (Razorpay)">
+            <Button size="small" icon={<CreditCardOutlined />} style={{ borderColor: '#52c41a', color: '#52c41a' }} onClick={() => fetchPayGateway(r)} />
           </Tooltip>
           <Tooltip title="Keyboard Shortcuts">
             <Button size="small" icon={<ControlOutlined />} style={{ borderColor: '#13c2c2', color: '#13c2c2' }} onClick={() => openShortcuts(r)} />
@@ -1222,6 +1262,74 @@ export default function TenantManagePage() {
             Send Test
           </Button>
         </Space.Compact>
+      </Modal>
+
+      {/* ── Payment Gateway (Razorpay) Modal ─────────────────────────────── */}
+      <Modal title={`💳 Payment Gateway — ${payTenant?.Company_Name}`} open={!!payTenant}
+        onCancel={() => setPayTenant(null)} footer={null} width={640} destroyOnClose>
+        {!payGateway?.keyId && !payLoading && (
+          <Alert type="info" showIcon style={{ marginBottom: 16 }}
+            message="No Razorpay credentials set for this tenant yet — the Pay button in the app will show 'online payment is not configured' until these are saved." />
+        )}
+        {payGateway?.keyId && (
+          <Alert type="success" showIcon style={{ marginBottom: 16 }}
+            message={<>Currently configured: <code>{payGateway.keyId}</code> ({payGateway.environment === 'test' ? <Tag color="orange">Test mode</Tag> : <Tag color="green">Live mode</Tag>})</>} />
+        )}
+
+        <Typography.Title level={5} style={{ marginTop: 0 }}>Merchant Credentials</Typography.Title>
+        <Form form={payForm} layout="vertical" onFinish={(v) => savePayGatewayMutation.mutate(v)}>
+          <Form.Item name="keyId" label="Key ID"
+            rules={[{ required: true, message: "Razorpay's Key ID (starts rzp_test_ or rzp_live_)" }]}>
+            <Input placeholder="rzp_live_xxxxxxxxxxxx" />
+          </Form.Item>
+          <Form.Item name="keySecret" label="Key Secret"
+            extra="Leave blank to keep the currently saved secret unchanged — only fill this in to set a new one.">
+            <Input.Password placeholder={payGateway?.keySecretMasked || 'Enter to set/change'} />
+          </Form.Item>
+          <Form.Item name="environment" label="Environment" rules={[{ required: true }]}>
+            <Select options={[
+              { value: 'test', label: 'Test — sandbox keys, no real money moves' },
+              { value: 'production', label: 'Production — real payments' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="isActive" label="Active" valuePropName="checked">
+            <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block loading={savePayGatewayMutation.isPending}
+            style={{ background: '#52c41a', border: 'none', fontWeight: 700 }}>
+            Save Payment Gateway for This Tenant
+          </Button>
+        </Form>
+
+        <Divider />
+
+        <Typography.Title level={5}>Webhook (reconciliation safety net)</Typography.Title>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          The Pay button already works end-to-end without this — it's a backup, not a requirement. It catches
+          the rare case a payment goes through on Razorpay's side but the app never gets to tell the server
+          (closed mid-payment, lost connection, crash) — without it, that money would be collected with no
+          matching scheme installment recorded anywhere.
+        </Typography.Paragraph>
+        {payGateway?.webhookUrl && (
+          <Form.Item label="Webhook URL — paste this into Razorpay Dashboard → Settings → Webhooks">
+            <Input readOnly value={payGateway.webhookUrl} style={{ fontFamily: 'monospace', fontSize: 12 }}
+              addonAfter={
+                <a onClick={() => { navigator.clipboard?.writeText(payGateway.webhookUrl); message.success('Copied'); }}>Copy</a>
+              } />
+          </Form.Item>
+        )}
+        <Form form={payForm} component={false}>
+          <Form.Item name="webhookSecret" label="Webhook Secret" extra={
+            <>Razorpay generates this when you add the webhook above (under "Active Events" select at least{' '}
+              <code>payment.captured</code>) — paste it back here. Leave blank to keep the current one unchanged.</>
+          }>
+            <Input.Password placeholder={payGateway?.webhookSecretMasked || 'Enter to set/change'} />
+          </Form.Item>
+        </Form>
+        <Button block onClick={() => savePayGatewayMutation.mutate(payForm.getFieldsValue())}
+          loading={savePayGatewayMutation.isPending}>
+          Save Webhook Secret
+        </Button>
       </Modal>
 
       {/* ── Detail Modal ───────────────────────────────────────────────── */}

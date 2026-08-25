@@ -49,6 +49,7 @@ const binManagementRoutes = require('./routes/binManagement');
 const smsConfigRoutes = require('./routes/smsConfig');
 const pushConfigRoutes = require('./routes/pushConfig');
 const deviceLicensesRoutes = require('./routes/deviceLicenses');
+const webhooksRoutes = require('./routes/webhooks');
 const policiesRoutes = require('./routes/policies');
 const approvalRoutes = require('./routes/approval');
 const pawnbrokingRoutes = require('./routes/pawnbroking');
@@ -113,7 +114,12 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '5mb' }));
+// verify: stashes the raw pre-parsed body buffer on req.rawBody — needed by
+// routes/webhooks.js to compute Razorpay's HMAC signature over the EXACT
+// bytes Razorpay signed, not a re-serialized (and potentially non-identical)
+// copy of the parsed JSON. Harmless extra buffer capture for every other
+// route that never reads it.
+app.use(express.json({ limit: '5mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
@@ -169,11 +175,22 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/modules', modulesRoutes);
 app.use('/api/catalog', productCatalogRoutes);
 app.use('/api/mobile', mobileAuthRoutes);
-app.use('/api/payments', paymentsRoutes);
+// Deliberately NOT mounted — routes/payments.js is dead legacy code with a
+// real security/accounting-integrity risk: its create-order route accepts
+// a CLIENT-SUPPLIED key_id/key_secret and uses them for a real Razorpay
+// API call, and its verify route bypasses recordSchemeCollection() entirely
+// (writes tbl_scheme_members/tbl_scheme_transactions directly, so it never
+// reaches the real ledger). Confirmed zero callers anywhere in the
+// codebase — savingsAppCore.js's razorpayV2Router + /api/core/payForScheme
+// is the one real, hardened payment path. Left in the tree rather than
+// deleted in case anything about its PhonePe handlers is still wanted
+// later, but it must not be live.
+// app.use('/api/payments', paymentsRoutes);
 app.use('/api/bin', binManagementRoutes);
 app.use('/api/sms-config', smsConfigRoutes);
 app.use('/api/push-config', pushConfigRoutes);
 app.use('/api/device-licenses', deviceLicensesRoutes);
+app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/policies', policiesRoutes);
 app.use('/api/approval', approvalRoutes);
 app.use('/api/pawnbroking', pawnbrokingRoutes);
