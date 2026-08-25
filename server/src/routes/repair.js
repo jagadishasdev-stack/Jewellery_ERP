@@ -6,6 +6,7 @@ const { authenticate } = require('../middleware/auth');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const { nextNumber } = require('../utils/numberFormat');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const dayjs = require('dayjs');
 
 const genJobCard = async (tenantId) => nextNumber({
@@ -46,7 +47,7 @@ router.get('/lookup-by-invoice/:invoiceNumber', authenticate, async (req, res) =
 });
 
 // ── GET /api/repair  ──────────────────────────────────────────────────────────
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireValidBranch, async (req, res) => {
   const { status, page = 1, limit = 30 } = req.query;
   try {
     let qb = db('tbl_repair_orders as r')
@@ -54,10 +55,12 @@ router.get('/', authenticate, async (req, res) => {
       .leftJoin('tbl_vendor_master as k', 'r.Assigned_Karigar_ID', 'k.Vendor_ID')
       .leftJoin('tbl_vendor_master as ok', 'r.Original_Karigar_ID', 'ok.Vendor_ID')
       .where('r.Tenant_ID', req.user.tenantId)
+      .modify((q) => withBranch(q, req, 'r.Branch_ID'))
       .select('r.*', 'c.Customer_Name as Cust_Name', 'k.Vendor_Name as Karigar_Name', 'ok.Vendor_Name as Original_Karigar_Name');
     if (status) qb = qb.where('r.Status', status);
     // Clean count to avoid GROUP BY issue with JOINs
-    const countQb = db('tbl_repair_orders').where('Tenant_ID', req.user.tenantId);
+    let countQb = db('tbl_repair_orders').where('Tenant_ID', req.user.tenantId);
+    countQb = withBranch(countQb, req);
     if (status) countQb.where('Status', status);
     const [{ count }] = await countQb.count('Repair_ID as count');
     const data = await qb.orderBy('r.Received_Date','desc')
@@ -67,7 +70,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // ── POST /api/repair  ─────────────────────────────────────────────────────────
-router.post('/', authenticate, [
+router.post('/', authenticate, requireValidBranch, [
   body('Item_Description').notEmpty().withMessage('Item description required'),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -96,6 +99,8 @@ router.post('/', authenticate, [
 
     const [repair] = await db('tbl_repair_orders').insert({
       ...orderData, Tenant_ID: tenantId, Job_Card_Number: jobCardNumber,
+      // Multi-Branch Management — see utils/branchAccess.js.
+      Branch_ID: resolveBranchForInsert(req, orderData.Branch_ID),
       Original_Invoice_Number: Original_Invoice_Number || null,
       Original_Sale_ID: originalSaleId, Original_Ornament_ID: originalSaleId ? Original_Ornament_ID : null,
       Original_Karigar_ID: originalKarigarId,

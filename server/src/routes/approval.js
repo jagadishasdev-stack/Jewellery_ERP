@@ -22,6 +22,7 @@ const {
 } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
 const { modeVal, applyStockVisibility } = require('../utils/dataModeFilter');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 
 // ── Recompute a tagged issue voucher's Status from its line items ────────────
 async function recomputeIssueStatus(trx, issueId) {
@@ -134,7 +135,7 @@ router.get('/ornaments/search', authenticate, async (req, res) => {
 
 // ═══════════════════════════════ Tagged: Issue ═══════════════════════════════
 
-router.post('/issue', authenticate, requirePermission('approval_management'), [
+router.post('/issue', authenticate, requirePermission('approval_management'), requireValidBranch, [
   body('Issue_Date').notEmpty().withMessage('Issue date required'),
   body('items').isArray({ min: 1 }).withMessage('At least one item required'),
 ], async (req, res) => {
@@ -170,7 +171,7 @@ router.post('/issue', authenticate, requirePermission('approval_management'), [
     const totalValue = ornaments.reduce((s, o) => s + parseFloat(o.Total_Price || 0), 0);
 
     const [issue] = await trx('tbl_approval_issue_header').insert({
-      Tenant_ID: tenantId, Branch_ID: req.body.Branch_ID || null, Voucher_Number: voucherNumber,
+      Tenant_ID: tenantId, Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID), Voucher_Number: voucherNumber,
       Party_ID: Party_ID || null, Issue_Date, Expected_Return_Date: Expected_Return_Date || null,
       Total_Items_Issued: ornaments.length, Total_Weight_Issued: totalWeight, Total_Value_Issued: totalValue,
       Status: 'Pending', Remarks: Remarks || null, Data_Mode: dm, Created_By: req.user.username,
@@ -217,12 +218,13 @@ router.get('/issue/:id', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch approval issue.'); }
 });
 
-router.get('/issues', authenticate, async (req, res) => {
+router.get('/issues', authenticate, requireValidBranch, async (req, res) => {
   const { status, partyId, fromDate, toDate, page = 1, limit = 50 } = req.query;
   try {
     let qb = db('tbl_approval_issue_header as h')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
       .where('h.Tenant_ID', req.user.tenantId).where('h.Data_Mode', modeVal(req));
+    qb = withBranch(qb, req, 'h.Branch_ID');
     if (status) qb = qb.where('h.Status', status);
     if (partyId) qb = qb.where('h.Party_ID', partyId);
     if (fromDate) qb = qb.where('h.Issue_Date', '>=', fromDate);
@@ -284,7 +286,7 @@ router.get('/issue/by-voucher/:voucherNumber', authenticate, async (req, res) =>
   } catch (err) { return sendError(res, 500, 'Failed to fetch approval issue by voucher.'); }
 });
 
-router.post('/receive', authenticate, requirePermission('approval_management'), [
+router.post('/receive', authenticate, requirePermission('approval_management'), requireValidBranch, [
   body('Issue_ID').notEmpty().withMessage('Issue_ID required'),
   body('Receive_Date').notEmpty().withMessage('Receive date required'),
   body('issueItemIds').isArray({ min: 1 }).withMessage('At least one item must be selected'),
@@ -318,7 +320,7 @@ router.post('/receive', authenticate, requirePermission('approval_management'), 
     const totalValue = items.reduce((s, i) => s + parseFloat(i.Approx_Value || 0), 0);
 
     const [receive] = await trx('tbl_approval_receive_header').insert({
-      Tenant_ID: tenantId, Branch_ID: req.body.Branch_ID || null, Voucher_Number: voucherNumber,
+      Tenant_ID: tenantId, Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID), Voucher_Number: voucherNumber,
       Issue_ID, Receive_Date, Items_Received_Count: items.length,
       Total_Weight_Received: totalWeight, Total_Value_Received: totalValue,
       Remarks: Remarks || null, Data_Mode: dm, Created_By: req.user.username,
@@ -350,13 +352,14 @@ router.post('/receive', authenticate, requirePermission('approval_management'), 
   }
 });
 
-router.get('/receives', authenticate, async (req, res) => {
+router.get('/receives', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, page = 1, limit = 50 } = req.query;
   try {
     let qb = db('tbl_approval_receive_header as r')
       .join('tbl_approval_issue_header as h', 'r.Issue_ID', 'h.Issue_ID')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
       .where('r.Tenant_ID', req.user.tenantId).where('r.Data_Mode', modeVal(req));
+    qb = withBranch(qb, req, 'r.Branch_ID');
     if (fromDate) qb = qb.where('r.Receive_Date', '>=', fromDate);
     if (toDate) qb = qb.where('r.Receive_Date', '<=', toDate);
     const [{ count }] = await qb.clone().count('r.Receive_ID as count');
@@ -368,7 +371,7 @@ router.get('/receives', authenticate, async (req, res) => {
 
 // ═══════════════════════════════ Non-Tagged: Issue ═══════════════════════════
 
-router.post('/non-tag/issue', authenticate, requirePermission('approval_management'), [
+router.post('/non-tag/issue', authenticate, requirePermission('approval_management'), requireValidBranch, [
   body('Issue_Date').notEmpty().withMessage('Issue date required'),
   body('items').isArray({ min: 1 }).withMessage('At least one item required'),
 ], async (req, res) => {
@@ -386,7 +389,7 @@ router.post('/non-tag/issue', authenticate, requirePermission('approval_manageme
     const totalValue = items.reduce((s, i) => s + parseFloat(i.Approx_Value || 0), 0);
 
     const [issue] = await trx('tbl_non_tag_issue_header').insert({
-      Tenant_ID: tenantId, Branch_ID: req.body.Branch_ID || null, Voucher_Number: voucherNumber,
+      Tenant_ID: tenantId, Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID), Voucher_Number: voucherNumber,
       Party_ID: Party_ID || null, Issue_Date, Expected_Return_Date: Expected_Return_Date || null,
       Total_Items_Issued: items.length, Total_Weight_Issued: totalWeight, Total_Value_Issued: totalValue,
       Status: 'Pending', Remarks: Remarks || null, Data_Mode: dm, Created_By: req.user.username,
@@ -431,12 +434,13 @@ router.get('/non-tag/issue/:id', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch non-tag approval issue.'); }
 });
 
-router.get('/non-tag/issues', authenticate, async (req, res) => {
+router.get('/non-tag/issues', authenticate, requireValidBranch, async (req, res) => {
   const { status, partyId, fromDate, toDate, page = 1, limit = 50 } = req.query;
   try {
     let qb = db('tbl_non_tag_issue_header as h')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
       .where('h.Tenant_ID', req.user.tenantId).where('h.Data_Mode', modeVal(req));
+    qb = withBranch(qb, req, 'h.Branch_ID');
     if (status) qb = qb.where('h.Status', status);
     if (partyId) qb = qb.where('h.Party_ID', partyId);
     if (fromDate) qb = qb.where('h.Issue_Date', '>=', fromDate);
@@ -492,7 +496,7 @@ router.get('/non-tag/issue/by-voucher/:voucherNumber', authenticate, async (req,
   } catch (err) { return sendError(res, 500, 'Failed to fetch non-tag approval issue by voucher.'); }
 });
 
-router.post('/non-tag/receive', authenticate, requirePermission('approval_management'), [
+router.post('/non-tag/receive', authenticate, requirePermission('approval_management'), requireValidBranch, [
   body('NTA_Issue_ID').notEmpty().withMessage('NTA_Issue_ID required'),
   body('Receive_Date').notEmpty().withMessage('Receive date required'),
   body('issueItemIds').isArray({ min: 1 }).withMessage('At least one item must be selected'),
@@ -526,7 +530,7 @@ router.post('/non-tag/receive', authenticate, requirePermission('approval_manage
     const totalValue = items.reduce((s, i) => s + parseFloat(i.Approx_Value || 0), 0);
 
     const [receive] = await trx('tbl_non_tag_receive_header').insert({
-      Tenant_ID: tenantId, Branch_ID: req.body.Branch_ID || null, Voucher_Number: voucherNumber,
+      Tenant_ID: tenantId, Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID), Voucher_Number: voucherNumber,
       NTA_Issue_ID, Receive_Date, Items_Received_Count: items.length,
       Total_Weight_Received: totalWeight, Total_Value_Received: totalValue,
       Remarks: Remarks || null, Data_Mode: dm, Created_By: req.user.username,
@@ -553,13 +557,14 @@ router.post('/non-tag/receive', authenticate, requirePermission('approval_manage
   }
 });
 
-router.get('/non-tag/receives', authenticate, async (req, res) => {
+router.get('/non-tag/receives', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, page = 1, limit = 50 } = req.query;
   try {
     let qb = db('tbl_non_tag_receive_header as r')
       .join('tbl_non_tag_issue_header as h', 'r.NTA_Issue_ID', 'h.NTA_Issue_ID')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
       .where('r.Tenant_ID', req.user.tenantId).where('r.Data_Mode', modeVal(req));
+    qb = withBranch(qb, req, 'r.Branch_ID');
     if (fromDate) qb = qb.where('r.Receive_Date', '>=', fromDate);
     if (toDate) qb = qb.where('r.Receive_Date', '<=', toDate);
     const [{ count }] = await qb.clone().count('r.NTA_Receive_ID as count');

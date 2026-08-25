@@ -6,6 +6,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { generateIssueNumber, generateReturnNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
 const { modeVal } = require('../utils/dataModeFilter');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 
@@ -23,7 +24,7 @@ router.get('/list', authenticate, async (req, res) => {
 });
 
 // ─── POST /api/karigar/issue ──────────────────────────────────────────────────
-router.post('/issue', authenticate, requirePermission('karigar_management'), [
+router.post('/issue', authenticate, requirePermission('karigar_management'), requireValidBranch, [
   body('Karigar_ID').isInt().withMessage('Karigar ID required'),
   body('Gold_Weight_Issued').isFloat({ min: 0.001 }).withMessage('Gold weight required'),
   body('Gold_Rate_At_Issue').isFloat({ min: 1 }).withMessage('Gold rate required'),
@@ -45,6 +46,8 @@ router.post('/issue', authenticate, requirePermission('karigar_management'), [
     const [issue] = await db('tbl_issue_to_karigar').insert({
       ...req.body,
       Tenant_ID: tenantId,
+      // Multi-Branch Management — see utils/branchAccess.js.
+      Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
       Issue_Number: issueNumber,
       Total_Value_Issued: totalValue,
       Estimated_Wages: estimatedWages,
@@ -80,19 +83,20 @@ router.get('/issue/:id', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/karigar/issues ──────────────────────────────────────────────────
-router.get('/issues', authenticate, async (req, res) => {
+router.get('/issues', authenticate, requireValidBranch, async (req, res) => {
   const { status, karigarId, page = 1, limit = 50 } = req.query;
   try {
     let qb = db('tbl_issue_to_karigar as i')
       .leftJoin('tbl_vendor_master as v', 'i.Karigar_ID', 'v.Vendor_ID')
       .where({ 'i.Tenant_ID': req.user.tenantId, 'i.Data_Mode': modeVal(req) })
+      .modify((q) => withBranch(q, req, 'i.Branch_ID'))
       .select('i.*', 'v.Vendor_Name as Karigar_Name');
 
     if (status) qb = qb.where('i.Status', status);
     if (karigarId) qb = qb.where('i.Karigar_ID', karigarId);
 
-    const [{ count }] = await db('tbl_issue_to_karigar')
-      .where({ Tenant_ID: req.user.tenantId, Data_Mode: modeVal(req) })
+    const [{ count }] = await withBranch(db('tbl_issue_to_karigar')
+      .where({ Tenant_ID: req.user.tenantId, Data_Mode: modeVal(req) }), req)
       .count('Issue_ID as count').first().then(r => [r]);
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const data = await qb.orderBy('i.Issue_Date', 'desc').limit(parseInt(limit)).offset(offset);

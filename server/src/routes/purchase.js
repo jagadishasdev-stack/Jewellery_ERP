@@ -10,6 +10,7 @@ const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const dayjs = require('dayjs');
 const { modeVal } = require('../utils/dataModeFilter');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 
 // ── Post double-entry accounting journal for a purchase ────────────────────────
 // Purchase is always booked on full accrual — Dr Inventory + Input GST,
@@ -55,13 +56,14 @@ const genPurchaseNumber = async (tenantId) => nextNumber({
 });
 
 // ── GET /api/purchase  ────────────────────────────────────────────────────────
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireValidBranch, async (req, res) => {
   const { status, supplierId, page = 1, limit = 30 } = req.query;
   try {
     let qb = db('tbl_purchase_header as p')
       .leftJoin('tbl_vendor_master as v','p.Supplier_ID','v.Vendor_ID')
       .where('p.Tenant_ID', req.user.tenantId)
       .where('p.Data_Mode', modeVal(req))
+      .modify((q) => withBranch(q, req, 'p.Branch_ID'))
       .select(
         'p.Purchase_ID', 'p.Purchase_Number', 'p.Purchase_Date',
         'p.Purchase_Type', 'p.Supplier_ID', 'p.Supplier_Invoice_No',
@@ -73,8 +75,8 @@ router.get('/', authenticate, async (req, res) => {
     if (status) qb = qb.where('p.Status', status);
     if (supplierId) qb = qb.where('p.Supplier_ID', supplierId);
     // Count with a clean subquery — avoids GROUP BY conflicts
-    const [{ count }] = await db('tbl_purchase_header')
-      .where('Tenant_ID', req.user.tenantId)
+    const [{ count }] = await withBranch(db('tbl_purchase_header')
+      .where('Tenant_ID', req.user.tenantId), req)
       .count('Purchase_ID as count');
     const data = await qb.orderBy('p.Purchase_Date','desc')
       .limit(parseInt(limit)).offset((parseInt(page)-1)*parseInt(limit));
@@ -83,7 +85,7 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // ── POST /api/purchase/create  ────────────────────────────────────────────────
-router.post('/create', authenticate, [
+router.post('/create', authenticate, requireValidBranch, [
   body('items').isArray({ min: 1 }),
   body('Total_Amount').isFloat({ min: 0.01 }),
 ], async (req, res) => {
@@ -94,10 +96,15 @@ router.post('/create', authenticate, [
     const tenantId = req.user.tenantId;
     const purchaseNumber = await genPurchaseNumber(tenantId);
     const { items, ...header } = req.body;
+    // Multi-Branch Management — resolved once, reused for both the
+    // purchase header and every ornament it creates below, so they never
+    // disagree with each other. See utils/branchAccess.js.
+    const branchId = resolveBranchForInsert(req, header.Branch_ID);
 
     const [purchase] = await trx('tbl_purchase_header').insert({
       ...header,
       Tenant_ID: tenantId,
+      Branch_ID: branchId,
       Purchase_Number: purchaseNumber,
       Status: 'Draft',
       Data_Mode: modeVal(req),
@@ -114,7 +121,7 @@ router.post('/create', authenticate, [
       if (item.Create_Inventory !== false) {
         const [ornament] = await trx('tbl_ornament_master').insert({
           Tenant_ID: tenantId,
-          Branch_ID: header.Branch_ID || null,
+          Branch_ID: branchId,
           Article_Number: articleNumber,
           Type_ID: item.Type_ID || null,
           Purity_ID: item.Purity_ID || null,
