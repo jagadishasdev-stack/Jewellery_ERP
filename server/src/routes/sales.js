@@ -6,6 +6,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { generateInvoiceNumber, generateSchemeAdjustmentNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
 const { modeVal } = require('../utils/dataModeFilter');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const dayjs = require('dayjs');
@@ -87,7 +88,7 @@ async function postSaleAccountingEntries({ tenantId, saleId, invoiceNumber, paym
 }
 
 // ─── POST /api/sales/create ───────────────────────────────────────────────────
-router.post('/create', authenticate, requirePermission('sales'), [
+router.post('/create', authenticate, requirePermission('sales'), requireValidBranch, [
   body('items').isArray({ min: 1 }).withMessage('At least one item required'),
   body('items.*.Ornament_ID').isInt().withMessage('Ornament ID required for each item'),
   body('items.*.Total_Line_Price').isFloat({ min: 0 }).withMessage('Line price required'),
@@ -270,6 +271,11 @@ router.post('/create', authenticate, requirePermission('sales'), [
     // Insert sales header
     const [sale] = await trx('tbl_sales_header').insert({
       Tenant_ID: tenantId,
+      // Multi-Branch Management — the active branch context (X-Branch-ID)
+      // wins when present; otherwise falls back to whatever the caller
+      // explicitly sent (existing behavior for routes/clients not yet
+      // sending the header). See utils/branchAccess.js.
+      Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
       Invoice_Number: invoiceNumber,
       Counter_ID: req.body.Counter_ID || null,
       Counter_Name: req.body.Counter_Name || null,
@@ -555,13 +561,14 @@ router.post('/create', authenticate, requirePermission('sales'), [
 });
 
 // ─── GET /api/sales — Sales Bill History (list, search, filter) ──────────────
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, search, paymentStatus, page = 1, limit = 25 } = req.query;
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
 
     let qb = db('tbl_sales_header').where({ Tenant_ID: tenantId, Data_Mode: dm });
+    qb = withBranch(qb, req);
     if (fromDate && toDate) qb = qb.whereRaw('DATE("Sale_Date") BETWEEN ? AND ?', [fromDate, toDate]);
     if (paymentStatus) qb = qb.where('Payment_Status', paymentStatus);
     if (search) {

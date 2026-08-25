@@ -214,6 +214,11 @@ router.post('/create', authenticate, requireSuperAdmin, [
       Full_Name: `${tenantData.Company_Name} Admin`,
       Is_Active: true,
       Is_Admin: true,
+      // Multi-Branch Management — this IS the tenant's own owner/admin
+      // account, created with the single Main Branch above; defaults to
+      // seeing every branch (can still be narrowed later per-user, same as
+      // any other Client Admin — see utils/branchAccess.js).
+      All_Branch_Access: true,
       Created_By: req.user.username,
     });
 
@@ -385,12 +390,23 @@ router.post('/users', authenticate, [
     const { Password, Custom_Permissions, ...userData } = req.body;
     const salt = await bcrypt.genSalt(12);
     const hash = await bcrypt.hash(Password, salt);
+    // Multi-Branch Management — a newly created Client Admin defaults to
+    // seeing every branch (matches how the tenant's original admin account
+    // is created above); any other role defaults to needing explicit
+    // per-branch grants (routes/branches.js), unless the caller explicitly
+    // set All_Branch_Access themselves. See utils/branchAccess.js.
+    let allBranchAccess = req.body.All_Branch_Access;
+    if (allBranchAccess === undefined) {
+      const role = await db('tbl_role_master').where({ Role_ID: req.body.Role_ID }).first('Role_Name');
+      allBranchAccess = role?.Role_Name === 'Client Admin';
+    }
     const [user] = await db('tbl_user_master').insert({
       ...userData,
       Tenant_ID: req.user.tenantId,
       Password_Hash: hash,
       Password_Salt: salt,
       // Default_Password intentionally not written — see auth.js's note.
+      All_Branch_Access: allBranchAccess,
       Custom_Permissions: Custom_Permissions ? JSON.stringify(Custom_Permissions) : null,
       Is_Active: req.body.Is_Active !== undefined ? req.body.Is_Active : true,
       Created_By: req.user.username,

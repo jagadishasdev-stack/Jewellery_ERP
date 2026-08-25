@@ -19,6 +19,12 @@ api.interceptors.request.use((config) => {
     // Data Mode — read from sessionStorage (set by DataModeContext)
     const mode = parseInt(sessionStorage.getItem('erp_data_mode'), 10);
     config.headers['X-Data-Mode'] = [1, 2, 3].includes(mode) ? mode : 3;
+    // Branch context — read from localStorage (set by BranchContext).
+    // Absent entirely until a branch is actually selected — see
+    // BranchContext.jsx's own comment for why that's the safe default
+    // (server treats a missing header as "don't filter," not as an error).
+    const branchId = localStorage.getItem('erp_branch_id');
+    if (branchId) config.headers['X-Branch-ID'] = branchId;
   } catch (_) {}
   return config;
 }, (error) => Promise.reject(error));

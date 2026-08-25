@@ -6,10 +6,11 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { generateArticleNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
 const { modeFilter, modeVal, applyStockVisibility } = require('../utils/dataModeFilter');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const { METAL_TYPES } = require('../utils/metalTypes');
 
 // ─── GET /api/ornaments  (with filters) ───────────────────────────────────────
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireValidBranch, async (req, res) => {
   const {
     typeId, designId, purityId, metalType, isAvailable, isSold,
     minPrice, maxPrice, search, page = 1, limit = 50,
@@ -49,6 +50,7 @@ router.get('/', authenticate, async (req, res) => {
         db.raw('ROUND((o."Total_Stone_Carat" * COALESCE(g."Price_Per_Carat", 0))::numeric, 2) as "Stone_Value_Estimate"')
       );
     qb = applyStockVisibility(qb, req, 'o');
+    qb = withBranch(qb, req, 'o.Branch_ID');
 
     if (typeId) qb = qb.where('o.Type_ID', typeId);
     if (designId) qb = qb.where('o.Design_ID', designId);
@@ -77,6 +79,7 @@ router.get('/', authenticate, async (req, res) => {
     // Count using clean base query
     let countBase = db('tbl_ornament_master').where('Is_Active', true);
     countBase = applyStockVisibility(countBase, req);
+    countBase = withBranch(countBase, req);
     if (req.user.roleName !== 'Super Admin') countBase.where('Tenant_ID', req.user.tenantId);
     if (typeId) countBase.where('Type_ID', typeId);
     if (metalType) countBase.where('Metal_Type', metalType);
@@ -172,7 +175,7 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // ─── POST /api/ornaments ──────────────────────────────────────────────────────
-router.post('/', authenticate, [
+router.post('/', authenticate, requireValidBranch, [
   body('Gross_Weight').isFloat({ min: 0.001 }).withMessage('Gross weight required'),
   // Net_Gold_Weight/Current_Gold_Rate are allowed to be 0 — a predominantly-
   // Diamond stock item (e.g. a loose diamond parcel) has no gold content
@@ -213,6 +216,8 @@ router.post('/', authenticate, [
     const [ornament] = await db('tbl_ornament_master').insert({
       ...req.body,
       Tenant_ID: tenantId,
+      // Multi-Branch Management — see utils/branchAccess.js.
+      Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
       Article_Number: articleNumber,
       Wastage_Weight: wastageWeight,
       Wastage_Amount: wastageAmount,

@@ -4,6 +4,7 @@ const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
 const { modeVal } = require('../utils/dataModeFilter');
+const { resolveBranchForInsert } = require('../utils/branchAccess');
 
 const generateCustomerCode = async (tenantId, mode) => {
   const count = await db('tbl_customer_master')
@@ -99,6 +100,12 @@ router.post('/', authenticate, [
     const [customer] = await db('tbl_customer_master').insert({
       ...req.body,
       Tenant_ID: tenantId,
+      // Multi-Branch Management — "Primary Branch" (spec §18). Deliberately
+      // NOT used to hard-filter the customer list below: a customer can
+      // walk into any branch, and staff there must still be able to find
+      // them — only stock/sales are branch-isolated, customers are
+      // branch-ASSOCIATED, not branch-SILOED. See utils/branchAccess.js.
+      Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
       Customer_Code: customerCode,
       Data_Mode: mode,
       Created_By: req.user.username,

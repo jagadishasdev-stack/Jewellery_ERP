@@ -659,12 +659,22 @@ router.post('/tenant/:id/users', authenticate, requireSuperAdmin, async (req, re
     const salt = await bcrypt.genSalt(12);
     const hash = await bcrypt.hash(Password, salt);
 
+    // Multi-Branch Management — same default rule as the tenant's own
+    // POST /api/tenant/users: a Client Admin sees every branch by default,
+    // anyone else needs explicit grants. See utils/branchAccess.js.
+    let allBranchAccess = req.body.All_Branch_Access;
+    if (allBranchAccess === undefined) {
+      const role = await db('tbl_role_master').where({ Role_ID }).first('Role_Name');
+      allBranchAccess = role?.Role_Name === 'Client Admin';
+    }
+
     const [user] = await db('tbl_user_master').insert({
       ...userData,
       Tenant_ID: tenantId,
       Password_Hash: hash,
       Password_Salt: salt,
       // Default_Password intentionally not written — see auth.js's note.
+      All_Branch_Access: allBranchAccess,
       Is_Active: req.body.Is_Active !== undefined ? req.body.Is_Active : true,
       Created_By: req.user.username,
     }).returning(['User_ID', 'Username', 'Full_Name', 'Email', 'Is_Active']);

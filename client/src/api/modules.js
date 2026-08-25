@@ -188,6 +188,15 @@ export const purchaseApi = {
 };
 
 // ─── Repair ───────────────────────────────────────────────────────────────────
+// ─── Multi-Branch Management ──────────────────────────────────────────────────
+export const branchesApi = {
+  myAccess: () => api.get('/branches/my-access'),
+  getUserAccess: (userId) => api.get(`/branches/access/${userId}`),
+  grant: (userId, branchId) => api.post('/branches/access', { User_ID: userId, Branch_ID: branchId }),
+  revoke: (accessId) => api.delete(`/branches/access/${accessId}`),
+  setAllBranchAccess: (userId, allBranchAccess) => api.put(`/branches/access/${userId}/all-access`, { All_Branch_Access: allBranchAccess }),
+};
+
 export const repairApi = {
   getAll: (params) => api.get('/repair', { params }),
   create: (data) => api.post('/repair', data),

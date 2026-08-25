@@ -7,6 +7,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import App from './App';
 import { DataModeProvider } from './contexts/DataModeContext';
+import { BranchProvider } from './contexts/BranchContext';
 import { ShortcutProvider } from './contexts/ShortcutContext';
 import { useUiThemeStore } from './store/uiThemeStore';
 import './index.css';
@@ -114,9 +115,11 @@ function ThemedApp() {
       <AntApp>
         <BrowserRouter>
           <DataModeProvider>
-            <ShortcutProvider>
-              <App />
-            </ShortcutProvider>
+            <BranchProvider>
+              <ShortcutProvider>
+                <App />
+              </ShortcutProvider>
+            </BranchProvider>
           </DataModeProvider>
         </BrowserRouter>
       </AntApp>

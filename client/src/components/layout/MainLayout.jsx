@@ -28,6 +28,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useAuthStore } from '../../store/authStore';
 import { useModules } from '../../hooks/useModules';
 import { useDataMode } from '../../contexts/DataModeContext';
+import BranchSelector from './BranchSelector';
 import { authApi } from '../../api/modules';
 import GoldRateBar from '../GoldRateBar';
 import RecentWindows from '../RecentWindows';
@@ -733,6 +734,7 @@ export default function MainLayout() {
                 {user?.companyName}
               </Text>
             )}
+            <BranchSelector />
           </Space>
 
           {/* Right: actions */}

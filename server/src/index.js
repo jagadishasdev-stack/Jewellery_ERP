@@ -12,6 +12,7 @@ const { authenticate } = require('./middleware/auth');
 const { setTenantContext } = require('./middleware/tenant');
 const { validateLicense } = require('./middleware/license');
 const { setDataMode } = require('./middleware/dataMode');
+const { setBranchContext } = require('./middleware/branchMode');
 const { sendError } = require('./utils/response');
 const { initDisplayHub } = require('./sockets/displayHub');
 
@@ -40,6 +41,7 @@ const invoiceStudioRoutes = require('./routes/invoiceStudio');
 const uploadRoutes = require('./routes/upload');
 const savingsSchemeRoutes = require('./routes/savingsScheme');
 const dayCloseRoutes = require('./routes/dayClose');
+const branchesRoutes = require('./routes/branches');
 const auditRoutes = require('./routes/audit');
 const modulesRoutes = require('./routes/modules');
 const productCatalogRoutes = require('./routes/productCatalog');
@@ -140,6 +142,7 @@ app.use('/api', apiLimiter);
 app.use('/api', setTenantContext);
 app.use('/api', validateLicense);
 app.use('/api', setDataMode);   // injects req.dataMode (1/2/3) on every request
+app.use('/api', setBranchContext);   // injects req.branchId (specific branch / 'ALL' / null) on every request
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
 app.use('/api/auth', authLimiter, authRoutes);
@@ -171,6 +174,7 @@ app.use('/api/savings', savingsSchemeRoutes);
 app.use('/api/core', savingsAppCoreRoutes);
 app.use('/api/razorpay/v2', savingsAppRazorpayV2Routes);
 app.use('/api/day-close', dayCloseRoutes);
+app.use('/api/branches', branchesRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/modules', modulesRoutes);
 app.use('/api/catalog', productCatalogRoutes);

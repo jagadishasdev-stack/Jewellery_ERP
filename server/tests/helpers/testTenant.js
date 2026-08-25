@@ -53,6 +53,10 @@ async function setup() {
       Full_Name: 'QA Test Admin',
       Is_Active: true,
       Is_Admin: true,
+      // Matches how tenant.js's real create-tenant flow creates its admin
+      // — a Client Admin defaults to All_Branch_Access=true (see
+      // utils/branchAccess.js) so this test user behaves like a real one.
+      All_Branch_Access: true,
     })
     .returning('User_ID');
 
