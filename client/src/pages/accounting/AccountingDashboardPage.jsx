@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   DollarCircleOutlined, BankOutlined, RiseOutlined, FallOutlined,
   WalletOutlined, GoldOutlined, PercentageOutlined, BookOutlined,
-  AuditOutlined, CalendarOutlined,
+  AuditOutlined, CalendarOutlined, LineChartOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { accountingApi } from '../../api/modules';
@@ -37,7 +37,10 @@ const QUICK_LINKS = [
   { title: 'Trial Balance', desc: 'Every account, net Dr/Cr', icon: <AuditOutlined style={{ fontSize: 28, color: '#B8860B' }} />, route: '/accounting/trial-balance', color: '#B8860B' },
   { title: 'Day Book', desc: 'All vouchers for a day', icon: <CalendarOutlined style={{ fontSize: 28, color: '#722ed1' }} />, route: '/accounting/day-book', color: '#722ed1' },
   { title: 'Voucher Entry', desc: 'Receipt / Payment / Contra / Journal', icon: <WalletOutlined style={{ fontSize: 28, color: '#eb2f96' }} />, route: '/accounting/vouchers', color: '#eb2f96' },
-  { title: 'Financial Reports', desc: 'Cash Book, Bank Book, P&L, Balance Sheet', icon: <BankOutlined style={{ fontSize: 28, color: '#fa8c16' }} />, route: '/reports/financial-reports', color: '#fa8c16' },
+  { title: 'Cash Book', desc: 'Cash Account, full history + running balance', icon: <WalletOutlined style={{ fontSize: 28, color: '#52c41a' }} />, route: '/accounting/cash-book', color: '#52c41a' },
+  { title: 'Bank Book', desc: 'One book per real bank ledger', icon: <BankOutlined style={{ fontSize: 28, color: '#1890ff' }} />, route: '/accounting/bank-book', color: '#1890ff' },
+  { title: 'Profit & Loss', desc: 'Income vs Expenses for a period', icon: <LineChartOutlined style={{ fontSize: 28, color: '#B8860B' }} />, route: '/accounting/profit-loss', color: '#B8860B' },
+  { title: 'Balance Sheet', desc: 'Assets vs Liabilities + Capital', icon: <AuditOutlined style={{ fontSize: 28, color: '#722ed1' }} />, route: '/accounting/balance-sheet', color: '#722ed1' },
 ];
 
 export default function AccountingDashboardPage() {

@@ -401,17 +401,25 @@ router.get('/bank-book', authenticate, requireValidBranch, async (req, res) => {
 });
 
 // ── GET /api/accounting/profit-loss ─────────────────────────────────────────────
-router.get('/profit-loss', authenticate, async (req, res) => {
+// Branch-filterable unlike trial-balance/balance-sheet — P&L is pure
+// period Income/Expense flow with no opening-balance concept at all, so
+// narrowing the entries by branch has none of the double-counting risk
+// those two have to guard against (see tbl_account_branch_opening_balance's
+// own migration comment). "All Branches"/no branch context is unaffected.
+router.get('/profit-loss', authenticate, requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const fy = currentFinancialYear();
   const from = req.query.from || fy.from;
   const to = req.query.to || fy.to;
+  const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
   try {
     const accounts = await db('tbl_chart_of_accounts').where({ Tenant_ID: tenantId, Is_Active: true }).whereIn('Account_Group', ['Income', 'Expenses']);
-    const totals = await db('tbl_accounting_entries as e')
+    let totalsQb = db('tbl_accounting_entries as e')
       .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
       .where({ 'e.Tenant_ID': tenantId }).whereBetween('j.Entry_Date', [from, to])
-      .whereIn('e.Account_ID', accounts.map((a) => a.Account_ID))
+      .whereIn('e.Account_ID', accounts.map((a) => a.Account_ID));
+    if (branchId) totalsQb = totalsQb.where('j.Branch_ID', branchId);
+    const totals = await totalsQb
       .groupBy('e.Account_ID', 'e.Entry_Type').select('e.Account_ID', 'e.Entry_Type').sum('e.Amount as total');
 
     const byAccount = {};
@@ -435,15 +443,30 @@ router.get('/profit-loss', authenticate, async (req, res) => {
 });
 
 // ── GET /api/accounting/balance-sheet ───────────────────────────────────────────
-router.get('/balance-sheet', authenticate, async (req, res) => {
+// Branch-filterable using the same tbl_account_branch_opening_balance
+// mechanism as trial-balance above (see that route's own comment, and
+// the table's migration comment, for the full reasoning). "All Branches"
+// / no branch context is byte-for-byte unchanged — still reads each
+// account's tenant-wide Opening_Balance directly.
+router.get('/balance-sheet', authenticate, requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const asOf = req.query.asOf || today();
+  const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
   try {
     const accounts = await db('tbl_chart_of_accounts').where({ Tenant_ID: tenantId, Is_Active: true }).whereIn('Account_Group', ['Assets', 'Liabilities', 'Capital']);
-    const totals = await db('tbl_accounting_entries as e')
+
+    let branchOpeningMap = {};
+    if (branchId) {
+      const branchBalances = await db('tbl_account_branch_opening_balance').where({ Tenant_ID: tenantId, Branch_ID: branchId });
+      branchOpeningMap = Object.fromEntries(branchBalances.map((b) => [b.Account_ID, b]));
+    }
+
+    let totalsQb = db('tbl_accounting_entries as e')
       .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
       .where({ 'e.Tenant_ID': tenantId }).where('j.Entry_Date', '<=', asOf)
-      .whereIn('e.Account_ID', accounts.map((a) => a.Account_ID))
+      .whereIn('e.Account_ID', accounts.map((a) => a.Account_ID));
+    if (branchId) totalsQb = totalsQb.where('j.Branch_ID', branchId);
+    const totals = await totalsQb
       .groupBy('e.Account_ID', 'e.Entry_Type').select('e.Account_ID', 'e.Entry_Type').sum('e.Amount as total');
     const byAccount = {};
     for (const t of totals) { byAccount[t.Account_ID] = byAccount[t.Account_ID] || { dr: 0, cr: 0 }; byAccount[t.Account_ID][t.Entry_Type === 'Dr' ? 'dr' : 'cr'] = parseFloat(t.total); }
@@ -452,8 +475,17 @@ router.get('/balance-sheet', authenticate, async (req, res) => {
     let totalAssets = 0, totalLiabilities = 0, totalCapital = 0;
     for (const a of accounts) {
       const t = byAccount[a.Account_ID] || { dr: 0, cr: 0 };
-      const openingDr = a.Opening_Balance_Type === 'Dr' ? parseFloat(a.Opening_Balance) : 0;
-      const openingCr = a.Opening_Balance_Type === 'Cr' ? parseFloat(a.Opening_Balance) : 0;
+      let openingBalance, openingType;
+      if (branchId) {
+        const b = branchOpeningMap[a.Account_ID];
+        openingBalance = b ? parseFloat(b.Opening_Balance) : 0;
+        openingType = b ? b.Opening_Balance_Type : 'Dr';
+      } else {
+        openingBalance = parseFloat(a.Opening_Balance || 0);
+        openingType = a.Opening_Balance_Type;
+      }
+      const openingDr = openingType === 'Dr' ? openingBalance : 0;
+      const openingCr = openingType === 'Cr' ? openingBalance : 0;
       const natural = a.Account_Group === 'Assets' ? ((openingDr + t.dr) - (openingCr + t.cr)) : ((openingCr + t.cr) - (openingDr + t.dr));
       const amt = Math.round(natural * 100) / 100;
       if (amt === 0) continue;
@@ -466,12 +498,16 @@ router.get('/balance-sheet', authenticate, async (req, res) => {
     // Current period's P&L rolls into Capital as "Current Profit" — real
     // retained-earnings closing only happens at financial-year-end (not
     // built yet, see the comment on currentFinancialYear()); until then,
-    // the balance sheet needs this to actually balance day-to-day.
+    // the balance sheet needs this to actually balance day-to-day. Branch-
+    // filtered the same as the main totals above — an unfiltered P&L
+    // folded into a branch-filtered Assets/Liabilities would never balance.
     const fy = currentFinancialYear();
-    const plTotals = await db('tbl_accounting_entries as e')
+    let plTotalsQb = db('tbl_accounting_entries as e')
       .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
       .join('tbl_chart_of_accounts as a', 'e.Account_ID', 'a.Account_ID')
-      .where({ 'e.Tenant_ID': tenantId }).whereIn('a.Account_Group', ['Income', 'Expenses']).where('j.Entry_Date', '<=', asOf).where('j.Entry_Date', '>=', fy.from)
+      .where({ 'e.Tenant_ID': tenantId }).whereIn('a.Account_Group', ['Income', 'Expenses']).where('j.Entry_Date', '<=', asOf).where('j.Entry_Date', '>=', fy.from);
+    if (branchId) plTotalsQb = plTotalsQb.where('j.Branch_ID', branchId);
+    const plTotals = await plTotalsQb
       .select('a.Account_Group', 'e.Entry_Type').sum('e.Amount as total').groupBy('a.Account_Group', 'e.Entry_Type');
     let income = 0, expense = 0;
     for (const t of plTotals) {

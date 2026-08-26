@@ -79,6 +79,10 @@ import ChartOfAccountsPage from './pages/accounting/ChartOfAccountsPage';
 import LedgerPage from './pages/accounting/LedgerPage';
 import TrialBalancePage from './pages/accounting/TrialBalancePage';
 import BranchOpeningBalancesPage from './pages/accounting/BranchOpeningBalancesPage';
+import CashBookPage from './pages/accounting/CashBookPage';
+import BankBookPage from './pages/accounting/BankBookPage';
+import ProfitLossPage from './pages/accounting/ProfitLossPage';
+import BalanceSheetPage from './pages/accounting/BalanceSheetPage';
 import DayBookPage from './pages/accounting/DayBookPage';
 import VouchersPage from './pages/accounting/VouchersPage';
 import RateAgentPage from './pages/rate-agent/RateAgentPage';
@@ -221,6 +225,10 @@ function App() {
         <Route path="/accounting/ledger" element={<ProtectedRoute permission="accounts"><LedgerPage /></ProtectedRoute>} />
         <Route path="/accounting/trial-balance" element={<ProtectedRoute permission="accounts"><TrialBalancePage /></ProtectedRoute>} />
         <Route path="/accounting/branch-opening-balances" element={<ProtectedRoute permission="accounts"><BranchOpeningBalancesPage /></ProtectedRoute>} />
+        <Route path="/accounting/cash-book" element={<ProtectedRoute permission="accounts"><CashBookPage /></ProtectedRoute>} />
+        <Route path="/accounting/bank-book" element={<ProtectedRoute permission="accounts"><BankBookPage /></ProtectedRoute>} />
+        <Route path="/accounting/profit-loss" element={<ProtectedRoute permission="accounts"><ProfitLossPage /></ProtectedRoute>} />
+        <Route path="/accounting/balance-sheet" element={<ProtectedRoute permission="accounts"><BalanceSheetPage /></ProtectedRoute>} />
         <Route path="/accounting/day-book" element={<ProtectedRoute permission="accounts"><DayBookPage /></ProtectedRoute>} />
         <Route path="/accounting/vouchers" element={<ProtectedRoute permission="accounts"><VouchersPage /></ProtectedRoute>} />
         <Route path="/rate-agent" element={<RateAgentPage />} />
