@@ -6,7 +6,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { generateIssueNumber, generateReturnNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
 const { modeVal } = require('../utils/dataModeFilter');
-const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
+const { requireValidBranch, withBranch, resolveBranchForInsert, branchVal } = require('../utils/branchAccess');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 
@@ -320,7 +320,11 @@ router.get('/settlement', authenticate, requireValidBranch, async (req, res) => 
 // from computeKarigarSettlement (the exact same query the preview above
 // uses), and every issue included is stamped Is_Settled so it can never
 // be settled again by any future date-range query.
-router.post('/settle', authenticate, requirePermission('karigar_management'), async (req, res) => {
+// requireValidBranch — computeKarigarSettlement filters by the active
+// branch context (same as GET /settlement above, which already had this
+// guard); without it here too, a caller could send an X-Branch-ID for a
+// branch they have no real access to and settle/pay for its issues.
+router.post('/settle', authenticate, requirePermission('karigar_management'), requireValidBranch, async (req, res) => {
   const { karigarId, fromDate, toDate, paymentMode, bankAccountId, remarks } = req.body;
   if (!karigarId || !fromDate || !toDate) return sendError(res, 400, 'karigarId, fromDate, toDate are required.');
   const tenantId = req.user.tenantId;
@@ -354,8 +358,14 @@ router.post('/settle', authenticate, requirePermission('karigar_management'), as
     // Awaited — was fire-and-forget, so the response could go out before
     // this journal was guaranteed committed (see sales.js's identical fix
     // for the concrete failure mode this caused).
+    // computeKarigarSettlement already filtered its issues by the active
+    // branch context (withBranch), so every item here shares the same
+    // branch whenever one is active — safe to stamp the settlement
+    // journal with it directly (null/'ALL' both correctly fall through
+    // to a tenant-wide, unstamped journal, same as everywhere else).
+    const settleBranchId = branchVal(req) && branchVal(req) !== 'ALL' ? branchVal(req) : null;
     await postJournal({
-      tenantId, sourceType: 'JOURNAL', reference: `KARIGAR-SETTLE-${karigarId}-${Date.now()}`,
+      tenantId, sourceType: 'JOURNAL', reference: `KARIGAR-SETTLE-${karigarId}-${Date.now()}`, branchId: settleBranchId,
       narration: `Karigar wages settled — ${karigar.Vendor_Name} (${items.length} issue${items.length !== 1 ? 's' : ''})${remarks ? ' | ' + remarks : ''}`, createdBy: req.user.username,
       lines: [
         { account: 'Making Charges Paid to Karigar Account', group: 'Expenses', sub: 'Direct Expense', type: 'Dr', amount },

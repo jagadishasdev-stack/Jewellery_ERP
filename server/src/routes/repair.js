@@ -116,7 +116,7 @@ router.post('/', authenticate, requireValidBranch, [
       // this journal was guaranteed committed (see sales.js's identical
       // fix for the concrete failure mode this caused).
       await postJournal({
-        tenantId, sourceType: 'JOURNAL', sourceId: repair.Repair_ID, reference: jobCardNumber,
+        tenantId, sourceType: 'JOURNAL', sourceId: repair.Repair_ID, reference: jobCardNumber, branchId: repair.Branch_ID,
         narration: `Repair advance collected — ${jobCardNumber}`, createdBy: req.user.username,
         lines: [
           { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Dr', amount: advance },
@@ -179,7 +179,7 @@ router.post('/:id/deliver', authenticate, async (req, res) => {
       const ledger = await resolveLedgerForPayment(db, tenantId, req.body.Payment_Mode || 'Cash', req.body.Bank_Account_ID);
       // Awaited — same fire-and-forget fix as the advance journal above.
       await postJournal({
-        tenantId, sourceType: 'JOURNAL', sourceId: order.Repair_ID, reference: order.Job_Card_Number,
+        tenantId, sourceType: 'JOURNAL', sourceId: order.Repair_ID, reference: order.Job_Card_Number, branchId: order.Branch_ID,
         narration: `Repair delivered — ${order.Job_Card_Number}`, createdBy: req.user.username,
         lines: [
           { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Dr', amount: collected },

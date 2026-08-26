@@ -294,7 +294,7 @@ router.post('/payroll/runs/:id/finalize', authenticate, requireValidBranch, requ
       if (totals.esi > 0) lines.push({ account: 'ESI Payable Account', group: 'Liabilities', sub: 'Payable', type: 'Cr', amount: totals.esi });
       lines.push({ account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Cr', amount: totals.net });
       await postJournal({
-        tenantId, sourceType: 'JOURNAL', sourceId: run.Run_ID, reference: `PAYROLL-${run.Pay_Month}-${run.Pay_Year}`,
+        tenantId, sourceType: 'JOURNAL', sourceId: run.Run_ID, reference: `PAYROLL-${run.Pay_Month}-${run.Pay_Year}`, branchId: run.Branch_ID,
         narration: `Payroll ${run.Pay_Month}/${run.Pay_Year} — ${details.length} staff`, createdBy: req.user.username, lines,
       });
     })().catch((e) => console.error('[HR] Payroll ledger post failed (payroll still finalized fine):', e.message));

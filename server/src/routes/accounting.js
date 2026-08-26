@@ -16,7 +16,7 @@ const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError } = require('../utils/response');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const { postJournal } = require('../utils/accountingEngine');
-const { requireValidBranch, withBranch } = require('../utils/branchAccess');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const dayjs = require('dayjs');
 
 // NOT new Date().toISOString().split('T')[0] — that reads UTC, but every
@@ -563,7 +563,7 @@ router.get('/dashboard', authenticate, async (req, res) => {
 // ── POST /api/accounting/voucher/receipt — money received ──────────────────────
 // Dr the account money landed IN (Cash/Bank), Cr the account it came FROM
 // (a customer's receivable balance, by default — or any other account).
-router.post('/voucher/receipt', authenticate, requirePermission('accounts'), async (req, res) => {
+router.post('/voucher/receipt', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const { date, receivedInto, fromAccount, amount, narration } = req.body;
   if (!receivedInto || !fromAccount || !parseFloat(amount || 0)) {
     return sendError(res, 400, 'receivedInto, fromAccount, and a positive amount are required.');
@@ -571,7 +571,7 @@ router.post('/voucher/receipt', authenticate, requirePermission('accounts'), asy
   try {
     const { journalId, journalNumber } = await postJournal({
       tenantId: req.user.tenantId, sourceType: 'RECEIPT', reference: narration, narration: narration || `Receipt — ${fromAccount}`,
-      entryDate: date, createdBy: req.user.username,
+      entryDate: date, createdBy: req.user.username, branchId: resolveBranchForInsert(req, req.body.Branch_ID),
       lines: [
         { account: receivedInto, type: 'Dr', amount: parseFloat(amount) },
         { account: fromAccount, type: 'Cr', amount: parseFloat(amount) },
@@ -584,7 +584,7 @@ router.post('/voucher/receipt', authenticate, requirePermission('accounts'), asy
 // ── POST /api/accounting/voucher/payment — money paid out ──────────────────────
 // Dr the account being settled (a supplier's payable, by default — or any
 // other account), Cr the account money left FROM (Cash/Bank).
-router.post('/voucher/payment', authenticate, requirePermission('accounts'), async (req, res) => {
+router.post('/voucher/payment', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const { date, paidFrom, toAccount, amount, narration } = req.body;
   if (!paidFrom || !toAccount || !parseFloat(amount || 0)) {
     return sendError(res, 400, 'paidFrom, toAccount, and a positive amount are required.');
@@ -592,7 +592,7 @@ router.post('/voucher/payment', authenticate, requirePermission('accounts'), asy
   try {
     const { journalId, journalNumber } = await postJournal({
       tenantId: req.user.tenantId, sourceType: 'PAYMENT', reference: narration, narration: narration || `Payment — ${toAccount}`,
-      entryDate: date, createdBy: req.user.username,
+      entryDate: date, createdBy: req.user.username, branchId: resolveBranchForInsert(req, req.body.Branch_ID),
       lines: [
         { account: toAccount, type: 'Dr', amount: parseFloat(amount) },
         { account: paidFrom, type: 'Cr', amount: parseFloat(amount) },
@@ -604,7 +604,7 @@ router.post('/voucher/payment', authenticate, requirePermission('accounts'), asy
 
 // ── POST /api/accounting/voucher/contra — moving your own money between your own accounts ──
 // Never income or expense — Dr the account receiving, Cr the account it left.
-router.post('/voucher/contra', authenticate, requirePermission('accounts'), async (req, res) => {
+router.post('/voucher/contra', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const { date, fromAccount, toAccount, amount, narration } = req.body;
   if (!fromAccount || !toAccount || !parseFloat(amount || 0)) {
     return sendError(res, 400, 'fromAccount, toAccount, and a positive amount are required.');
@@ -613,7 +613,7 @@ router.post('/voucher/contra', authenticate, requirePermission('accounts'), asyn
   try {
     const { journalId, journalNumber } = await postJournal({
       tenantId: req.user.tenantId, sourceType: 'CONTRA', reference: narration, narration: narration || `Transfer: ${fromAccount} → ${toAccount}`,
-      entryDate: date, createdBy: req.user.username,
+      entryDate: date, createdBy: req.user.username, branchId: resolveBranchForInsert(req, req.body.Branch_ID),
       lines: [
         { account: toAccount, type: 'Dr', amount: parseFloat(amount) },
         { account: fromAccount, type: 'Cr', amount: parseFloat(amount) },
@@ -627,7 +627,7 @@ router.post('/voucher/contra', authenticate, requirePermission('accounts'), asyn
 // Depreciation, provisions, corrections, opening adjustments — anything
 // that isn't a receipt/payment/transfer. Caller supplies the full Dr/Cr
 // line list directly; postJournal() still enforces it balances.
-router.post('/voucher/journal', authenticate, requirePermission('accounts'), async (req, res) => {
+router.post('/voucher/journal', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const { date, narration, lines } = req.body;
   if (!Array.isArray(lines) || lines.length < 2) return sendError(res, 400, 'At least two lines (one Dr, one Cr) are required.');
   if (lines.some((l) => !l.account || !['Dr', 'Cr'].includes(l.type) || !parseFloat(l.amount || 0))) {
@@ -636,7 +636,7 @@ router.post('/voucher/journal', authenticate, requirePermission('accounts'), asy
   try {
     const { journalId, journalNumber } = await postJournal({
       tenantId: req.user.tenantId, sourceType: 'JOURNAL', reference: narration, narration,
-      entryDate: date, createdBy: req.user.username,
+      entryDate: date, createdBy: req.user.username, branchId: resolveBranchForInsert(req, req.body.Branch_ID),
       lines: lines.map((l) => ({ account: l.account, type: l.type, amount: parseFloat(l.amount) })),
     });
     return sendSuccess(res, { journalId, journalNumber }, 'Journal entry recorded.', 201);
@@ -644,11 +644,12 @@ router.post('/voucher/journal', authenticate, requirePermission('accounts'), asy
 });
 
 // ── GET /api/accounting/vouchers — history of manually-entered vouchers ────────
-router.get('/vouchers', authenticate, async (req, res) => {
+router.get('/vouchers', authenticate, requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const { from, to, sourceType, page = 1, limit = 30 } = req.query;
   try {
     let qb = db('tbl_accounting_journal').where({ Tenant_ID: tenantId }).whereIn('Source_Type', ['RECEIPT', 'PAYMENT', 'CONTRA', 'JOURNAL']);
+    qb = withBranch(qb, req);
     if (from) qb = qb.where('Entry_Date', '>=', from);
     if (to) qb = qb.where('Entry_Date', '<=', to);
     if (sourceType) qb = qb.where('Source_Type', sourceType);
@@ -681,7 +682,7 @@ router.post('/voucher/:id/reverse', authenticate, requirePermission('accounts'),
 
     const originalEntries = await db('tbl_accounting_entries').where({ Journal_ID: original.Journal_ID });
     const { journalId, journalNumber } = await postJournal({
-      tenantId, sourceType: 'JOURNAL', reference: `REVERSAL-${original.Journal_Number}`,
+      tenantId, sourceType: 'JOURNAL', reference: `REVERSAL-${original.Journal_Number}`, branchId: original.Branch_ID,
       narration: `Reversal of ${original.Journal_Number}${original.Narration ? ' — ' + original.Narration : ''}`,
       createdBy: req.user.username,
       // Flip every line: what was Dr becomes Cr and vice versa — the exact opposite of the original, so together they net to zero.

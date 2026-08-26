@@ -30,7 +30,7 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 // its own account even though 1007/1008/1014 exist for exactly this
 // (found via audit). One Dr line per metal type actually present in the
 // invoice now, via the same resolver sales.js's COGS posting uses.
-async function postPurchaseAccountingEntries({ tenantId, purchaseId, purchaseNumber, subtotal, stockByMetal = {}, gstAmount, cgstAmount, sgstAmount, igstAmount, amountPaid, paymentMode, bankAccountId, operator, dataMode = 3 }) {
+async function postPurchaseAccountingEntries({ tenantId, purchaseId, purchaseNumber, subtotal, stockByMetal = {}, gstAmount, cgstAmount, sgstAmount, igstAmount, amountPaid, paymentMode, bankAccountId, operator, dataMode = 3, branchId }) {
   const buckets = { ...stockByMetal };
   const bucketedTotal = round2(Object.values(buckets).reduce((s, amt) => s + (amt || 0), 0));
   // Guard against the header's Subtotal_Amount disagreeing with the sum of
@@ -54,14 +54,14 @@ async function postPurchaseAccountingEntries({ tenantId, purchaseId, purchaseNum
   accrualLines.push({ account: 'Supplier Payable Account', group: 'Liabilities', sub: 'Payable', type: 'Cr', amount: subtotal + (gstAmount || 0), narration: `Purchase | ${purchaseNumber}` });
 
   const { journalNumber } = await postJournal({
-    tenantId, sourceType: 'PURCHASE', sourceId: purchaseId, reference: purchaseNumber,
+    tenantId, sourceType: 'PURCHASE', sourceId: purchaseId, reference: purchaseNumber, branchId,
     narration: `Purchase invoice ${purchaseNumber}`, lines: accrualLines, createdBy: operator, dataMode,
   });
 
   if (parseFloat(amountPaid || 0) > 0) {
     const ledger = await resolveLedgerForPayment(db, tenantId, paymentMode, bankAccountId);
     await postJournal({
-      tenantId, sourceType: 'PAYMENT', sourceId: purchaseId, reference: purchaseNumber,
+      tenantId, sourceType: 'PAYMENT', sourceId: purchaseId, reference: purchaseNumber, branchId,
       narration: `Payment against ${purchaseNumber}`,
       lines: [
         { account: 'Supplier Payable Account', group: 'Liabilities', sub: 'Payable', type: 'Dr', amount: amountPaid, narration: `Paid against ${purchaseNumber}` },
@@ -267,7 +267,7 @@ router.post('/create', authenticate, requireValidBranch, requirePermission('inve
       tenantId, purchaseId: purchase.Purchase_ID, purchaseNumber,
       subtotal, stockByMetal, gstAmount, cgstAmount, sgstAmount, igstAmount,
       amountPaid: header.Amount_Paid, paymentMode: header.Payment_Mode, bankAccountId: header.Bank_Account_ID,
-      operator: req.user.username, dataMode: modeVal(req),
+      operator: req.user.username, dataMode: modeVal(req), branchId: purchase.Branch_ID,
     }).catch((e) => console.warn('Purchase accounting post failed (non-fatal):', e.message));
 
     return sendSuccess(res, purchase, 'Purchase entry created.', 201);
