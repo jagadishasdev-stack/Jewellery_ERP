@@ -63,6 +63,7 @@ export const printThermalReceipt = async (sale, items, tenant) => {
       gst_amount: item.GST_Amount, huid: item.HUID_Number, amount: item.Total_Line_Price,
     })),
     subtotal: sale.Subtotal_Amount, discount: sale.Discount_Amount, gst_amt: sale.GST_Amount,
+    cgst_amt: sale.CGST_Amount, sgst_amt: sale.SGST_Amount, igst_amt: sale.IGST_Amount,
     old_gold_value: sale.Old_Gold_Exchange_Amount, scheme_adj: sale.Scheme_Adjustment_Amount,
     voucher_amt: sale.Voucher_Amount, round_off: sale.Round_Off_Amount, net_payable: sale.Net_Payable_Amount,
     payment_mode: sale.Payment_Mode, payment_ref: sale.Payment_Reference,
@@ -112,7 +113,24 @@ export const printThermalReceipt = async (sale, items, tenant) => {
   if (parseFloat(sale.Discount_Amount || 0) > 0) {
     lines.push(`Discount  : ${('-' + formatCurrency(sale.Discount_Amount)).padStart(15)}`);
   }
-  lines.push(`GST (3%)  : ${formatCurrency(sale.GST_Amount).padStart(15)}`);
+  // sales.js has computed and stored a real CGST/SGST/IGST split (per the
+  // customer's registered state vs. the shop's own) since the GST-report
+  // batch — this used to collapse it back into one flat "GST (3%)" line
+  // regardless of the actual split, which isn't what a GST-compliant
+  // retail invoice is supposed to show.
+  const cgst = parseFloat(sale.CGST_Amount || 0);
+  const sgst = parseFloat(sale.SGST_Amount || 0);
+  const igst = parseFloat(sale.IGST_Amount || 0);
+  if (cgst > 0 || sgst > 0) {
+    lines.push(`CGST      : ${formatCurrency(cgst).padStart(15)}`);
+    lines.push(`SGST      : ${formatCurrency(sgst).padStart(15)}`);
+  } else if (igst > 0) {
+    lines.push(`IGST      : ${formatCurrency(igst).padStart(15)}`);
+  } else {
+    // Older sales / any caller that never sent a GST_Percentage at all —
+    // no split was ever computed, so fall back to the one combined figure.
+    lines.push(`GST       : ${formatCurrency(sale.GST_Amount).padStart(15)}`);
+  }
   if (parseFloat(sale.Old_Gold_Exchange_Amount || 0) > 0) {
     lines.push(`Old Gold  : ${('-' + formatCurrency(sale.Old_Gold_Exchange_Amount)).padStart(15)}`);
   }

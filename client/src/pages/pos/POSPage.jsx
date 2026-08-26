@@ -99,7 +99,7 @@ export default function POSPage() {
     try {
       const res = await salesApi.getById(saleId);
       const { sale, items: saleItems } = res.data.data;
-      await printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName });
+      await printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo });
       message.success('Reprinted.');
     } catch {
       message.error('Failed to reprint this bill.');
@@ -360,7 +360,7 @@ export default function POSPage() {
       const { sale, items: saleItems } = res.data.data;
       message.success(`✅ Invoice ${sale.Invoice_Number} created!`);
       emitCheckoutComplete(sale);
-      printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName });
+      printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo });
       clearCart();
       setPaymentSplits([{ mode: 'Cash', amount: 0, reference: '' }]);
       setOldGoldEntry({ weight: 0, purity: 91.67, meltDeduct: 2, rate: goldRate || 0, value: 0, applied: false, exchangeId: null, voucherNumber: null });

@@ -65,6 +65,7 @@ import SalesReportsPage from './pages/reports/SalesReportsPage';
 import InventoryReportsPage from './pages/reports/InventoryReportsPage';
 import FinancialReportsPage from './pages/reports/FinancialReportsPage';
 import CustomerReportsPage from './pages/reports/CustomerReportsPage';
+import GiftVoucherManagementPage from './pages/reports/GiftVoucherManagementPage';
 import SchemeReportsPage from './pages/reports/SchemeReportsPage';
 import ManagementReportsPage from './pages/reports/ManagementReportsPage';
 import ClosingReportPage from './pages/reports/ClosingReportPage';
@@ -209,6 +210,7 @@ function App() {
         <Route path="/reports/inventory-reports" element={<InventoryReportsPage />} />
         <Route path="/reports/financial-reports" element={<FinancialReportsPage />} />
         <Route path="/reports/customer-reports" element={<CustomerReportsPage />} />
+        <Route path="/reports/gift-vouchers" element={<GiftVoucherManagementPage />} />
         <Route path="/reports/scheme-reports" element={<SchemeReportsPage />} />
         <Route path="/reports/approval" element={<ApprovalReportsPage />} />
         <Route path="/reports/management-reports" element={<ManagementReportsPage />} />

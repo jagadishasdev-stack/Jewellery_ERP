@@ -57,7 +57,7 @@ export default function SalesBillHistoryPage() {
     try {
       const res = await salesApi.getById(saleId);
       const { sale, items } = res.data.data;
-      await printThermalReceipt(sale, items, { Company_Name: user?.companyName });
+      await printThermalReceipt(sale, items, { Company_Name: user?.companyName, GST_No: user?.gstNo });
       message.success('Reprinted.');
     } catch {
       message.error('Failed to reprint this bill.');

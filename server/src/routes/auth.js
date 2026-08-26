@@ -66,7 +66,7 @@ router.post(
       // Check tenant license (always on the control-plane connection)
       const tenant = await db('tbl_tenant_master')
         .where({ Tenant_ID: tenantId })
-        .select('Is_Active', 'License_Expiry_Date', 'Company_Name')
+        .select('Is_Active', 'License_Expiry_Date', 'Company_Name', 'GST_No')
         .first();
 
       if (!tenant) return sendError(res, 403, 'Tenant not found.');
@@ -165,6 +165,11 @@ router.post(
           roleName: role.Role_Name,
           permissions,
           companyName: tenant.Company_Name,
+          // Was never returned at all — the thermal receipt template has
+          // supported printing a "GST: ..." line since it was built, but
+          // nothing ever fetched or passed the tenant's own GSTIN in for
+          // it to use, so the line never actually appeared on a receipt.
+          gstNo: tenant.GST_No || null,
         },
       }, 'Login successful');
     } catch (err) {
