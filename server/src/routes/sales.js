@@ -422,11 +422,16 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     }
 
     // ── Apply the Gift Voucher, if one was referenced ───────────────────────
+    // Used_In_Sale_ID is how POST /:id/cancel below finds its way back to
+    // this voucher to restore it if the sale is later cancelled — same
+    // linking pattern as tbl_old_gold_exchange.Sale_ID above.
     if (giftVoucherRow) {
       const newBalance = round2(parseFloat(giftVoucherRow.Balance_Amount) - voucherAmountRequested);
       await trx('tbl_gift_vouchers').where({ Voucher_ID: giftVoucherRow.Voucher_ID }).update({
+        Used_Amount: db.raw('"Used_Amount" + ?', [voucherAmountRequested]),
         Balance_Amount: newBalance,
         Status: newBalance <= 0.01 ? 'Redeemed' : 'Active',
+        Used_In_Sale_ID: sale.Sale_ID,
       });
     }
 
@@ -692,12 +697,26 @@ router.get('/invoice/:number', authenticate, async (req, res) => {
 });
 
 // ─── POST /api/sales/:id/cancel ───────────────────────────────────────────────
+// Cancelling used to ONLY restore stock and flip Payment_Status — it never
+// reversed the sale's accounting journal (GST payable stayed inflated
+// forever), never restored an Old Gold/Gift Voucher balance the sale had
+// consumed, never undid the customer's Total_Purchase_Value/Count/Loyalty_
+// Points, and could be called twice (double-restoring stock and re-
+// reversing an already-cancelled sale). All fixed here. A Savings Scheme
+// adjustment is deliberately NOT auto-reversed — there's no clean per-line
+// record of which member/bonus rows were touched to reverse safely, so
+// this refuses rather than guessing at undoing someone's scheme balance.
 router.post('/:id/cancel', authenticate, requirePermission('sales'), async (req, res) => {
   const trx = await db.transaction();
   try {
     const sale = await trx('tbl_sales_header').where({ Sale_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!sale) { await trx.rollback(); return sendError(res, 404, 'Sale not found.'); }
-    if (sale.Payment_Status === 'Paid') { await trx.rollback(); return sendError(res, 400, 'Cannot cancel a fully paid sale.'); }
+    if (sale.Payment_Status === 'Cancelled') { await trx.rollback(); return sendError(res, 400, 'This sale is already cancelled.'); }
+    if (sale.Payment_Status === 'Paid') { await trx.rollback(); return sendError(res, 400, 'Cannot cancel a fully paid sale — that needs a proper return/credit-note flow, not a cancellation.'); }
+    if (parseFloat(sale.Scheme_Adjustment_Amount || 0) > 0 || parseFloat(sale.Bonus_Adjustment_Amount || 0) > 0) {
+      await trx.rollback();
+      return sendError(res, 400, 'This sale used a Savings Scheme balance/bonus adjustment — cancelling it automatically isn\'t supported. Correct the scheme member\'s balance by hand first, then contact support to cancel the sale.');
+    }
 
     const details = await trx('tbl_sales_details').where({ Sale_ID: req.params.id });
     const ornamentIds = details.map((d) => d.Ornament_ID).filter(Boolean);
@@ -714,7 +733,62 @@ router.post('/:id/cancel', authenticate, requirePermission('sales'), async (req,
       });
     }
 
+    // Restore the Old Gold Exchange voucher this sale consumed, if any.
+    if (parseFloat(sale.Old_Gold_Exchange_Amount || 0) > 0) {
+      await trx('tbl_old_gold_exchange').where({ Sale_ID: sale.Sale_ID, Tenant_ID: req.user.tenantId }).update({
+        Sale_ID: null,
+        Used_Amount: db.raw('"Used_Amount" - ?', [parseFloat(sale.Old_Gold_Exchange_Amount)]),
+        Balance_Amount: db.raw('"Balance_Amount" + ?', [parseFloat(sale.Old_Gold_Exchange_Amount)]),
+        Modified_Date: new Date(),
+      });
+    }
+
+    // Restore the Gift Voucher this sale consumed, if any.
+    if (parseFloat(sale.Voucher_Amount || 0) > 0) {
+      const giftVoucher = await trx('tbl_gift_vouchers').where({ Used_In_Sale_ID: sale.Sale_ID, Tenant_ID: req.user.tenantId }).first();
+      if (giftVoucher) {
+        await trx('tbl_gift_vouchers').where({ Voucher_ID: giftVoucher.Voucher_ID }).update({
+          Used_Amount: db.raw('"Used_Amount" - ?', [parseFloat(sale.Voucher_Amount)]),
+          Balance_Amount: db.raw('"Balance_Amount" + ?', [parseFloat(sale.Voucher_Amount)]),
+          Status: 'Active',
+          Used_In_Sale_ID: null,
+        });
+      }
+    }
+
+    // Undo the customer's running totals this sale contributed.
+    if (sale.Customer_ID) {
+      await trx('tbl_customer_master').where({ Customer_ID: sale.Customer_ID }).update({
+        Total_Purchase_Value: db.raw('"Total_Purchase_Value" - ?', [parseFloat(sale.Net_Payable_Amount || 0)]),
+        Total_Purchase_Count: db.raw('"Total_Purchase_Count" - 1'),
+        Loyalty_Points: db.raw('"Loyalty_Points" - ?', [parseInt(sale.Loyalty_Points_Earned || 0, 10)]),
+      });
+    }
+
     await trx.commit();
+
+    // Reverse the original accounting journal — an equal-and-opposite
+    // journal referencing the original (same "reverse, never silently
+    // edit history" pattern as accounting.js's own voucher reversal).
+    // Posted AFTER commit, same non-blocking convention as every other
+    // ledger post in this file — a bookkeeping-side failure must never
+    // undo a cancellation that already succeeded.
+    try {
+      const originalJournal = await db('tbl_accounting_journal')
+        .where({ Tenant_ID: req.user.tenantId, Source_Type: 'SALE', Reference: sale.Invoice_Number }).first();
+      if (originalJournal) {
+        const originalEntries = await db('tbl_accounting_entries').where({ Journal_ID: originalJournal.Journal_ID });
+        await postJournal({
+          tenantId: req.user.tenantId, sourceType: 'SALE', sourceId: sale.Sale_ID, reference: `CANCEL-${sale.Invoice_Number}`,
+          narration: `Cancellation of invoice ${sale.Invoice_Number}${req.body.reason ? ' — ' + req.body.reason : ''}`,
+          createdBy: req.user.username, dataMode: sale.Data_Mode, branchId: sale.Branch_ID,
+          lines: originalEntries.map((e) => ({ account: e.Ledger_Account, type: e.Entry_Type === 'Dr' ? 'Cr' : 'Dr', amount: parseFloat(e.Amount) })),
+        });
+      }
+    } catch (err) {
+      console.error('[Sales] Cancellation reversal journal failed (sale still cancelled fine):', err.message);
+    }
+
     return sendSuccess(res, null, 'Sale cancelled successfully.');
   } catch (err) {
     await trx.rollback();
