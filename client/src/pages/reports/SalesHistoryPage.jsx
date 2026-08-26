@@ -257,12 +257,40 @@ export default function SalesHistoryPage() {
                       { label: 'Period', value: `${dayjs(fromDate).format('DD-MMM-YYYY')} to ${dayjs(toDate).format('DD-MMM-YYYY')}` },
                       { label: 'Tax Invoices Issued', value: parseInt(gstReport.invoice_count || 0) },
                       { label: 'Total Taxable Value', value: formatCurrency(gstReport.taxable_value) },
-                      { label: `GST @ ${gstReport.gstRate}%`, value: formatCurrency(gstReport.total_gst) },
+                      // Real per-invoice CGST/SGST/IGST split — the rate
+                      // varies by item (making charges, repair labour,
+                      // etc. can differ), so this is never one blended
+                      // "GST @ X%" figure that doesn't actually apply to
+                      // every invoice in the period.
+                      { label: 'CGST', value: formatCurrency(gstReport.total_cgst) },
+                      { label: 'SGST', value: formatCurrency(gstReport.total_sgst) },
+                      { label: 'IGST (interstate)', value: formatCurrency(gstReport.total_igst) },
+                      { label: 'Total GST', value: formatCurrency(gstReport.total_gst) },
                       { label: 'Total Invoice Value', value: formatCurrency(gstReport.total_invoice_value) },
                     ].map((r) => (
                       <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
                         <Text type="secondary">{r.label}</Text>
                         <Text strong>{r.value}</Text>
+                      </div>
+                    ))}
+                  </Space>
+                )}
+              </Card>
+            </Col>
+            <Col xs={24} md={12}>
+              <Card title="B2B / B2C Split (GSTR-1)" style={{ borderRadius: 8, marginBottom: 16 }}>
+                {gstReport && (
+                  <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                    {[
+                      { label: 'B2B (customer has a GSTIN)', row: gstReport.b2b },
+                      { label: 'B2C (no GSTIN on file)', row: gstReport.b2c },
+                    ].map((r) => (
+                      <div key={r.label} style={{ padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
+                        <Text type="secondary">{r.label}</Text>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                          <Text style={{ fontSize: 12 }}>{r.row?.invoice_count || 0} invoice(s)</Text>
+                          <Text strong>{formatCurrency(r.row?.taxable_value)} + {formatCurrency(r.row?.gst_amount)} GST</Text>
+                        </div>
                       </div>
                     ))}
                   </Space>

@@ -229,6 +229,15 @@ router.get('/counter-summary', authenticate, async (req, res) => {
 // is the correct report for a business with more than one GST
 // registration — nothing is excluded from the real sales register, "All
 // Branches" still shows the complete tenant-wide figure.
+// GSTR-1 needs the CGST/SGST/IGST split (columns already existed on
+// tbl_sales_header — added for exactly this — but this route only ever
+// returned one blended total_gst), a B2B/B2C split (GST-registered
+// customers file differently), and a real per-row tax rate on the HSN
+// summary instead of one hardcoded gstRate:3 slapped on every invoice
+// regardless of what it was actually billed at (found via audit).
+// Deliberately NOT a full GSTR-1 JSON export (B2CL/B2CS threshold
+// splitting, place-of-supply codes, the GSTN upload format) — that's a
+// real, separate feature; this gets the underlying numbers right first.
 router.get('/gst-summary', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
@@ -239,8 +248,38 @@ router.get('/gst-summary', authenticate, requireValidBranch, async (req, res) =>
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
       .whereNot('Payment_Status', 'Cancelled').where('Invoice_Type', 'Tax Invoice'), req), req)
-      .select(db.raw('SUM("Subtotal_Amount") as taxable_value'), db.raw('SUM("GST_Amount") as total_gst'), db.raw('SUM("Net_Payable_Amount") as total_invoice_value'), db.raw('COUNT(*) as invoice_count'))
+      .select(
+        db.raw('SUM("Subtotal_Amount") as taxable_value'), db.raw('SUM("GST_Amount") as total_gst'),
+        db.raw('SUM("CGST_Amount") as total_cgst'), db.raw('SUM("SGST_Amount") as total_sgst'), db.raw('SUM("IGST_Amount") as total_igst'),
+        db.raw('SUM("Net_Payable_Amount") as total_invoice_value'), db.raw('COUNT(*) as invoice_count')
+      )
       .first();
+
+    // B2B vs B2C — a GST-registered customer (real GST_No on file) files
+    // under B2B; everyone else is B2C. Two distinct queries rather than a
+    // single GROUP BY so each side's own invoice_count/taxable_value stay
+    // simple aggregates, not a join fan-out against sales_details below.
+    let b2bQb = db('tbl_sales_header as sh')
+      .join('tbl_customer_master as c', 'sh.Customer_ID', 'c.Customer_ID')
+      .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
+      .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereNot('sh.Payment_Status', 'Cancelled').where('sh.Invoice_Type', 'Tax Invoice')
+      .whereNotNull('c.GST_No').where('c.GST_No', '!=', '');
+    b2bQb = withBranch(b2bQb, req, 'sh.Branch_ID');
+    const b2b = await excludeHiddenStockSales(b2bQb, req, 'sh')
+      .select(db.raw('SUM("sh"."Subtotal_Amount") as taxable_value'), db.raw('SUM("sh"."GST_Amount") as gst_amount'), db.raw('COUNT(*) as invoice_count'))
+      .first();
+    let b2cQb = db('tbl_sales_header as sh')
+      .leftJoin('tbl_customer_master as c', 'sh.Customer_ID', 'c.Customer_ID')
+      .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
+      .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereNot('sh.Payment_Status', 'Cancelled').where('sh.Invoice_Type', 'Tax Invoice')
+      .where((b) => b.whereNull('c.GST_No').orWhere('c.GST_No', ''));
+    b2cQb = withBranch(b2cQb, req, 'sh.Branch_ID');
+    const b2c = await excludeHiddenStockSales(b2cQb, req, 'sh')
+      .select(db.raw('SUM("sh"."Subtotal_Amount") as taxable_value'), db.raw('SUM("sh"."GST_Amount") as gst_amount'), db.raw('COUNT(*) as invoice_count'))
+      .first();
+
     const hsnSummary = await excludeHiddenStockSales(withBranch(db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .leftJoin('tbl_item_type_master as t', db.raw(`sd."Item_Type_Name" = t."Type_Name"`))
@@ -248,9 +287,14 @@ router.get('/gst-summary', authenticate, requireValidBranch, async (req, res) =>
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
       .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .groupByRaw(`COALESCE("t"."HSN_Code", '7113'), "sd"."GST_Percentage_Applied"`)
-      .select(db.raw(`COALESCE("t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied', db.raw('SUM("sd"."Taxable_Value") as taxable_value'), db.raw('SUM("sd"."GST_Amount") as gst_amount'), db.raw('COUNT(*) as items'))
+      .select(db.raw(`COALESCE("t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied', db.raw('SUM("sd"."Taxable_Value") as taxable_value'), db.raw('SUM("sd"."GST_Amount") as gst_amount'), db.raw('COUNT(*) as items'), db.raw(`'PCS' as uqc`))
       .catch(() => []);
-    return sendSuccess(res, { ...gstData, hsnSummary, fromDate, toDate, gstRate: 3 });
+    return sendSuccess(res, {
+      ...gstData,
+      b2b: { taxable_value: b2b.taxable_value || 0, gst_amount: b2b.gst_amount || 0, invoice_count: parseInt(b2b.invoice_count) || 0 },
+      b2c: { taxable_value: b2c.taxable_value || 0, gst_amount: b2c.gst_amount || 0, invoice_count: parseInt(b2c.invoice_count) || 0 },
+      hsnSummary, fromDate, toDate,
+    });
   } catch (err) {
     return sendError(res, 500, 'Failed to generate GST report.');
   }
