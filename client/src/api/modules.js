@@ -202,6 +202,29 @@ export const transferApi = {
   unhideStock: (data) => api.post('/transfer/unhide', data),
 };
 
+// ─── Bin Management (Purchase / Sales Return / Orders / Pure Gold bins) ────────
+export const binApi = {
+  getDashboard: () => api.get('/bin/dashboard'),
+  getVoucher: (q) => api.get(`/bin/voucher/${q}`),
+  getPurchase: (params) => api.get('/bin/purchase', { params }),
+  createPurchase: (data) => api.post('/bin/purchase', data),
+  updatePurchase: (id, data) => api.put(`/bin/purchase/${id}`, data),
+  approvePurchase: (id) => api.post(`/bin/purchase/${id}/approve`),
+  movePurchaseToStock: (id, data) => api.post(`/bin/purchase/${id}/move-to-stock`, data),
+  getSalesReturn: (params) => api.get('/bin/sales-return', { params }),
+  createSalesReturn: (data) => api.post('/bin/sales-return', data),
+  updateSalesReturn: (id, data) => api.put(`/bin/sales-return/${id}`, data),
+  moveSalesReturnToStock: (id, data) => api.post(`/bin/sales-return/${id}/move-to-stock`, data),
+  getOrders: (params) => api.get('/bin/orders', { params }),
+  createOrder: (data) => api.post('/bin/orders', data),
+  updateOrder: (id, data) => api.put(`/bin/orders/${id}`, data),
+  updateOrderStatus: (id, status) => api.post(`/bin/orders/${id}/status`, { status }),
+  getPureGold: (params) => api.get('/bin/pure-gold', { params }),
+  createPureGold: (data) => api.post('/bin/pure-gold', data),
+  updatePureGold: (id, data) => api.put(`/bin/pure-gold/${id}`, data),
+  disposePureGold: (id, method) => api.post(`/bin/pure-gold/${id}/dispose`, { method }),
+};
+
 // ─── Purchase ─────────────────────────────────────────────────────────────────
 export const purchaseApi = {
   getAll: (params) => api.get('/purchase', { params }),

@@ -17,7 +17,7 @@ import {
   BarcodeOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
+import { binApi } from '../../api/modules';
 import PageTour from '../../components/PageTour';
 import { useModules } from '../../hooks/useModules';
 import { METAL_TYPES } from '../../utils/metalTypes';
@@ -51,7 +51,7 @@ const VoucherBadge = ({ id }) => (
 function BinDashboard({ enabled }) {
   const { data, isLoading } = useQuery({
     queryKey: ['bin-dashboard'],
-    queryFn: () => api.get('/bin/dashboard').then(r => r.data.data),
+    queryFn: () => binApi.getDashboard().then(r => r.data.data),
     refetchInterval: 30000,
   });
   const p  = data?.purchase     || {};
@@ -95,7 +95,7 @@ function VoucherSearch() {
     if (!q.trim()) return;
     setLoading(true);
     try {
-      const res = await api.get(`/bin/voucher/${q.trim()}`);
+      const res = await binApi.getVoucher(q.trim());
       setResult(res.data.data);
     } catch {
       message.error('Voucher not found.');
@@ -148,11 +148,11 @@ function PurchaseBinTab() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['bin-purchase', filter],
-    queryFn: () => api.get('/bin/purchase', { params: filter }).then(r => r.data.data),
+    queryFn: () => binApi.getPurchase(filter).then(r => r.data.data),
   });
 
   const saveMut = useMutation({
-    mutationFn: d => editRow ? api.put(`/bin/purchase/${editRow.Bin_ID}`, d) : api.post('/bin/purchase', d),
+    mutationFn: d => editRow ? binApi.updatePurchase(editRow.Bin_ID, d) : binApi.createPurchase(d),
     onSuccess: (res) => {
       message.success(editRow ? 'Updated.' : `Entry created. Voucher: ${res.data.data?.Voucher_ID}`);
       qc.invalidateQueries(['bin-purchase']); qc.invalidateQueries(['bin-dashboard']);
@@ -162,12 +162,12 @@ function PurchaseBinTab() {
   });
 
   const approveMut = useMutation({
-    mutationFn: id => api.post(`/bin/purchase/${id}/approve`),
+    mutationFn: id => binApi.approvePurchase(id),
     onSuccess: () => { message.success('Approved.'); qc.invalidateQueries(['bin-purchase']); },
   });
 
   const moveMut = useMutation({
-    mutationFn: ({ id, data }) => api.post(`/bin/purchase/${id}/move-to-stock`, data),
+    mutationFn: ({ id, data }) => binApi.movePurchaseToStock(id, data),
     onSuccess: (res) => {
       message.success(`Moved to stock! Article: ${res.data.data?.articleNumber}`);
       qc.invalidateQueries(['bin-purchase']); qc.invalidateQueries(['bin-dashboard']);
@@ -348,11 +348,11 @@ function SalesReturnBinTab() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['bin-sales-return', filter],
-    queryFn: () => api.get('/bin/sales-return', { params: filter }).then(r => r.data.data),
+    queryFn: () => binApi.getSalesReturn(filter).then(r => r.data.data),
   });
 
   const saveMut = useMutation({
-    mutationFn: d => editRow ? api.put(`/bin/sales-return/${editRow.Return_ID}`, d) : api.post('/bin/sales-return', d),
+    mutationFn: d => editRow ? binApi.updateSalesReturn(editRow.Return_ID, d) : binApi.createSalesReturn(d),
     onSuccess: (res) => {
       message.success(editRow ? 'Updated.' : `Return logged. Voucher: ${res.data.data?.Voucher_ID}`);
       qc.invalidateQueries(['bin-sales-return']); qc.invalidateQueries(['bin-dashboard']);
@@ -362,7 +362,7 @@ function SalesReturnBinTab() {
   });
 
   const moveMut = useMutation({
-    mutationFn: ({ id, data }) => api.post(`/bin/sales-return/${id}/move-to-stock`, data),
+    mutationFn: ({ id, data }) => binApi.moveSalesReturnToStock(id, data),
     onSuccess: (res) => {
       message.success(`Re-stocked! Article: ${res.data.data?.articleNumber}`);
       qc.invalidateQueries(['bin-sales-return']); qc.invalidateQueries(['bin-dashboard']);
@@ -518,11 +518,11 @@ function OrderBinTab() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['bin-orders', filter],
-    queryFn: () => api.get('/bin/orders', { params: filter }).then(r => r.data.data),
+    queryFn: () => binApi.getOrders(filter).then(r => r.data.data),
   });
 
   const saveMut = useMutation({
-    mutationFn: d => editRow ? api.put(`/bin/orders/${editRow.Order_ID}`, d) : api.post('/bin/orders', d),
+    mutationFn: d => editRow ? binApi.updateOrder(editRow.Order_ID, d) : binApi.createOrder(d),
     onSuccess: (res) => {
       message.success(editRow ? 'Updated.' : `Order created. Voucher: ${res.data.data?.Voucher_ID}`);
       qc.invalidateQueries(['bin-orders']); qc.invalidateQueries(['bin-dashboard']);
@@ -532,7 +532,7 @@ function OrderBinTab() {
   });
 
   const statusMut = useMutation({
-    mutationFn: ({ id, status }) => api.post(`/bin/orders/${id}/status`, { status }),
+    mutationFn: ({ id, status }) => binApi.updateOrderStatus(id, status),
     onSuccess: () => { message.success('Status updated.'); qc.invalidateQueries(['bin-orders']); },
   });
 
@@ -684,11 +684,11 @@ function PureGoldBinTab() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['bin-pure-gold', filter],
-    queryFn: () => api.get('/bin/pure-gold', { params: filter }).then(r => r.data.data),
+    queryFn: () => binApi.getPureGold(filter).then(r => r.data.data),
   });
 
   const saveMut = useMutation({
-    mutationFn: d => editRow ? api.put(`/bin/pure-gold/${editRow.Gold_ID}`, d) : api.post('/bin/pure-gold', d),
+    mutationFn: d => editRow ? binApi.updatePureGold(editRow.Gold_ID, d) : binApi.createPureGold(d),
     onSuccess: (res) => {
       message.success(editRow ? 'Updated.' : `Entry created. Voucher: ${res.data.data?.Voucher_ID}`);
       qc.invalidateQueries(['bin-pure-gold']); qc.invalidateQueries(['bin-dashboard']);
@@ -698,7 +698,7 @@ function PureGoldBinTab() {
   });
 
   const disposeMut = useMutation({
-    mutationFn: ({ id, method }) => api.post(`/bin/pure-gold/${id}/dispose`, { method }),
+    mutationFn: ({ id, method }) => binApi.disposePureGold(id, method),
     onSuccess: () => { message.success('Status updated.'); qc.invalidateQueries(['bin-pure-gold']); },
   });
 

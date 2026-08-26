@@ -12,12 +12,11 @@ import {
   GoldOutlined, UserOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { salesApi, customersApi, ornamentsApi, masterApi } from '../../api/modules';import { formatCurrency } from '../../utils/calculations';
+import { salesApi, customersApi, ornamentsApi, masterApi, binApi } from '../../api/modules';import { formatCurrency } from '../../utils/calculations';
 import { useAuthStore } from '../../store/authStore';
 import { useDataMode } from '../../contexts/DataModeContext';
 import { printHTML } from '../../utils/printService';
 import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
-import api from '../../api/axios';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
 
@@ -182,7 +181,7 @@ export default function BillingHub() {
   // orders, which itself now posts the advance to the ledger) first, and
   // only prints once that's actually succeeded.
   const orderMutation = useMutation({
-    mutationFn: (values) => api.post('/bin/orders', {
+    mutationFn: (values) => binApi.createOrder({
       Party_Name: values.customer_name,
       Party_Mobile: values.mobile,
       Order_Type: 'Customer',
