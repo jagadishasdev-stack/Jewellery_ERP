@@ -20,7 +20,6 @@ import {
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tenantApi, superAdminApi, smsApi, pushApi } from '../../api/modules';
-import api from '../../api/axios';
 import PageTour from '../../components/PageTour';
 import { STANDARD_ACTIONS, ACTION_LABELS, DEFAULT_SHORTCUTS } from '../../utils/shortcuts';
 import dayjs from 'dayjs';
@@ -168,13 +167,13 @@ export default function TenantManagePage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => api.put(`/super-admin/tenant/${id}/settings`, data),
+    mutationFn: ({ id, data }) => superAdminApi.updateTenantSettings(id, data),
     onSuccess: () => { message.success('Tenant updated!'); qc.invalidateQueries(['tenants-all']); setEditTenant(null); },
     onError: (err) => message.error(err.response?.data?.message || 'Failed.'),
   });
 
   const deactivateMutation = useMutation({
-    mutationFn: ({ id, active }) => api.put(`/super-admin/tenant/${id}/settings`, { Is_Active: active }),
+    mutationFn: ({ id, active }) => superAdminApi.updateTenantSettings(id, { Is_Active: active }),
     onSuccess: (_, { active }) => {
       message.success(active ? 'Tenant activated.' : 'Tenant deactivated.');
       qc.invalidateQueries(['tenants-all']);
@@ -184,7 +183,7 @@ export default function TenantManagePage() {
 
   const toggleModuleMutation = useMutation({
     mutationFn: ({ tenantId, key, enabled }) =>
-      api.post('/super-admin/tenant-module-toggle', { tenantId, moduleKey: key, enabled }),
+      superAdminApi.toggleTenantModule(tenantId, key, enabled),
     onSuccess: (_, { key, enabled }) => {
       setTenantModules(prev => prev.map(m => m.Module_Key === key ? { ...m, Is_Enabled: enabled } : m));
       message.success(`Module "${key}" ${enabled ? 'enabled' : 'disabled'}.`);
@@ -194,7 +193,7 @@ export default function TenantManagePage() {
 
   const provisionMutation = useMutation({
     mutationFn: ({ tenantId, businessType }) =>
-      api.post('/super-admin/tenant-provision', { tenantId, businessType }),
+      superAdminApi.provisionTenant(tenantId, businessType),
     onSuccess: (res) => {
       message.success(res.data.message);
       fetchTenantModules(moduleTenant.Tenant_ID);
@@ -237,7 +236,7 @@ export default function TenantManagePage() {
   const fetchTenantModules = async (tenantId) => {
     setModulesLoading(true);
     try {
-      const res = await api.get(`/super-admin/tenant/${tenantId}/modules`);
+      const res = await superAdminApi.getTenantModules(tenantId);
       setTenantModules(res.data.data || []);
     } catch (err) {
       console.error('Failed to fetch modules:', err.message);
@@ -279,7 +278,7 @@ export default function TenantManagePage() {
     setBranchTenant(tenant);
     setBranchesLoading(true);
     try {
-      const res = await api.get('/tenant/branches', { params: { tenantId: tenant.Tenant_ID, includeInactive: true } });
+      const res = await tenantApi.getBranches(tenant.Tenant_ID, { includeInactive: true });
       setBranches(res.data.data || []);
     } catch (err) {
       message.error('Failed to load branches: ' + err.message);
@@ -313,7 +312,7 @@ export default function TenantManagePage() {
   };
 
   const createBranchMutation = useMutation({
-    mutationFn: (data) => api.post('/tenant/branches', { ...data, tenantId: branchTenant.Tenant_ID }),
+    mutationFn: (data) => tenantApi.createBranch({ ...data, tenantId: branchTenant.Tenant_ID }),
     onSuccess: () => {
       message.success('Branch created.');
       setBranchFormOpen(false);
@@ -324,7 +323,7 @@ export default function TenantManagePage() {
   });
 
   const updateBranchMutation = useMutation({
-    mutationFn: ({ id, data }) => api.put(`/tenant/branches/${id}`, data),
+    mutationFn: ({ id, data }) => tenantApi.updateBranch(id, data),
     onSuccess: () => {
       message.success('Branch updated.');
       setBranchFormOpen(false);
@@ -339,7 +338,7 @@ export default function TenantManagePage() {
   };
 
   const toggleBranchActiveMutation = useMutation({
-    mutationFn: ({ id, isActive }) => api.put(`/tenant/branches/${id}`, { isActive }),
+    mutationFn: ({ id, isActive }) => tenantApi.updateBranch(id, { isActive }),
     onSuccess: (_, { isActive }) => {
       message.success(isActive ? 'Branch reactivated.' : 'Branch deactivated.');
       fetchBranches(branchTenant);

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import api from '../api/axios';
+import { authApi } from '../api/modules';
 
 export const useAuthStore = create(
   persist(
@@ -20,7 +21,7 @@ export const useAuthStore = create(
       },
 
       login: async (credentials) => {
-        const { data } = await api.post('/auth/login', credentials);
+        const { data } = await authApi.login(credentials);
         if (data.success) {
           const { token, refreshToken, sessionId, user } = data.data;
           api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -33,7 +34,7 @@ export const useAuthStore = create(
       logout: async () => {
         try {
           const { sessionId } = get();
-          await api.post('/auth/logout', { sessionId });
+          await authApi.logout(sessionId);
         } catch (_) {}
         delete api.defaults.headers.common['Authorization'];
         set({ user: null, token: null, refreshToken: null, sessionId: null, isAuthenticated: false });
@@ -43,7 +44,7 @@ export const useAuthStore = create(
         const { refreshToken } = get();
         if (!refreshToken) return;
         try {
-          const { data } = await api.post('/auth/refresh', { refreshToken });
+          const { data } = await authApi.refresh(refreshToken);
           if (data.success) {
             api.defaults.headers.common['Authorization'] = `Bearer ${data.data.token}`;
             set({ token: data.data.token });

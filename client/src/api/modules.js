@@ -4,6 +4,7 @@ import api from './axios';
 export const authApi = {
   login: (data) => api.post('/auth/login', data),
   logout: (sessionId) => api.post('/auth/logout', { sessionId }),
+  refresh: (refreshToken) => api.post('/auth/refresh', { refreshToken }),
   validate: () => api.get('/auth/validate'),
   changePassword: (currentPassword, newPassword) => api.put('/auth/change-password', { currentPassword, newPassword }),
 };
@@ -127,6 +128,10 @@ export const superAdminApi = {
   updateTenantShortcuts: (tenantId, overrides) => api.put(`/super-admin/tenant/${tenantId}/shortcuts`, { overrides }),
   getPaymentGateway: (tenantId) => api.get(`/super-admin/tenant/${tenantId}/payment-gateway`),
   savePaymentGateway: (tenantId, data) => api.put(`/super-admin/tenant/${tenantId}/payment-gateway`, data),
+  updateTenantSettings: (id, data) => api.put(`/super-admin/tenant/${id}/settings`, data),
+  toggleTenantModule: (tenantId, moduleKey, enabled) => api.post('/super-admin/tenant-module-toggle', { tenantId, moduleKey, enabled }),
+  provisionTenant: (tenantId, businessType) => api.post('/super-admin/tenant-provision', { tenantId, businessType }),
+  getTenantModules: (tenantId) => api.get(`/super-admin/tenant/${tenantId}/modules`),
 };
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
@@ -249,7 +254,7 @@ export const shortcutsApi = {
 };
 
 export const tenantApi = {
-  getBranches: (tenantId) => api.get('/tenant/branches', { params: { tenantId } }),
+  getBranches: (tenantId, extraParams = {}) => api.get('/tenant/branches', { params: { tenantId, ...extraParams } }),
   createBranch: (data) => api.post('/tenant/branches', data),
   updateBranch: (id, data) => api.put(`/tenant/branches/${id}`, data),
   getStats: () => api.get('/tenant/stats'),

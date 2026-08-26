@@ -11,7 +11,6 @@ import {
   SolutionOutlined, UserAddOutlined, PlusOutlined, KeyOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
 import { superAdminApi, tenantApi, licenseApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
@@ -50,12 +49,12 @@ export default function SuperAdminDashboard() {
   // Master dashboard — all tenants
   const { data: dashData, isLoading, refetch } = useQuery({
     queryKey: ['sa-dashboard'],
-    queryFn: () => api.get('/super-admin/dashboard').then(r => r.data.data),
+    queryFn: () => superAdminApi.getDashboard().then(r => r.data.data),
     refetchInterval: 60000,
   });
 
   const storeTypeMutation = useMutation({
-    mutationFn: ({ id, store_type }) => api.put(`/super-admin/tenant/${id}/store-type`, { store_type }),
+    mutationFn: ({ id, store_type }) => superAdminApi.setStoreType(id, store_type),
     onSuccess: () => { qc.invalidateQueries(['sa-dashboard']); },
   });
 
@@ -129,7 +128,7 @@ export default function SuperAdminDashboard() {
     if (!searchQuery.trim()) return;
     setSearching(true);
     try {
-      const res = await api.get('/super-admin/search', { params: { q: searchQuery } });
+      const res = await superAdminApi.search(searchQuery);
       setSearchResults(res.data.data);
     } catch { setSearchResults([]); }
     finally { setSearching(false); }
@@ -137,7 +136,7 @@ export default function SuperAdminDashboard() {
 
   const openDetail = async (id) => {
     try {
-      const res = await api.get(`/super-admin/tenant/${id}`);
+      const res = await superAdminApi.getTenantDetail(id);
       setDetailTenant(res.data.data);
       setDetailTab('overview');
     } catch {}
