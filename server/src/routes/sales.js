@@ -651,7 +651,7 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
       .orderBy('Sale_Date', 'desc')
       .limit(parseInt(limit)).offset(offset)
       .select('Sale_ID', 'Invoice_Number', 'Sale_Date', 'Customer_Name', 'Customer_Mobile',
-        'Sale_Type', 'Net_Payable_Amount', 'Payment_Status', 'Payment_Mode', 'Counter_Name', 'Operator_Name');
+        'Sale_Type', 'Net_Payable_Amount', 'Balance_Amount', 'Payment_Status', 'Payment_Mode', 'Counter_Name', 'Operator_Name');
 
     return sendSuccess(res, { items, total: parseInt(count), page: parseInt(page), limit: parseInt(limit) });
   } catch (err) {
@@ -693,6 +693,70 @@ router.get('/invoice/:number', authenticate, async (req, res) => {
     return sendSuccess(res, { sale, items });
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch invoice.');
+  }
+});
+
+// ─── POST /api/sales/:id/receive-payment ──────────────────────────────────────
+// A Partial/Pending sale's Balance_Amount previously had no way to ever be
+// cleared except a Savings Scheme adjustment — collecting cash/UPI later
+// against an existing invoice wasn't possible from any route, so
+// /reports/customer-outstanding showed balances that could never actually
+// be settled. This is that missing route: records the payment, updates
+// the sale's own running totals, and posts a real journal (Dr Cash/Bank,
+// Cr Customer Receivable) — the exact mirror of how the receivable itself
+// got created at sale time (paymentLedgerMap.js's 'Customer Receivable' line).
+router.post('/:id/receive-payment', authenticate, requirePermission('sales'), requireValidBranch, [
+  body('Amount').isFloat({ gt: 0 }).withMessage('A positive amount is required'),
+  body('Payment_Mode').notEmpty().withMessage('Payment mode is required'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  const trx = await db.transaction();
+  try {
+    const sale = await trx('tbl_sales_header').where({ Sale_ID: req.params.id, Tenant_ID: req.user.tenantId }).forUpdate().first();
+    if (!sale) { await trx.rollback(); return sendError(res, 404, 'Sale not found.'); }
+    if (!['Partial', 'Pending'].includes(sale.Payment_Status)) {
+      await trx.rollback();
+      return sendError(res, 400, `This sale is ${sale.Payment_Status} — there's no outstanding balance to collect.`);
+    }
+
+    const amount = round2(parseFloat(req.body.Amount));
+    const currentBalance = round2(parseFloat(sale.Balance_Amount || 0));
+    if (amount > currentBalance + 0.01) {
+      await trx.rollback();
+      return sendError(res, 400, `Amount exceeds the outstanding balance of ₹${currentBalance.toFixed(2)}.`);
+    }
+
+    const newBalance = round2(currentBalance - amount);
+    const newAmountPaid = round2(parseFloat(sale.Amount_Paid || 0) + amount);
+    const newStatus = newBalance <= 0.01 ? 'Paid' : 'Partial';
+
+    const [payment] = await trx('tbl_sales_payments').insert({
+      Sale_ID: sale.Sale_ID, Tenant_ID: req.user.tenantId, Payment_Mode: req.body.Payment_Mode,
+      Amount: amount, Reference: req.body.Payment_Reference || null, Bank_Account_ID: req.body.Bank_Account_ID || null,
+      Data_Mode: sale.Data_Mode, Created_By: req.user.username,
+    }).returning('*');
+
+    await trx('tbl_sales_header').where({ Sale_ID: sale.Sale_ID }).update({
+      Amount_Paid: newAmountPaid, Balance_Amount: newBalance, Payment_Status: newStatus,
+    });
+
+    await trx.commit();
+
+    const ledger = await resolveLedgerForPayment(db, req.user.tenantId, req.body.Payment_Mode, req.body.Bank_Account_ID);
+    await postJournal({
+      tenantId: req.user.tenantId, sourceType: 'SALE', sourceId: sale.Sale_ID, reference: `RECEIPT-${sale.Invoice_Number}-${payment.Payment_ID}`,
+      narration: `Payment received against invoice ${sale.Invoice_Number}`, createdBy: req.user.username, dataMode: sale.Data_Mode, branchId: sale.Branch_ID,
+      lines: [
+        { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Dr', amount: amount, narration: `Payment received | ${sale.Invoice_Number}` },
+        { account: 'Customer Receivable Account', group: 'Assets', sub: 'Receivable', type: 'Cr', amount: amount, narration: `Payment received | ${sale.Invoice_Number}` },
+      ],
+    }).catch((err) => console.error('[Sales] Receive-payment journal failed (payment still recorded fine):', err.message));
+
+    return sendSuccess(res, { Sale_ID: sale.Sale_ID, Amount_Paid: newAmountPaid, Balance_Amount: newBalance, Payment_Status: newStatus, payment }, 'Payment recorded.', 201);
+  } catch (err) {
+    await trx.rollback();
+    return sendError(res, 500, 'Failed to record payment.');
   }
 });
 

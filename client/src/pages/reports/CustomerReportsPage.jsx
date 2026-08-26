@@ -4,12 +4,12 @@
 import React, { useState, useRef } from 'react';
 import {
   Row, Col, Card, Typography, Button, Space, Tag, Tabs, Table,
-  Input, Statistic, Select, message, Progress,
+  Input, InputNumber, Statistic, Select, message, Progress, Modal, Form, Empty,
 } from 'antd';
-import { DownloadOutlined, SearchOutlined, TeamOutlined } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { DownloadOutlined, SearchOutlined, TeamOutlined, DollarOutlined } from '@ant-design/icons';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../api/axios';
-import { customersApi } from '../../api/modules';
+import { customersApi, salesApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -28,6 +28,9 @@ export default function CustomerReportsPage() {
   const [activeTab, setActiveTab] = useState('ledger');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [searchText, setSearchText] = useState('');
+  const [payModal, setPayModal] = useState(null); // { Sale_ID, Invoice_Number, Balance_Amount } | null
+  const [payForm] = Form.useForm();
+  const qc = useQueryClient();
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const tabsRef = useRef(null);
@@ -82,6 +85,56 @@ export default function CustomerReportsPage() {
     { title: 'Mode', dataIndex: 'Payment_Mode', render: v => <Tag color="blue">{v}</Tag> },
     { title: 'Status', dataIndex: 'Payment_Status', render: v => <Tag color={v==='Paid'?'green':v==='Partial'?'orange':'red'}>{v}</Tag> },
   ];
+
+  const receivePaymentMutation = useMutation({
+    mutationFn: ({ Sale_ID, ...data }) => salesApi.receivePayment(Sale_ID, data),
+    onSuccess: () => {
+      message.success('Payment recorded.');
+      qc.invalidateQueries({ queryKey: ['customer-outstanding'] });
+      qc.invalidateQueries({ queryKey: ['customer-outstanding-invoices'] });
+      setPayModal(null);
+      payForm.resetFields();
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to record payment.'),
+  });
+
+  // A Partial/Pending sale's balance previously had no way to ever be
+  // collected — this expandable row + modal is that missing UI, on top
+  // of the new POST /sales/:id/receive-payment route.
+  const OutstandingInvoicesRow = ({ record }) => {
+    const { data: invoices, isLoading } = useQuery({
+      queryKey: ['customer-outstanding-invoices', record.Customer_ID],
+      queryFn: async () => {
+        const [partial, pending] = await Promise.all([
+          salesApi.list({ paymentStatus: 'Partial', search: record.Customer_Mobile, limit: 100 }),
+          salesApi.list({ paymentStatus: 'Pending', search: record.Customer_Mobile, limit: 100 }),
+        ]);
+        return [...(partial.data.data?.items || []), ...(pending.data.data?.items || [])];
+      },
+    });
+    return (
+      <Table
+        size="small" loading={isLoading} pagination={false} rowKey="Sale_ID"
+        dataSource={invoices || []}
+        locale={{ emptyText: <Empty description="No outstanding invoices" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+        columns={[
+          { title: 'Invoice No', dataIndex: 'Invoice_Number', render: v => <Text code style={{ fontSize: 11 }}>{v}</Text> },
+          { title: 'Date', dataIndex: 'Sale_Date', render: v => dayjs(v).format('DD-MMM-YYYY') },
+          { title: 'Amount', dataIndex: 'Net_Payable_Amount', render: v => formatCurrency(v) },
+          { title: 'Status', dataIndex: 'Payment_Status', render: v => <Tag color={v === 'Partial' ? 'orange' : 'red'}>{v}</Tag> },
+          {
+            title: 'Action', render: (_, sale) => (
+              <Button size="small" type="primary" icon={<DollarOutlined />}
+                style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                onClick={() => setPayModal(sale)}>
+                Receive Payment
+              </Button>
+            ),
+          },
+        ]}
+      />
+    );
+  };
 
   const outstandingCols = [
     { title: 'Customer', dataIndex: 'Customer_Name', render: v => <Text strong>{v}</Text> },
@@ -184,7 +237,8 @@ export default function CustomerReportsPage() {
           extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(outstandingData||[],'customer_outstanding')}>CSV</Button>}>
           <Table
             scroll={{ x: "max-content" }} columns={outstandingCols} dataSource={outstandingData||[]} rowKey="Customer_ID"
-            size="small" loading={outLoading} pagination={{pageSize:20}} />
+            size="small" loading={outLoading} pagination={{pageSize:20}}
+            expandable={{ expandedRowRender: (record) => <OutstandingInvoicesRow record={record} /> }} />
         </Card>
       ),
     },
@@ -198,6 +252,35 @@ export default function CustomerReportsPage() {
       <div ref={tabsRef}>
       <Tabs activeKey={activeTab} onChange={setActiveTab} type="card" items={tabItems} />
       </div>
+
+      <Modal
+        title={`💰 Receive Payment — ${payModal?.Invoice_Number}`}
+        open={!!payModal} onCancel={() => { setPayModal(null); payForm.resetFields(); }} footer={null} destroyOnClose>
+        {payModal && (
+          <Form form={payForm} layout="vertical"
+            initialValues={{ Amount: parseFloat(payModal.Balance_Amount || 0), Payment_Mode: 'Cash' }}
+            onFinish={(v) => receivePaymentMutation.mutate({ Sale_ID: payModal.Sale_ID, ...v })}>
+            <Text type="secondary">Outstanding balance: <Text strong style={{ color: '#ff4d4f' }}>{formatCurrency(payModal.Balance_Amount)}</Text></Text>
+            <Form.Item name="Amount" label="Amount Received (₹)" style={{ marginTop: 12 }}
+              rules={[{ required: true, message: 'Amount is required.' }, {
+                validator: (_, v) => v > parseFloat(payModal.Balance_Amount) + 0.01
+                  ? Promise.reject('Cannot exceed the outstanding balance.') : Promise.resolve(),
+              }]}>
+              <InputNumber style={{ width: '100%' }} min={0.01} max={parseFloat(payModal.Balance_Amount)} precision={2} />
+            </Form.Item>
+            <Form.Item name="Payment_Mode" label="Payment Mode" rules={[{ required: true }]}>
+              <Select options={['Cash', 'UPI', 'Debit Card', 'Credit Card', 'NEFT', 'RTGS', 'IMPS', 'Bank Transfer', 'Cheque'].map(m => ({ value: m, label: m }))} />
+            </Form.Item>
+            <Form.Item name="Payment_Reference" label="Reference (optional)">
+              <Input placeholder="UTR / transaction ID / cheque number" />
+            </Form.Item>
+            <Button type="primary" htmlType="submit" block loading={receivePaymentMutation.isPending}
+              style={{ background: '#52c41a', borderColor: '#52c41a', fontWeight: 700 }}>
+              Record Payment
+            </Button>
+          </Form>
+        )}
+      </Modal>
 
       <PageTour steps={tourSteps} />
     </div>

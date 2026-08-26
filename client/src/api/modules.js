@@ -74,6 +74,7 @@ export const salesApi = {
   getById: (id) => api.get(`/sales/${id}`),
   getByInvoice: (number) => api.get(`/sales/invoice/${number}`),
   cancel: (id, data) => api.post(`/sales/${id}/cancel`, data),
+  receivePayment: (id, data) => api.post(`/sales/${id}/receive-payment`, data),
   dailyReport: (date) => api.get('/sales/reports/daily', { params: { date } }),
 };
 
