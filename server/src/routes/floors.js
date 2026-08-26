@@ -6,6 +6,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { auditLog } = require('../utils/auditLogger');
 const { applyStockVisibility, modeVal } = require('../utils/dataModeFilter');
 const { requireValidBranch, withBranch } = require('../utils/branchAccess');
+const { getAllowedBinScope } = require('../utils/binAccess');
 const dayjs = require('dayjs');
 
 // ── GET /api/floors  ──────────────────────────────────────────────────────────
@@ -195,11 +196,16 @@ router.delete('/trays/:id', authenticate, async (req, res) => {
 });
 
 // ── GET /api/floors/hidden-locations  ─────────────────────────────────────────
+// tbl_user_bin_access, if this caller has any grant rows at all, narrows
+// this to exactly their allowed hidden locations — previously listed
+// every hidden location regardless of any restriction an admin had set.
 router.get('/hidden-locations', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
-    const locations = await db('tbl_hidden_location_master')
-      .where({ Tenant_ID: req.user.tenantId, Is_Active: true })
-      .orderBy('Location_Name');
+    let qb = db('tbl_hidden_location_master')
+      .where({ Tenant_ID: req.user.tenantId, Is_Active: true });
+    const scope = await getAllowedBinScope(req);
+    if (scope.restricted) qb = qb.whereIn('Hidden_Location_ID', scope.hiddenLocationIds.length ? scope.hiddenLocationIds : [-1]);
+    const locations = await qb.orderBy('Location_Name');
     return sendSuccess(res, locations);
   } catch (err) { return sendError(res, 500, 'Failed to fetch hidden locations.'); }
 });
@@ -280,7 +286,7 @@ router.get('/hidden-stock', authenticate, requirePermission('tenant_management')
     return sendError(res, 403, 'Hidden stock details are only visible in Unofficial mode.');
   }
   try {
-    const items = await db('tbl_ornament_master as o')
+    let items = db('tbl_ornament_master as o')
       .leftJoin('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
       .leftJoin('tbl_floor_master as fl', 'o.Floor_ID', 'fl.Floor_ID')
       .leftJoin('tbl_counter_master as c', 'o.Counter_ID', 'c.Counter_ID')
@@ -297,14 +303,28 @@ router.get('/hidden-stock', authenticate, requirePermission('tenant_management')
       // can never leak into this real business report, matching every
       // other stock-visibility query in the app.
       .where('o.Tenant_ID', req.user.tenantId).where('o.Is_Hidden', true).where('o.Is_Sold', false)
-      .whereIn('o.Data_Mode', [2, 3])
+      .whereIn('o.Data_Mode', [2, 3]);
+
+    // tbl_user_bin_access, if this caller has any grant rows at all —
+    // same restriction as GET /hidden-locations above, applied here to
+    // the actual stock list (an item matches if either its own tray or
+    // its own hidden location is one this caller was granted).
+    const scope = await getAllowedBinScope(req);
+    if (scope.restricted) {
+      items = items.where((w) => {
+        w.whereIn('o.Hidden_Location_ID', scope.hiddenLocationIds.length ? scope.hiddenLocationIds : [-1]);
+        if (scope.trayIds.length) w.orWhereIn('o.Tray_ID', scope.trayIds);
+      });
+    }
+
+    const rows = await items
       .select(
         'o.Ornament_ID', 'o.Article_Number', 'o.Gross_Weight', 'o.Total_Price', 't.Type_Name',
         'fl.Floor_Name', 'c.Counter_Name', 'tr.Tray_Name', 'h.Location_Name as Hidden_Location_Name',
         'o.Hidden_By', 'o.Hidden_Date', 'o.Hidden_Reason'
       )
       .orderBy('o.Hidden_Date', 'desc');
-    return sendSuccess(res, items);
+    return sendSuccess(res, rows);
   } catch (err) { return sendError(res, 500, 'Failed to fetch hidden stock.'); }
 });
 

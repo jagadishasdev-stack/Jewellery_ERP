@@ -7,6 +7,7 @@ const { auditLog } = require('../utils/auditLogger');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const { nextNumber } = require('../utils/numberFormat');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const dayjs = require('dayjs');
 
 // tenantCode passed as the raw tenantId (not underscore-stripped) — this
@@ -35,7 +36,7 @@ function calcInterestDue(loan, asOfDate = dayjs()) {
 }
 
 // ── GET /api/pawnbroking/loans ────────────────────────────────────────────────
-router.get('/loans', authenticate, async (req, res) => {
+router.get('/loans', authenticate, requireModuleAccess('pawnbroking', 'View'), async (req, res) => {
   const { status, customerId, page = 1, limit = 30 } = req.query;
   try {
     let qb = db('tbl_pawn_loan_header as l')
@@ -52,7 +53,7 @@ router.get('/loans', authenticate, async (req, res) => {
 });
 
 // ── GET /api/pawnbroking/loans/:id ────────────────────────────────────────────
-router.get('/loans/:id', authenticate, async (req, res) => {
+router.get('/loans/:id', authenticate, requireModuleAccess('pawnbroking', 'View'), async (req, res) => {
   try {
     const loan = await db('tbl_pawn_loan_header').where({ Loan_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!loan) return sendError(res, 404, 'Loan not found.');
@@ -65,7 +66,7 @@ router.get('/loans/:id', authenticate, async (req, res) => {
 });
 
 // ── POST /api/pawnbroking/loans ───────────────────────────────────────────────
-router.post('/loans', authenticate, [
+router.post('/loans', authenticate, requireModuleAccess('pawnbroking', 'Add'), [
   body('Customer_ID').notEmpty().withMessage('Customer is required'),
   body('Loan_Date').notEmpty().withMessage('Loan date is required'),
   body('Loan_Amount').isFloat({ gt: 0 }).withMessage('Loan amount must be greater than 0'),
@@ -130,7 +131,7 @@ router.post('/loans', authenticate, [
 
 // ── POST /api/pawnbroking/loans/:id/transactions ──────────────────────────────
 // Txn_Type: 'Interest Receipt' | 'Part Payment' | 'Redemption' | 'Auction' | 'Top-Up'
-router.post('/loans/:id/transactions', authenticate, [
+router.post('/loans/:id/transactions', authenticate, requireModuleAccess('pawnbroking', 'Edit'), [
   body('Txn_Type').notEmpty(),
   body('Total_Amount').isFloat({ gt: 0 }),
 ], async (req, res) => {
@@ -201,7 +202,7 @@ router.post('/loans/:id/transactions', authenticate, [
 });
 
 // ── POST /api/pawnbroking/loans/:id/auction ───────────────────────────────────
-router.post('/loans/:id/auction', authenticate, [body('Auction_Sale_Value').isFloat({ gt: 0 })], async (req, res) => {
+router.post('/loans/:id/auction', authenticate, requireModuleAccess('pawnbroking', 'Approve'), [body('Auction_Sale_Value').isFloat({ gt: 0 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
@@ -256,7 +257,7 @@ router.post('/loans/:id/auction', authenticate, [body('Auction_Sale_Value').isFl
 });
 
 // ── GET /api/pawnbroking/overdue ──────────────────────────────────────────────
-router.get('/overdue', authenticate, async (req, res) => {
+router.get('/overdue', authenticate, requireModuleAccess('pawnbroking', 'View'), async (req, res) => {
   try {
     const rows = await db('tbl_pawn_loan_header as l')
       .leftJoin('tbl_customer_master as c', 'l.Customer_ID', 'c.Customer_ID')
