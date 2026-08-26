@@ -7,6 +7,7 @@ const { computeClosingReport } = require('../services/closingReportService');
 const { getAllowedBranches, requireValidBranch, withBranch } = require('../utils/branchAccess');
 const { generateClosingReportPDF } = require('../services/pdfService');
 const dayjs = require('dayjs');
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 // ─── GET /api/reports/sales-summary ───────────────────────────────────────────
 router.get('/sales-summary', authenticate, async (req, res) => {
@@ -470,7 +471,14 @@ router.get('/financial', authenticate, async (req, res) => {
     // timeline (the frontend has a single Bank Book tab, not per-bank) ──────
     const bankAccountIds = accounts.filter((a) => a.Account_Group === 'Assets' && a.Account_Sub_Group === 'Bank').map((a) => a.Account_ID);
     const bankEntries = inWindow.filter((e) => bankAccountIds.includes(e.Account_ID)).sort((a, b) => String(a.Entry_Date).localeCompare(String(b.Entry_Date)));
-    let bankRunning = 0;
+    // Was hardcoded to 0 (found via audit) — understated/misreported the
+    // running balance for any period after the tenant's very first,
+    // unlike the Cash Book right above it, which already seeds correctly.
+    const priorToBankWindow = allEntries.filter((e) => {
+      const d = e.Entry_Date instanceof Date ? e.Entry_Date.toISOString().slice(0, 10) : String(e.Entry_Date).slice(0, 10);
+      return d < fromDate;
+    });
+    let bankRunning = balanceOfSubGroup(priorToBankWindow, 'Assets', 'Bank');
     const bankBook = bankEntries.map((e) => {
       bankRunning += (e.Entry_Type === 'Dr' ? 1 : -1) * parseFloat(e.Amount);
       return { date: e.Entry_Date, particulars: e.Narration || e.Journal_Number, reference: e.Reference, debit: e.Entry_Type === 'Dr' ? parseFloat(e.Amount) : 0, credit: e.Entry_Type === 'Cr' ? parseFloat(e.Amount) : 0, balance: Math.round(bankRunning * 100) / 100 };
@@ -526,6 +534,16 @@ router.get('/financial', authenticate, async (req, res) => {
       .select(db.raw('SUM("Total_Amount") as total_purchases')).catch(() => [{ total_purchases: 0 }]);
     const ts = salesTotals || {}; const tp = purchaseTotals || {};
 
+    // Was hardcoded to 0 (found via audit) — real making-charge total,
+    // same date range/exclusions as the sales totals above.
+    const [makingTotals] = await excludeHiddenStockSales(db('tbl_sales_details as sd')
+      .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
+      .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
+      .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .select(db.raw('SUM("sd"."Making_Charge_Applied") as total_making'));
+    const totalMaking = parseFloat(makingTotals?.total_making || 0);
+
     const expenseAccountIds = accounts.filter((a) => a.Account_Group === 'Expenses' && a.Account_Sub_Group === 'Indirect Expense').map((a) => a.Account_ID);
     const operatingExpenses = inWindow.filter((e) => expenseAccountIds.includes(e.Account_ID) && e.Entry_Type === 'Dr').reduce((s, e) => s + parseFloat(e.Amount), 0);
 
@@ -533,7 +551,7 @@ router.get('/financial', authenticate, async (req, res) => {
     const netProfit = grossProfit - parseFloat(ts.total_discounts || 0) - operatingExpenses;
     const pnl = {
       total_sales: parseFloat(ts.total_sales || 0), total_purchases: parseFloat(tp.total_purchases || 0),
-      total_gst: parseFloat(ts.total_gst || 0), total_discounts: parseFloat(ts.total_discounts || 0), total_making: 0,
+      total_gst: parseFloat(ts.total_gst || 0), total_discounts: parseFloat(ts.total_discounts || 0), total_making: totalMaking,
       gross_profit: Math.round(grossProfit * 100) / 100, operating_expenses: Math.round(operatingExpenses * 100) / 100, net_profit: Math.round(netProfit * 100) / 100,
     };
 
@@ -563,10 +581,22 @@ router.get('/financial', authenticate, async (req, res) => {
       - balanceAsOf(upToWindowEnd, ['Input CGST Account', 'Input SGST Account', 'Input IGST Account']);
     const capital = balanceAsOf(upToWindowEnd, ['Owner Capital Account', 'Retained Earnings Account']) + netProfit;
 
+    const stockValue = parseFloat(stockVal?.mrp || 0);
+    // Was: client-side summed ALL 10 fields below (assets AND liabilities
+    // AND capital together) and divided by 2 to get "Total Assets" — an
+    // arithmetic trick that's only correct if Assets == Liabilities+Capital
+    // exactly, which isn't guaranteed (stock_value is sourced from
+    // tbl_ornament_master MRP, entirely outside the ledger everything else
+    // here comes from). Real totals, computed directly, sent explicitly
+    // instead of leaving the client to fabricate one.
+    const totalAssets = round2(cash + bank + stockValue + receivables + advanceGiven);
+    const totalLiabilitiesAndCapital = round2(payables + advanceReceived + schemeLiabilities + gstPayable + capital);
+
     const balanceSheet = {
-      cash, bank, stock_value: parseFloat(stockVal?.mrp || 0), receivables, advance_given: advanceGiven,
+      cash, bank, stock_value: stockValue, receivables, advance_given: advanceGiven,
       payables, advance_received: advanceReceived, scheme_liabilities: schemeLiabilities,
       gst_payable: Math.round(gstPayable * 100) / 100, capital: Math.round(capital * 100) / 100,
+      total_assets: totalAssets, total_liabilities_and_capital: totalLiabilitiesAndCapital,
     };
 
     return sendSuccess(res, { cashBook, bankBook, dayBook, pnl, balanceSheet, ledger });

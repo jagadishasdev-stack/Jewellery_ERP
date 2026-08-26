@@ -2,6 +2,7 @@
  * Financial Reports — Cash Book | Bank Book | Day Book | Ledger | P&L | Balance Sheet
  */
 import React, { useState, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Row, Col, Card, Typography, DatePicker, Button, Space, Tag, Tabs,
   Table, Statistic, Divider, Alert,
@@ -206,8 +207,13 @@ export default function FinancialReportsPage() {
               <Divider style={{margin:'8px 0'}} />
               <div style={{display:'flex',justifyContent:'space-between'}}>
                 <Text strong>TOTAL ASSETS</Text>
+                {/* Was: summed ALL 10 balance-sheet fields (assets AND
+                    liabilities AND capital together) and divided by 2 —
+                    an arithmetic trick with no guaranteed correctness.
+                    The backend now computes and sends the real total
+                    directly (see reports.js's /financial route). */}
                 <Text strong style={{color:'#52c41a',fontSize:14}}>
-                  {formatCurrency(Object.values(balanceSheet).reduce((s,v)=>s+parseFloat(v||0),0)/2)}
+                  {formatCurrency(parseFloat(balanceSheet.total_assets||0))}
                 </Text>
               </div>
             </Card>
@@ -226,7 +232,14 @@ export default function FinancialReportsPage() {
                   <Text strong style={{color:'#ff4d4f'}}>{formatCurrency(r.val)}</Text>
                 </div>
               ))}
-              <Alert message="Indicative only — for reference purposes." type="warning" showIcon style={{marginTop:12,fontSize:11}} />
+              <Divider style={{margin:'8px 0'}} />
+              <div style={{display:'flex',justifyContent:'space-between'}}>
+                <Text strong>TOTAL LIABILITIES & CAPITAL</Text>
+                <Text strong style={{color:'#ff4d4f',fontSize:14}}>
+                  {formatCurrency(parseFloat(balanceSheet.total_liabilities_and_capital||0))}
+                </Text>
+              </div>
+              <Alert message="Stock is valued at MRP, not cost — the two sides of this sheet are not expected to balance to the paisa. Use Accounting → Balance Sheet for the audited, cost-based figure." type="warning" showIcon style={{marginTop:12,fontSize:11}} />
             </Card>
           </Col>
         </Row>
@@ -246,6 +259,11 @@ export default function FinancialReportsPage() {
         </Space>
         </div>
       </div>
+      <Alert
+        type="info" showIcon closable style={{ marginBottom: 12, borderRadius: 8 }}
+        message="A dedicated Accounting section now exists (Chart of Accounts, Ledger, Trial Balance, Cash/Bank Book per real account, P&L, Balance Sheet, Vouchers)"
+        description={<>It supports per-branch opening balances and per-bank books that this all-in-one view doesn't. This page still works and its numbers are correct — <Link to="/accounting">open Accounting</Link> for the fuller version.</>}
+      />
       <div ref={tabsRef}>
       <Tabs activeKey={activeTab} onChange={setActiveTab} type="card" items={tabItems} />
       </div>
