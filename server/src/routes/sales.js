@@ -554,6 +554,22 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
       }).catch(() => {});
     }
 
+    // Multi-Branch Management §34 — "when a sale occurs in HSR Layout,
+    // HSR sales increase, All Branches consolidated values update
+    // accordingly." Same io access pattern goldRate.js already uses
+    // (req.app.get('io'), the /display namespace, the tenant-${tenantId}
+    // room every connected admin client already auto-joins via
+    // useSocket.js) — a real-time nudge for any open dashboard to refetch,
+    // not a payload carrying the actual numbers itself (the dashboard
+    // still asks the server for those, so there's no risk of a client
+    // trusting a number it was never authorized to see).
+    const io = req.app.get('io');
+    if (io) {
+      io.of('/display').to(`tenant-${tenantId}`).emit('branch-data-changed', {
+        branchId: sale.Branch_ID || null, type: 'sale', tenantId,
+      });
+    }
+
     return sendSuccess(res, { sale: fullSale, items: details, payments: paymentBreakdown, voucherId }, 'Sale created successfully.', 201);
   } catch (err) {
     await trx.rollback();

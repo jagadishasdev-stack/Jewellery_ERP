@@ -6,22 +6,25 @@
  * independently (GET /api/reports/branch-performance), this page just
  * shows a clear message instead of an empty/broken table when it doesn't apply.
  */
-import React from 'react';
-import { Row, Col, Card, Typography, Table, Tag, Space, Statistic, Alert, List } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { Row, Col, Card, Typography, Table, Tag, Space, Statistic, Alert, List, Badge } from 'antd';
 import {
   ApartmentOutlined, TrophyOutlined, GoldOutlined, ShoppingOutlined,
   RiseOutlined, FallOutlined,
 } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { reportsApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { useBranch } from '../../contexts/BranchContext';
+import { useSocket } from '../../hooks/useSocket';
 import PageTour from '../../components/PageTour';
 
 const { Title, Text } = Typography;
 
 export default function BranchPerformancePage() {
   const { allBranches, loaded } = useBranch();
+  const qc = useQueryClient();
+  const { socket } = useSocket();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['branch-performance'],
@@ -29,6 +32,24 @@ export default function BranchPerformancePage() {
     enabled: loaded,
     retry: false,
   });
+
+  // Multi-Branch Management §34 — "when a sale occurs in HSR Layout, All
+  // Branches consolidated values update accordingly." The event only
+  // carries "something changed," never the actual numbers — the refetch
+  // still goes through the normal authenticated/branch-checked endpoint
+  // above, so this can't leak data the socket connection itself wasn't
+  // already authorized to receive.
+  const [justUpdated, setJustUpdated] = useState(false);
+  useEffect(() => {
+    if (!socket) return;
+    const onChange = () => {
+      qc.invalidateQueries({ queryKey: ['branch-performance'] });
+      setJustUpdated(true);
+      setTimeout(() => setJustUpdated(false), 2000);
+    };
+    socket.on('branch-data-changed', onChange);
+    return () => socket.off('branch-data-changed', onChange);
+  }, [socket, qc]);
 
   const rows = data?.branches || [];
   const combined = data?.combined || {};
@@ -65,7 +86,11 @@ export default function BranchPerformancePage() {
     <div className="page-wrapper">
       <div className="page-header">
         <Title level={4} style={{ margin: 0 }}>
-          <Space><ApartmentOutlined style={{ color: '#B8860B' }} />Branch Performance</Space>
+          <Space>
+            <ApartmentOutlined style={{ color: '#B8860B' }} />Branch Performance
+            <Badge status={socket?.connected ? 'success' : 'default'} text={<Text style={{ fontSize: 11, color: '#888' }}>{socket?.connected ? 'Live' : 'Offline'}</Text>} />
+            {justUpdated && <Tag color="green" style={{ fontSize: 10 }}>Updated</Tag>}
+          </Space>
         </Title>
       </div>
 
