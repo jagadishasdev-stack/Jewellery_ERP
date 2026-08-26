@@ -6,6 +6,23 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { modeVal } = require('../utils/dataModeFilter');
 const { generateTransferNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
+const { getAllowedBranches } = require('../utils/branchAccess');
+
+// Multi-Branch Management (spec §14/26/28) — a Branch-type transfer must
+// be authorized on BOTH ends independently: the sender needs access to
+// the branch stock is leaving, the receiver needs access to the branch
+// it's arriving at. This is deliberately separate from requireValidBranch/
+// withBranch (the X-Branch-ID "which screen am I working in" context used
+// elsewhere) — a transfer explicitly names its From/To branches in the
+// request body, so the check is against THOSE specific branches, not
+// whatever the caller's current header happens to say. Floor/Counter/Tray
+// transfers (no branch crossing at all) are untouched by this — nothing
+// here narrows who can move stock within their own branch.
+const assertBranchAccess = async (req, branchId) => {
+  if (!branchId) return true; // not a branch-crossing transfer
+  const access = await getAllowedBranches(req);
+  return access.allBranches || access.branchIds.includes(branchId);
+};
 
 // Resolves the ornaments affected by a hide/unhide request, based on level.
 // hiddenState filters to only-visible (false, for hide) or only-hidden (true, for unhide) stock.
@@ -53,6 +70,12 @@ router.post('/create', authenticate, [
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  // Multi-Branch Management — you can only send stock OUT of a branch you
+  // actually have access to. Checked before opening the transaction at
+  // all, so an unauthorized attempt never touches the DB.
+  if (!(await assertBranchAccess(req, req.body.From_Branch_ID))) {
+    return sendError(res, 403, 'You do not have access to the source branch for this transfer.');
+  }
   const trx = await db.transaction();
   try {
     const tenantId = req.user.tenantId;
@@ -96,9 +119,21 @@ router.post('/create', authenticate, [
 router.post('/:id/approve', authenticate, async (req, res) => {
   const trx = await db.transaction();
   try {
-    const transfer = await trx('tbl_stock_transfer').where({ Transfer_ID: req.params.id }).first();
+    // Tenant_ID was missing here entirely — Transfer_ID is a plain global
+    // auto-increment, so any authenticated user of ANY tenant could
+    // previously approve/view another tenant's transfer just by trying
+    // sequential IDs. Found while adding the branch-level check below;
+    // fixed alongside it since it's the exact same lookup.
+    const transfer = await trx('tbl_stock_transfer').where({ Transfer_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!transfer) { await trx.rollback(); return sendError(res, 404, 'Transfer not found.'); }
     if (transfer.Status !== 'Pending') { await trx.rollback(); return sendError(res, 400, 'Transfer already processed.'); }
+    // Multi-Branch Management — approving is the RECEIVING branch
+    // confirming stock actually arrived; requires access to To_Branch_ID,
+    // independent of who was allowed to create/send it.
+    if (!(await assertBranchAccess(req, transfer.To_Branch_ID))) {
+      await trx.rollback();
+      return sendError(res, 403, 'You do not have access to the destination branch for this transfer.');
+    }
 
     // Move ornaments to new location
     const items = await trx('tbl_stock_transfer_items').where({ Transfer_ID: req.params.id });
@@ -139,6 +174,17 @@ router.post('/:id/approve', authenticate, async (req, res) => {
 // ── POST /api/transfer/:id/reject  ───────────────────────────────────────────
 router.post('/:id/reject', authenticate, async (req, res) => {
   try {
+    // Same fixes as /approve just above: real Tenant_ID scoping (this
+    // used to update blindly by ID alone, no existence check, no tenant
+    // check at all) and the same destination-branch access requirement —
+    // rejecting is still the receiving branch's call to make.
+    const transfer = await db('tbl_stock_transfer').where({ Transfer_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!transfer) return sendError(res, 404, 'Transfer not found.');
+    if (transfer.Status !== 'Pending') return sendError(res, 400, 'Transfer already processed.');
+    if (!(await assertBranchAccess(req, transfer.To_Branch_ID))) {
+      return sendError(res, 403, 'You do not have access to the destination branch for this transfer.');
+    }
+
     await db('tbl_stock_transfer').where({ Transfer_ID: req.params.id }).update({ Status: 'Rejected', Approved_By: req.user.username });
     await db('tbl_stock_transfer_items').where({ Transfer_ID: req.params.id }).update({ Status: 'Rejected' });
     return sendSuccess(res, null, 'Transfer rejected.');
@@ -293,7 +339,8 @@ router.post('/unhide', authenticate, requirePermission('tenant_management'), [
 // ── GET /api/transfer/:id  ────────────────────────────────────────────────────
 router.get('/:id', authenticate, async (req, res) => {
   try {
-    const transfer = await db('tbl_stock_transfer').where({ Transfer_ID: req.params.id }).first();
+    // Same cross-tenant fix as /approve and /reject above.
+    const transfer = await db('tbl_stock_transfer').where({ Transfer_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!transfer) return sendError(res, 404, 'Transfer not found.');
     const items = await db('tbl_stock_transfer_items as ti')
       .leftJoin('tbl_ornament_master as o', 'ti.Ornament_ID', 'o.Ornament_ID')
