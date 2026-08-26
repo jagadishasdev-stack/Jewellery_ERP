@@ -68,6 +68,29 @@ test('Amount_Paid: 0 records a real credit sale — full balance owed, Pending s
   expect(totalDr).toBe(totalCr);
 });
 
+test('a credit sale sent WITH an explicit payments[] array containing only a ₹0 line still creates the sale (found while building Customer Advance)', async () => {
+  // A different variant of the same "Amount_Paid: 0" edge case above,
+  // but via the multi-payment payments[] array a caller like POS can
+  // send instead of the flat fields — e.g. {mode:'Cash', amount:0} as a
+  // placeholder for "nothing on this leg". The outer `payments.length >
+  // 0` check passed, but the >0 amount filter then emptied the array
+  // entirely, and `tbl_sales_payments.insert([])` is an empty query in
+  // Knex/pg — crashed the whole sale with a 500 instead of just
+  // skipping the (correctly) empty payment breakdown.
+  const ornament = await request(app).post('/api/ornaments').set(auth()).send({
+    Type_ID: typeId, Metal_Type: 'Gold', Gross_Weight: 4, Net_Gold_Weight: 3.6, Current_Gold_Rate: 6000,
+    Base_Making_Charge_Per_Gram: 100, Purchase_Cost: 15000, Total_Price: 20000,
+  });
+  const res = await request(app).post('/api/sales/create').set(auth()).send({
+    Customer_Name: 'Zero Payment Array Test Customer', Customer_Mobile: '9911100097',
+    Payment_Mode: 'Cash', Amount_Paid: 0, payments: [{ mode: 'Cash', amount: 0 }],
+    items: [{ Ornament_ID: ornament.body.data.Ornament_ID, Article_Number: ornament.body.data.Article_Number, Total_Line_Price: 20000 }],
+  });
+  expect(res.status).toBe(201);
+  expect(parseFloat(res.body.data.sale.Balance_Amount)).toBeGreaterThan(0);
+  expect(res.body.data.payments).toEqual([]); // correctly empty, not a crash
+});
+
 test('a sale via the flat Payment_Mode/Amount_Paid fields (no payments[] array) still posts a real, balanced journal', async () => {
   // This used to silently post NO journal at all for any caller that
   // doesn't build a payments[] array (POS always does; other callers may

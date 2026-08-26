@@ -15,7 +15,7 @@ import {
   DollarOutlined, RollbackOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { purchaseApi, karigarApi, masterApi, dayCloseApi, savingsApi, customersApi } from '../../api/modules';
+import { purchaseApi, karigarApi, masterApi, dayCloseApi, savingsApi, customersApi, customerAdvanceApi } from '../../api/modules';
 import api from '../../api/axios';
 import { formatCurrency } from '../../utils/calculations';
 import { useGoldRate } from '../../hooks/useGoldRate';
@@ -144,7 +144,7 @@ export default function PurchaseHub() {
     if (key === 'scheme_refund' || key === 'scheme_maturity') { navigate('/savings/adjustment'); return; }
     setActiveModal(key); form.resetFields(); setPurchaseItems([{ id: 1 }]);
   };
-  const closeModal = () => { setActiveModal(null); form.resetFields(); setMemberQuery(''); };
+  const closeModal = () => { setActiveModal(null); form.resetFields(); setMemberQuery(''); setCustomerQuery(''); };
 
   // ── Member lookup for Scheme Receipt (savings/collect needs a real
   // Member_ID, not a free-text member number) ────────────────────────────────
@@ -153,6 +153,22 @@ export default function PurchaseHub() {
     queryKey: ['scheme-member-search-hub', memberQuery],
     queryFn: () => savingsApi.searchForPos(memberQuery).then((r) => r.data.data || []),
     enabled: activeModal === 'scheme_receipt' && memberQuery.trim().length >= 2,
+  });
+
+  // ── Customer lookup for Advance Receipt / Advance Adjustment (both need
+  // a real Customer_ID — there is no walk-in-only concept for a ledger
+  // that has to be looked up again later) ────────────────────────────────
+  const [customerQuery, setCustomerQuery] = useState('');
+  const { data: customerResults, isFetching: customerSearching } = useQuery({
+    queryKey: ['customer-search-hub', customerQuery],
+    queryFn: () => customersApi.search({ mobile: customerQuery, name: customerQuery }).then((r) => r.data.data || []),
+    enabled: ['advance_receipt', 'advance_adj'].includes(activeModal) && customerQuery.trim().length >= 2,
+  });
+  const selectedAdvanceCustomerId = Form.useWatch('Customer_ID', form);
+  const { data: advanceBalance } = useQuery({
+    queryKey: ['customer-advance-balance', selectedAdvanceCustomerId],
+    queryFn: () => customerAdvanceApi.getBalance(selectedAdvanceCustomerId).then((r) => r.data.data),
+    enabled: activeModal === 'advance_adj' && !!selectedAdvanceCustomerId,
   });
 
   // No single "onNew" here — the hub's own cards ARE the "new entry"
@@ -274,32 +290,47 @@ export default function PurchaseHub() {
   };
 
   // ── Submit additional bills ───────────────────────────────────────────────
-  // gift_voucher and scheme_receipt now actually persist (dayCloseApi/
-  // savingsApi both already existed, fully built — this card just never
-  // called them). advance_receipt/advance_adj still only print: there is
-  // no generic (not-tied-to-an-order) customer-advance ledger anywhere in
-  // the backend yet to save them against — flagged as its own follow-up
-  // rather than silently faked.
+  // All four cards now actually persist. advance_receipt/advance_adj were
+  // the last two — there was no generic (not order-tied) customer-advance
+  // ledger anywhere in the backend; POST /api/customer-advance and its
+  // /apply route (built for exactly this) are what they call now.
   const onSubmitAdditional = async (values) => {
     const titleMap = {
       advance_receipt: 'ADVANCE RECEIPT', advance_adj: 'ADVANCE ADJUSTMENT',
       gift_voucher: 'GIFT VOUCHER', scheme_receipt: 'SCHEME INSTALLMENT RECEIPT',
     };
     const title = titleMap[activeModal] || 'RECEIPT';
-    let rows = `<div class="row"><span class="label">Customer Name</span><span class="val">${values.customer_name || 'Walk-in'}</span></div>
-      <div class="row"><span class="label">Mobile</span><span class="val">${values.mobile || '-'}</span></div>
+    let rows = `<div class="row"><span class="label">Customer Name</span><span class="val">${values.customer_label || values.customer_name || 'Walk-in'}</span></div>
       <div class="dline"></div>`;
     let voucherCode = values.voucher_code;
 
     if (activeModal === 'advance_receipt') {
+      if (!values.Customer_ID) { message.error('Search and select a customer first.'); return; }
+      try {
+        await customerAdvanceApi.create({
+          Customer_ID: values.Customer_ID, Amount: values.amount,
+          Payment_Mode: values.payment_mode || 'Cash', Purpose: values.purpose || null,
+        });
+      } catch (err) {
+        message.error(err.response?.data?.message || 'Failed to record advance.');
+        return;
+      }
       rows += `<div class="row"><span class="label">Purpose</span><span class="val">${values.purpose || 'Advance'}</span></div>
-        <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>
-        <div class="row"><span class="label">Reference</span><span class="val">${values.reference || '-'}</span></div>`;
+        <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
     } else if (activeModal === 'advance_adj') {
-      rows += `<div class="row"><span class="label">Invoice No</span><span class="val">${values.invoice_no || '-'}</span></div>
-        <div class="row"><span class="label">Advance Collected On</span><span class="val">${values.advance_date || '-'}</span></div>
-        <div class="row"><span class="label">Bill Amount</span><span class="val">₹${parseFloat(values.bill_amount || 0).toLocaleString('en-IN')}</span></div>
-        <div class="row"><span class="label">Advance Adjusted</span><span class="val">₹${parseFloat(values.advance_amount || 0).toLocaleString('en-IN')}</span></div>`;
+      if (!values.Customer_ID) { message.error('Search and select a customer first.'); return; }
+      let applyResult;
+      try {
+        const res = await customerAdvanceApi.apply(values.Customer_ID, { Invoice_Number: values.invoice_no, Amount: values.advance_amount });
+        applyResult = res.data.data;
+      } catch (err) {
+        message.error(err.response?.data?.message || 'Failed to apply advance.');
+        return;
+      }
+      rows += `<div class="row"><span class="label">Invoice No</span><span class="val">${values.invoice_no}</span></div>
+        <div class="row"><span class="label">Applied To Invoice</span><span class="val">₹${applyResult.applied_to_invoice.toLocaleString('en-IN')}</span></div>
+        ${applyResult.refund_amount > 0 ? `<div class="row"><span class="label">Refunded (bill already covered)</span><span class="val">₹${applyResult.refund_amount.toLocaleString('en-IN')}</span></div>` : ''}
+        <div class="row"><span class="label">Invoice Balance Remaining</span><span class="val">₹${applyResult.invoice_balance_remaining.toLocaleString('en-IN')}</span></div>`;
     } else if (activeModal === 'gift_voucher') {
       // Best-effort link to an existing customer by mobile — the voucher
       // still issues fine (Issued_To_Customer_ID is nullable) if nothing
@@ -340,7 +371,7 @@ export default function PurchaseHub() {
     const net = parseFloat(values.amount || values.advance_amount || values.voucher_amount || 0);
     const footer = `<div class="row"><span class="total">AMOUNT: ₹${net.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>`;
     printBill(title, rows, footer);
-    message.success(`${title} ${['advance_receipt', 'advance_adj'].includes(activeModal) ? 'printed' : 'saved & printed'}!`);
+    message.success(`${title} saved & printed!`);
     closeModal();
   };
 
@@ -555,29 +586,73 @@ export default function PurchaseHub() {
       </Modal>
 
       {/* ── Additional Bills Modals ───────────────────────────────────── */}
-      {/* Advance Receipt */}
+      {/* Advance Receipt — now really posts via customerAdvanceApi.create
+          (POST /customer-advance), which needs a real Customer_ID —
+          replaced the old free-text Customer Name/Mobile with a proper
+          search against existing customers, same pattern as Scheme
+          Receipt's member search above. */}
       <Modal title="💰 Advance Receipt" open={activeModal==='advance_receipt'} onCancel={closeModal} footer={null} width={480} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={onSubmitAdditional}>
-          <Row gutter={12}><Col xs={12}><Form.Item name="customer_name" label="Customer Name" rules={[{required:true}]}><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="mobile" label="Mobile"><Input /></Form.Item></Col></Row>
+          <Form.Item label="Customer" required>
+            <Select
+              showSearch placeholder="Search by name or mobile"
+              filterOption={false} loading={customerSearching}
+              onSearch={setCustomerQuery}
+              notFoundContent={customerQuery.trim().length < 2 ? 'Type at least 2 characters' : (customerSearching ? 'Searching…' : 'No match — add them under Customers first')}
+              onChange={(id, opt) => form.setFieldsValue({ Customer_ID: id, customer_label: opt?.label })}
+            >
+              {(customerResults || []).map((c) => (
+                <Option key={c.Customer_ID} value={c.Customer_ID} label={`${c.Customer_Name} (${c.Mobile_1})`}>
+                  {c.Customer_Name} — {c.Mobile_1}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="Customer_ID" hidden rules={[{ required: true, message: 'Select a customer.' }]}><Input /></Form.Item>
+          <Form.Item name="customer_label" hidden><Input /></Form.Item>
           <Form.Item name="purpose" label="Purpose / Against"><Input placeholder="e.g. Against Order No. ORD-001234" /></Form.Item>
           <Row gutter={12}><Col xs={12}><Form.Item name="amount" label="Amount (₹)" rules={[{required:true}]}><InputNumber style={{width:'100%'}} min={1} formatter={v=>`₹ ${v}`} /></Form.Item></Col>
             <Col xs={12}><Form.Item name="payment_mode" label="Payment Mode" initialValue="Cash"><Select><Option value="Cash">Cash</Option><Option value="UPI">UPI</Option><Option value="Card">Card</Option><Option value="Cheque">Cheque</Option></Select></Form.Item></Col></Row>
-          <Form.Item name="reference" label="Reference / UTR"><Input placeholder="UTR / Cheque No" /></Form.Item>
-          <Button type="primary" htmlType="submit" block size="large" style={{background:'#52c41a',borderColor:'#52c41a',fontWeight:700}}><PrinterOutlined /> Print Advance Receipt</Button>
+          <Button type="primary" htmlType="submit" block size="large" style={{background:'#52c41a',borderColor:'#52c41a',fontWeight:700}}><PrinterOutlined /> Collect & Print Advance Receipt</Button>
         </Form>
       </Modal>
 
-      {/* Advance Adjustment */}
+      {/* Advance Adjustment — now really posts via customerAdvanceApi.apply
+          (POST /customer-advance/:customerId/apply), which settles the
+          invoice's real outstanding balance first and refunds any excess.
+          Bill Amount/Advance Collected On were never real inputs the
+          backend could use — dropped; available balance now shows live
+          once a customer is picked. */}
       <Modal title="📋 Advance Adjustment" open={activeModal==='advance_adj'} onCancel={closeModal} footer={null} width={480} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={onSubmitAdditional}>
-          <Row gutter={12}><Col xs={12}><Form.Item name="customer_name" label="Customer Name" rules={[{required:true}]}><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="mobile" label="Mobile"><Input /></Form.Item></Col></Row>
-          <Row gutter={12}><Col xs={12}><Form.Item name="invoice_no" label="Sale Invoice No"><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="advance_date" label="Advance Collected On"><Input placeholder="DD-MMM-YYYY" /></Form.Item></Col></Row>
-          <Row gutter={12}><Col xs={12}><Form.Item name="bill_amount" label="Bill Amount (₹)"><InputNumber style={{width:'100%'}} min={0} formatter={v=>`₹ ${v}`} /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="advance_amount" label="Advance Adjusted (₹)" rules={[{required:true}]}><InputNumber style={{width:'100%'}} min={1} formatter={v=>`₹ ${v}`} /></Form.Item></Col></Row>
-          <Button type="primary" htmlType="submit" block size="large" style={{background:'#1890ff',borderColor:'#1890ff',fontWeight:700}}><PrinterOutlined /> Print Adjustment Receipt</Button>
+          <Form.Item label="Customer" required>
+            <Select
+              showSearch placeholder="Search by name or mobile"
+              filterOption={false} loading={customerSearching}
+              onSearch={setCustomerQuery}
+              notFoundContent={customerQuery.trim().length < 2 ? 'Type at least 2 characters' : (customerSearching ? 'Searching…' : 'No match')}
+              onChange={(id, opt) => form.setFieldsValue({ Customer_ID: id, customer_label: opt?.label })}
+            >
+              {(customerResults || []).map((c) => (
+                <Option key={c.Customer_ID} value={c.Customer_ID} label={`${c.Customer_Name} (${c.Mobile_1})`}>
+                  {c.Customer_Name} — {c.Mobile_1}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="Customer_ID" hidden rules={[{ required: true, message: 'Select a customer.' }]}><Input /></Form.Item>
+          <Form.Item name="customer_label" hidden><Input /></Form.Item>
+          {selectedAdvanceCustomerId && (
+            <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message={`Available advance: ₹${(advanceBalance?.total_available ?? 0).toLocaleString('en-IN')}`} />
+          )}
+          <Form.Item name="invoice_no" label="Sale Invoice No" rules={[{required:true, message:'Invoice number is required.'}]}>
+            <Input placeholder="e.g. INV-DLJ-20260811-0001" />
+          </Form.Item>
+          <Form.Item name="advance_amount" label="Advance to Apply (₹)" rules={[{required:true}]}>
+            <InputNumber style={{width:'100%'}} min={1} max={advanceBalance?.total_available} formatter={v=>`₹ ${v}`} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block size="large" style={{background:'#1890ff',borderColor:'#1890ff',fontWeight:700}}><PrinterOutlined /> Apply & Print Adjustment Receipt</Button>
         </Form>
       </Modal>
 

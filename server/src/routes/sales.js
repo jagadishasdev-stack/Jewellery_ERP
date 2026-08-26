@@ -392,6 +392,12 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     await trx('tbl_sales_details').insert(lineItems);
 
     // Insert multi-payment breakdown
+    // A fully-on-credit sale (e.g. Amount_Paid: 0, still sent with a
+    // {mode:'Cash', amount:0} placeholder line by some caller) used to
+    // crash the whole sale with a 500 here — the outer `payments.length
+    // > 0` check passed, but the >0 filter below then emptied the array
+    // entirely, and `.insert([])` is an empty query in Knex/pg. Only
+    // insert when there's actually a nonzero row left to insert.
     const payments = req.body.payments;
     if (payments && Array.isArray(payments) && payments.length > 0) {
       const paymentRows = payments
@@ -409,7 +415,7 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
           Scheme_Enrollment_ID: p.Scheme_Enrollment_ID || null,
           Created_By: req.user.username,
         }));
-      await trx('tbl_sales_payments').insert(paymentRows);
+      if (paymentRows.length > 0) await trx('tbl_sales_payments').insert(paymentRows);
     }
 
     // Mark ornaments as sold

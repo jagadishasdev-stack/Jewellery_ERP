@@ -107,6 +107,9 @@ async function teardown() {
   await db('tbl_sync_queue').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_tenant_subscription').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_sales_details').where({ Tenant_ID: TENANT_ID }).del();
+  // Children of tbl_sales_header/tbl_customer_advance — must go before both.
+  await db('tbl_customer_advance_application').where({ Tenant_ID: TENANT_ID }).del();
+  await db('tbl_customer_advance').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_sales_header').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_ornament_master').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_customer_master').where({ Tenant_ID: TENANT_ID }).del();

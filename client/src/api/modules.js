@@ -194,6 +194,13 @@ export const purchaseApi = {
   paySupplier: (id, data) => api.post(`/purchase/${id}/pay-supplier`, data),
 };
 
+// ─── Customer Advance ───────────────────────────────────────────────────────
+export const customerAdvanceApi = {
+  create: (data) => api.post('/customer-advance', data),
+  getBalance: (customerId) => api.get(`/customer-advance/balance/${customerId}`),
+  apply: (customerId, data) => api.post(`/customer-advance/${customerId}/apply`, data),
+};
+
 // ─── Repair ───────────────────────────────────────────────────────────────────
 // ─── Multi-Branch Management ──────────────────────────────────────────────────
 export const branchesApi = {
