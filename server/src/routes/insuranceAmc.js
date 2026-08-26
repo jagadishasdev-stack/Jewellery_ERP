@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
@@ -7,14 +8,14 @@ const { auditLog } = require('../utils/auditLogger');
 const dayjs = require('dayjs');
 
 // ── Insurance Policy Master ───────────────────────────────────────────────────
-router.get('/policies', authenticate, async (req, res) => {
+router.get('/policies', authenticate, requireModuleAccess('insurance_amc', 'View'), async (req, res) => {
   try {
     const rows = await db('tbl_insurance_policy_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true);
     return sendSuccess(res, rows);
   } catch (err) { return sendError(res, 500, 'Failed to fetch policies.'); }
 });
 
-router.post('/policies', authenticate, [body('Insurer_Name').notEmpty(), body('Policy_Number').notEmpty()], async (req, res) => {
+router.post('/policies', authenticate, requireModuleAccess('insurance_amc', 'Add'), [body('Insurer_Name').notEmpty(), body('Policy_Number').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -24,7 +25,7 @@ router.post('/policies', authenticate, [body('Insurer_Name').notEmpty(), body('P
 });
 
 // ── Customer Insurance ────────────────────────────────────────────────────────
-router.get('/customer-insurance', authenticate, async (req, res) => {
+router.get('/customer-insurance', authenticate, requireModuleAccess('insurance_amc', 'View'), async (req, res) => {
   const { customerId, status } = req.query;
   try {
     let qb = db('tbl_customer_insurance as i')
@@ -38,7 +39,7 @@ router.get('/customer-insurance', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch customer insurance.'); }
 });
 
-router.post('/customer-insurance', authenticate, [
+router.post('/customer-insurance', authenticate, requireModuleAccess('insurance_amc', 'Add'), [
   body('Customer_ID').notEmpty(),
   body('Sum_Insured').isFloat({ gt: 0 }),
   body('Start_Date').notEmpty(),
@@ -58,7 +59,7 @@ router.post('/customer-insurance', authenticate, [
   } catch (err) { return sendError(res, 500, 'Failed to create customer insurance.'); }
 });
 
-router.post('/customer-insurance/:id/claim', authenticate, [body('Claim_Amount').isFloat({ gt: 0 })], async (req, res) => {
+router.post('/customer-insurance/:id/claim', authenticate, requireModuleAccess('insurance_amc', 'Approve'), [body('Claim_Amount').isFloat({ gt: 0 })], async (req, res) => {
   try {
     const [row] = await db('tbl_customer_insurance').where({ Insurance_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Claimed', Claim_Date: dayjs().format('YYYY-MM-DD'), Claim_Amount: req.body.Claim_Amount }).returning('*');
@@ -68,12 +69,12 @@ router.post('/customer-insurance/:id/claim', authenticate, [body('Claim_Amount')
 });
 
 // ── AMC Plan Master ────────────────────────────────────────────────────────────
-router.get('/amc-plans', authenticate, async (req, res) => {
+router.get('/amc-plans', authenticate, requireModuleAccess('insurance_amc', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_amc_plan_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true)); }
   catch (err) { return sendError(res, 500, 'Failed to fetch AMC plans.'); }
 });
 
-router.post('/amc-plans', authenticate, [body('Plan_Name').notEmpty(), body('Amount').isFloat({ gt: 0 })], async (req, res) => {
+router.post('/amc-plans', authenticate, requireModuleAccess('insurance_amc', 'Add'), [body('Plan_Name').notEmpty(), body('Amount').isFloat({ gt: 0 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -83,7 +84,7 @@ router.post('/amc-plans', authenticate, [body('Plan_Name').notEmpty(), body('Amo
 });
 
 // ── AMC Enrollment ─────────────────────────────────────────────────────────────
-router.get('/amc-enrollments', authenticate, async (req, res) => {
+router.get('/amc-enrollments', authenticate, requireModuleAccess('insurance_amc', 'View'), async (req, res) => {
   const { customerId, status } = req.query;
   try {
     let qb = db('tbl_amc_enrollment as e')
@@ -97,7 +98,7 @@ router.get('/amc-enrollments', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch AMC enrollments.'); }
 });
 
-router.post('/amc-enrollments', authenticate, [body('Customer_ID').notEmpty(), body('Plan_ID').notEmpty()], async (req, res) => {
+router.post('/amc-enrollments', authenticate, requireModuleAccess('insurance_amc', 'Add'), [body('Customer_ID').notEmpty(), body('Plan_ID').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -116,7 +117,7 @@ router.post('/amc-enrollments', authenticate, [body('Customer_ID').notEmpty(), b
 // ── POST /api/insurance-amc/amc-enrollments/:id/service ───────────────────────
 // Logs one AMC service visit (cleaning/polish/re-plating) against the plan's
 // free-services allowance.
-router.post('/amc-enrollments/:id/service', authenticate, async (req, res) => {
+router.post('/amc-enrollments/:id/service', authenticate, requireModuleAccess('insurance_amc', 'Edit'), async (req, res) => {
   try {
     const enrollment = await db('tbl_amc_enrollment').where({ Enrollment_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!enrollment) return sendError(res, 404, 'Enrollment not found.');

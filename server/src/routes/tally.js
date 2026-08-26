@@ -3,17 +3,18 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const { buildLedgersXml, buildVouchersXml } = require('../utils/tallyXmlBuilder');
 
 // ── Tally Config (one row per tenant) ──────────────────────────────────────────
-router.get('/config', authenticate, async (req, res) => {
+router.get('/config', authenticate, requireModuleAccess('tally_bridge', 'View'), async (req, res) => {
   try {
     const row = await db('tbl_tally_config').where('Tenant_ID', req.user.tenantId).first();
     return sendSuccess(res, row || null);
   } catch (err) { return sendError(res, 500, 'Failed to fetch Tally config.'); }
 });
 
-router.put('/config', authenticate, async (req, res) => {
+router.put('/config', authenticate, requireModuleAccess('tally_bridge', 'Edit'), async (req, res) => {
   try {
     const existing = await db('tbl_tally_config').where('Tenant_ID', req.user.tenantId).first();
     if (existing) {
@@ -26,7 +27,7 @@ router.put('/config', authenticate, async (req, res) => {
 });
 
 // ── Sync Log ─────────────────────────────────────────────────────────────────────
-router.get('/sync-log', authenticate, async (req, res) => {
+router.get('/sync-log', authenticate, requireModuleAccess('tally_bridge', 'View'), async (req, res) => {
   const { status, syncType } = req.query;
   try {
     let qb = db('tbl_tally_sync_log').where('Tenant_ID', req.user.tenantId);
@@ -42,7 +43,7 @@ router.get('/sync-log', authenticate, async (req, res) => {
 // endpoint gives the rest of the app a real, working contract to call, and
 // leaves the entry Pending for whatever actually talks to Tally to pick up
 // and mark Synced/Failed.
-router.post('/sync', authenticate, [
+router.post('/sync', authenticate, requireModuleAccess('tally_bridge', 'Add'), [
   body('Sync_Type').isIn(['Voucher', 'Ledger', 'StockItem']), body('Reference_Table').notEmpty(), body('Reference_ID').notEmpty(),
 ], async (req, res) => {
   const tenantId = req.user.tenantId;
@@ -54,7 +55,7 @@ router.post('/sync', authenticate, [
   } catch (err) { return sendError(res, 500, 'Failed to queue Tally sync: ' + err.message); }
 });
 
-router.put('/sync-log/:id', authenticate, [body('Status').isIn(['Pending', 'Synced', 'Failed'])], async (req, res) => {
+router.put('/sync-log/:id', authenticate, requireModuleAccess('tally_bridge', 'Edit'), [body('Status').isIn(['Pending', 'Synced', 'Failed'])], async (req, res) => {
   try {
     const update = { ...req.body };
     if (req.body.Status === 'Synced') update.Synced_Date = new Date();
@@ -68,7 +69,7 @@ router.put('/sync-log/:id', authenticate, [body('Status').isIn(['Pending', 'Sync
 // Downloadable Tally-import-ready XML for the Chart of Accounts. Deliberately
 // a download, not an automatic push — a bookkeeper should review/import this
 // once via Tally's own Import Data screen before anything is ever pushed live.
-router.get('/export/ledgers', authenticate, async (req, res) => {
+router.get('/export/ledgers', authenticate, requireModuleAccess('tally_bridge', 'View'), async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
     const config = await db('tbl_tally_config').where({ Tenant_ID: tenantId }).first();
@@ -114,7 +115,7 @@ async function resolveJournalsForExport(tenantId, from, to) {
 // been queued since the last sync) and marks them Synced on successful
 // generation — generating the file IS the "sync" for a download-then-import
 // workflow, since there's no way to confirm Tally itself actually imported it.
-router.get('/export/vouchers', authenticate, async (req, res) => {
+router.get('/export/vouchers', authenticate, requireModuleAccess('tally_bridge', 'View'), async (req, res) => {
   const tenantId = req.user.tenantId;
   const { from, to } = req.query;
   try {
@@ -144,7 +145,7 @@ router.get('/export/vouchers', authenticate, async (req, res) => {
 // route, this is a read-only companion and deliberately never marks
 // anything Synced, so downloading it can never interfere with the XML
 // export's Pending-queue bookkeeping.
-router.get('/export/vouchers-excel', authenticate, async (req, res) => {
+router.get('/export/vouchers-excel', authenticate, requireModuleAccess('tally_bridge', 'View'), async (req, res) => {
   const tenantId = req.user.tenantId;
   const { from, to } = req.query;
   if (!from || !to) return sendError(res, 400, 'from and to date are both required.');
@@ -183,7 +184,7 @@ router.get('/export/vouchers-excel', authenticate, async (req, res) => {
 // ever verify. Every outcome (including "couldn't even connect") is logged
 // to tbl_tally_sync_log rather than assumed — never claims success it
 // didn't actually observe.
-router.post('/push', authenticate, async (req, res) => {
+router.post('/push', authenticate, requireModuleAccess('tally_bridge', 'Approve'), async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
     const config = await db('tbl_tally_config').where({ Tenant_ID: tenantId, Sync_Enabled: true }).first();

@@ -3,10 +3,11 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const dayjs = require('dayjs');
 
 // ── Gem/Diamond Certification ────────────────────────────────────────────────────
-router.get('/certificates', authenticate, async (req, res) => {
+router.get('/certificates', authenticate, requireModuleAccess('guarantor_certification', 'View'), async (req, res) => {
   const { ornamentId } = req.query;
   try {
     let qb = db('tbl_gem_certificate').where('Tenant_ID', req.user.tenantId).where('Is_Active', true);
@@ -15,7 +16,7 @@ router.get('/certificates', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch certificates.'); }
 });
 
-router.post('/certificates', authenticate, [body('Certifying_Lab').notEmpty(), body('Certificate_Number').notEmpty()], async (req, res) => {
+router.post('/certificates', authenticate, requireModuleAccess('guarantor_certification', 'Add'), [body('Certifying_Lab').notEmpty(), body('Certificate_Number').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -28,7 +29,7 @@ router.post('/certificates', authenticate, [body('Certifying_Lab').notEmpty(), b
 });
 
 // ── Reorder Requests ────────────────────────────────────────────────────────────
-router.get('/reorder-requests', authenticate, async (req, res) => {
+router.get('/reorder-requests', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'View'), async (req, res) => {
   const { status } = req.query;
   try {
     let qb = db('tbl_reorder_request as r')
@@ -45,7 +46,7 @@ router.get('/reorder-requests', authenticate, async (req, res) => {
 // Type_ID/Design_ID for stock below Min_Stock_Level and raises one reorder
 // request per below-threshold group, skipping any group that already has
 // an open request (avoids spamming duplicates on repeated scans).
-router.post('/reorder-requests/auto-scan', authenticate, async (req, res) => {
+router.post('/reorder-requests/auto-scan', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'Add'), async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
     const low = await db('tbl_ornament_master')
@@ -72,7 +73,7 @@ router.post('/reorder-requests/auto-scan', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to auto-scan for reorder: ' + err.message); }
 });
 
-router.post('/reorder-requests', authenticate, [body('Requested_Qty').isInt({ gt: 0 })], async (req, res) => {
+router.post('/reorder-requests', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'Add'), [body('Requested_Qty').isInt({ gt: 0 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -81,7 +82,7 @@ router.post('/reorder-requests', authenticate, [body('Requested_Qty').isInt({ gt
   } catch (err) { return sendError(res, 500, 'Failed to create reorder request.'); }
 });
 
-router.put('/reorder-requests/:id', authenticate, [body('Status').isIn(['Pending', 'Ordered', 'Received', 'Cancelled'])], async (req, res) => {
+router.put('/reorder-requests/:id', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'Edit'), [body('Status').isIn(['Pending', 'Ordered', 'Received', 'Cancelled'])], async (req, res) => {
   try {
     const [row] = await db('tbl_reorder_request').where({ Request_ID: req.params.id, Tenant_ID: req.user.tenantId }).update(req.body).returning('*');
     if (!row) return sendError(res, 404, 'Reorder request not found.');
@@ -90,7 +91,7 @@ router.put('/reorder-requests/:id', authenticate, [body('Status').isIn(['Pending
 });
 
 // ── RFID Scan Log ────────────────────────────────────────────────────────────────
-router.get('/rfid-scans', authenticate, async (req, res) => {
+router.get('/rfid-scans', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'View'), async (req, res) => {
   const { rfidTag, ornamentId } = req.query;
   try {
     let qb = db('tbl_rfid_scan_log').where('Tenant_ID', req.user.tenantId);
@@ -100,7 +101,7 @@ router.get('/rfid-scans', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch RFID scans.'); }
 });
 
-router.post('/rfid-scans', authenticate, [body('RFID_Tag').notEmpty(), body('Scan_Type').isIn(['Stock Check', 'Sale', 'Transfer', 'Audit', 'Gate'])], async (req, res) => {
+router.post('/rfid-scans', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'Add'), [body('RFID_Tag').notEmpty(), body('Scan_Type').isIn(['Stock Check', 'Sale', 'Transfer', 'Audit', 'Gate'])], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -113,12 +114,12 @@ router.post('/rfid-scans', authenticate, [body('RFID_Tag').notEmpty(), body('Sca
 });
 
 // ── Card Surcharge Master ──────────────────────────────────────────────────────
-router.get('/card-charges', authenticate, async (req, res) => {
+router.get('/card-charges', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_card_charges_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true)); }
   catch (err) { return sendError(res, 500, 'Failed to fetch card charges.'); }
 });
 
-router.post('/card-charges', authenticate, [body('Card_Type').isIn(['Credit', 'Debit', 'Wallet'])], async (req, res) => {
+router.post('/card-charges', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'Add'), [body('Card_Type').isIn(['Credit', 'Debit', 'Wallet'])], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {

@@ -3,15 +3,16 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const dayjs = require('dayjs');
 
 // ── HSN Master (global — no Tenant_ID column, shared across all tenants) ────────
-router.get('/hsn', authenticate, async (req, res) => {
+router.get('/hsn', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_hsn_master').where('Is_Active', true).orderBy('HSN_Code')); }
   catch (err) { return sendError(res, 500, 'Failed to fetch HSN codes.'); }
 });
 
-router.post('/hsn', authenticate, [body('HSN_Code').notEmpty(), body('GST_Percentage').isFloat({ min: 0 })], async (req, res) => {
+router.post('/hsn', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'Add'), [body('HSN_Code').notEmpty(), body('GST_Percentage').isFloat({ min: 0 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -23,7 +24,7 @@ router.post('/hsn', authenticate, [body('HSN_Code').notEmpty(), body('GST_Percen
 });
 
 // ── e-Invoice Log ────────────────────────────────────────────────────────────────
-router.get('/einvoice', authenticate, async (req, res) => {
+router.get('/einvoice', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'View'), async (req, res) => {
   const { saleId, status } = req.query;
   try {
     let qb = db('tbl_einvoice_log as e')
@@ -41,7 +42,7 @@ router.get('/einvoice', authenticate, async (req, res) => {
 // endpoint gives the rest of the app (and this table) a real, working
 // contract to call today, and is the one place to plug an actual GSP client
 // in later without touching any caller.
-router.post('/einvoice/generate', authenticate, [body('Sale_ID').notEmpty()], async (req, res) => {
+router.post('/einvoice/generate', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'Add'), [body('Sale_ID').notEmpty()], async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
     const sale = await db('tbl_sales_header').where({ Sale_ID: req.body.Sale_ID, Tenant_ID: tenantId }).first();
@@ -62,7 +63,7 @@ router.post('/einvoice/generate', authenticate, [body('Sale_ID').notEmpty()], as
   } catch (err) { return sendError(res, 500, 'Failed to process e-invoice request: ' + err.message); }
 });
 
-router.post('/einvoice/:id/cancel', authenticate, [body('Cancellation_Reason').notEmpty()], async (req, res) => {
+router.post('/einvoice/:id/cancel', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'Delete'), [body('Cancellation_Reason').notEmpty()], async (req, res) => {
   try {
     const [row] = await db('tbl_einvoice_log').where({ Log_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Cancelled', Cancelled_Date: new Date(), Cancellation_Reason: req.body.Cancellation_Reason }).returning('*');
@@ -72,12 +73,12 @@ router.post('/einvoice/:id/cancel', authenticate, [body('Cancellation_Reason').n
 });
 
 // ── Loyalty Points Slabs ─────────────────────────────────────────────────────────
-router.get('/loyalty-slabs', authenticate, async (req, res) => {
+router.get('/loyalty-slabs', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_loyalty_points_slab').where('Tenant_ID', req.user.tenantId).where('Is_Active', true).orderBy('Amount_From')); }
   catch (err) { return sendError(res, 500, 'Failed to fetch loyalty slabs.'); }
 });
 
-router.post('/loyalty-slabs', authenticate, [body('Amount_From').isFloat({ min: 0 }), body('Points_Per_Unit').isFloat({ gt: 0 })], async (req, res) => {
+router.post('/loyalty-slabs', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'Add'), [body('Amount_From').isFloat({ min: 0 }), body('Points_Per_Unit').isFloat({ gt: 0 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -88,7 +89,7 @@ router.post('/loyalty-slabs', authenticate, [body('Amount_From').isFloat({ min: 
 
 // GET /loyalty-slabs/calculate?amount=&metalType= — the actual points math,
 // so the billing screen doesn't need to duplicate the slab-matching logic.
-router.get('/loyalty-slabs/calculate', authenticate, async (req, res) => {
+router.get('/loyalty-slabs/calculate', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'View'), async (req, res) => {
   const amount = parseFloat(req.query.amount);
   if (!Number.isFinite(amount) || amount <= 0) return sendError(res, 400, 'amount query param is required and must be > 0.');
   try {

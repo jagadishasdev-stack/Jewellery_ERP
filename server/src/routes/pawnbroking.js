@@ -8,6 +8,7 @@ const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const { nextNumber } = require('../utils/numberFormat');
 const { requireModuleAccess } = require('../utils/moduleOverride');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const dayjs = require('dayjs');
 
 // tenantCode passed as the raw tenantId (not underscore-stripped) — this
@@ -36,14 +37,20 @@ function calcInterestDue(loan, asOfDate = dayjs()) {
 }
 
 // ── GET /api/pawnbroking/loans ────────────────────────────────────────────────
-router.get('/loans', authenticate, requireModuleAccess('pawnbroking', 'View'), async (req, res) => {
+// tbl_pawn_loan_header already had a Branch_ID column (pledged goods
+// physically sit at one branch) that this route never used (found via
+// audit, same "schema exists, route ignores it" pattern found repeatedly
+// this session).
+router.get('/loans', authenticate, requireModuleAccess('pawnbroking', 'View'), requireValidBranch, async (req, res) => {
   const { status, customerId, page = 1, limit = 30 } = req.query;
   try {
     let qb = db('tbl_pawn_loan_header as l')
       .leftJoin('tbl_customer_master as c', 'l.Customer_ID', 'c.Customer_ID')
       .where('l.Tenant_ID', req.user.tenantId)
       .select('l.*', 'c.Customer_Name', 'c.Mobile_1');
-    const countQb = db('tbl_pawn_loan_header').where('Tenant_ID', req.user.tenantId);
+    qb = withBranch(qb, req, 'l.Branch_ID');
+    let countQb = db('tbl_pawn_loan_header').where('Tenant_ID', req.user.tenantId);
+    countQb = withBranch(countQb, req, 'Branch_ID');
     if (status) { qb = qb.where('l.Status', status); countQb.where('Status', status); }
     if (customerId) { qb = qb.where('l.Customer_ID', customerId); countQb.where('Customer_ID', customerId); }
     const [{ count }] = await countQb.count('Loan_ID as count');
@@ -66,7 +73,7 @@ router.get('/loans/:id', authenticate, requireModuleAccess('pawnbroking', 'View'
 });
 
 // ── POST /api/pawnbroking/loans ───────────────────────────────────────────────
-router.post('/loans', authenticate, requireModuleAccess('pawnbroking', 'Add'), [
+router.post('/loans', authenticate, requireModuleAccess('pawnbroking', 'Add'), requireValidBranch, [
   body('Customer_ID').notEmpty().withMessage('Customer is required'),
   body('Loan_Date').notEmpty().withMessage('Loan date is required'),
   body('Loan_Amount').isFloat({ gt: 0 }).withMessage('Loan amount must be greater than 0'),
@@ -88,6 +95,7 @@ router.post('/loans', authenticate, requireModuleAccess('pawnbroking', 'Add'), [
     const [loan] = await db('tbl_pawn_loan_header').insert({
       ...header,
       Tenant_ID: tenantId,
+      Branch_ID: resolveBranchForInsert(req, header.Branch_ID),
       Loan_Number: await genLoanNumber(tenantId),
       Total_Gross_Weight: grossTotal,
       Total_Net_Weight: netTotal,
@@ -116,7 +124,7 @@ router.post('/loans', authenticate, requireModuleAccess('pawnbroking', 'Add'), [
     // for the concrete failure mode: an export/report run immediately
     // after could otherwise miss the entry entirely).
     await postJournal({
-      tenantId, sourceType: 'JOURNAL', sourceId: loan.Loan_ID, reference: loan.Loan_Number,
+      tenantId, sourceType: 'JOURNAL', sourceId: loan.Loan_ID, reference: loan.Loan_Number, branchId: loan.Branch_ID,
       narration: `Pawn loan disbursed — ${loan.Loan_Number}`, createdBy: req.user.username,
       lines: [
         { account: 'Pawn Loan Receivable Account', group: 'Assets', sub: 'Receivable', type: 'Dr', amount: parseFloat(loan.Loan_Amount) },
@@ -191,7 +199,7 @@ router.post('/loans/:id/transactions', authenticate, requireModuleAccess('pawnbr
             ...(principalCollected > 0 ? [{ account: 'Pawn Loan Receivable Account', group: 'Assets', sub: 'Receivable', type: 'Cr', amount: principalCollected }] : []),
           ];
       await postJournal({
-        tenantId, sourceType: 'JOURNAL', sourceId: txn.Txn_ID, reference: txn.Receipt_Number,
+        tenantId, sourceType: 'JOURNAL', sourceId: txn.Txn_ID, reference: txn.Receipt_Number, branchId: loan.Branch_ID,
         narration, createdBy: req.user.username, lines,
       });
     })().catch((e) => console.error('[Pawnbroking] Transaction ledger post failed (transaction still recorded fine):', e.message));
@@ -247,7 +255,7 @@ router.post('/loans/:id/auction', authenticate, requireModuleAccess('pawnbroking
       // uses the bare Loan_Number) — otherwise two entirely different
       // postings for the same loan share one reference with no way to
       // tell them apart except by reading the narration text.
-      tenantId, sourceType: 'JOURNAL', sourceId: loan.Loan_ID, reference: `${loan.Loan_Number}-AUCTION`,
+      tenantId, sourceType: 'JOURNAL', sourceId: loan.Loan_ID, reference: `${loan.Loan_Number}-AUCTION`, branchId: loan.Branch_ID,
       narration: `Pledge auctioned — ${loan.Loan_Number}`, createdBy: req.user.username, lines,
     }).catch((e) => console.error('[Pawnbroking] Auction ledger post failed (auction still recorded fine):', e.message));
 
@@ -257,13 +265,15 @@ router.post('/loans/:id/auction', authenticate, requireModuleAccess('pawnbroking
 });
 
 // ── GET /api/pawnbroking/overdue ──────────────────────────────────────────────
-router.get('/overdue', authenticate, requireModuleAccess('pawnbroking', 'View'), async (req, res) => {
+router.get('/overdue', authenticate, requireModuleAccess('pawnbroking', 'View'), requireValidBranch, async (req, res) => {
   try {
-    const rows = await db('tbl_pawn_loan_header as l')
+    let qb = db('tbl_pawn_loan_header as l')
       .leftJoin('tbl_customer_master as c', 'l.Customer_ID', 'c.Customer_ID')
       .where('l.Tenant_ID', req.user.tenantId).where('l.Status', 'Active')
       .where('l.Due_Date', '<', dayjs().format('YYYY-MM-DD'))
       .select('l.*', 'c.Customer_Name', 'c.Mobile_1').orderBy('l.Due_Date', 'asc');
+    qb = withBranch(qb, req, 'l.Branch_ID');
+    const rows = await qb;
     return sendSuccess(res, rows.map((l) => ({ ...l, interestDue: calcInterestDue(l) })));
   } catch (err) { return sendError(res, 500, 'Failed to fetch overdue loans.'); }
 });

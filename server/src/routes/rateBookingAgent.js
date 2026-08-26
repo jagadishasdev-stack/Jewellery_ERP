@@ -3,17 +3,18 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const { nextNumber } = require('../utils/numberFormat');
 const dayjs = require('dayjs');
 
 // ── Agent Master ────────────────────────────────────────────────────────────────
 // (tbl_agent_master pre-existed this pass with no route of its own yet.)
-router.get('/agents', authenticate, async (req, res) => {
+router.get('/agents', authenticate, requireModuleAccess('rate_booking_agent_commission', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_agent_master').where('Tenant_ID', req.user.tenantId).where('Status', 'Active')); }
   catch (err) { return sendError(res, 500, 'Failed to fetch agents.'); }
 });
 
-router.post('/agents', authenticate, [body('Agent_Name').notEmpty(), body('Mobile').notEmpty()], async (req, res) => {
+router.post('/agents', authenticate, requireModuleAccess('rate_booking_agent_commission', 'Add'), [body('Agent_Name').notEmpty(), body('Mobile').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -40,7 +41,7 @@ router.post('/agents', authenticate, [body('Agent_Name').notEmpty(), body('Mobil
 });
 
 // ── Rate Booking ────────────────────────────────────────────────────────────────
-router.get('/rate-bookings', authenticate, async (req, res) => {
+router.get('/rate-bookings', authenticate, requireModuleAccess('rate_booking_agent_commission', 'View'), async (req, res) => {
   const { status } = req.query;
   try {
     let qb = db('tbl_rate_booking as r')
@@ -52,7 +53,7 @@ router.get('/rate-bookings', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch rate bookings.'); }
 });
 
-router.post('/rate-bookings', authenticate, [
+router.post('/rate-bookings', authenticate, requireModuleAccess('rate_booking_agent_commission', 'Add'), [
   body('Metal_Type').notEmpty(), body('Booked_Rate').isFloat({ gt: 0 }), body('Weight_Booked').isFloat({ gt: 0 }), body('Valid_Until').notEmpty(),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -76,7 +77,7 @@ router.post('/rate-bookings', authenticate, [
 
 // POST /:id/utilize — links a booking to the sale that used it, so a
 // billing screen can pull the locked rate instead of the day's current one.
-router.post('/rate-bookings/:id/utilize', authenticate, [body('Utilized_Sale_ID').notEmpty()], async (req, res) => {
+router.post('/rate-bookings/:id/utilize', authenticate, requireModuleAccess('rate_booking_agent_commission', 'Edit'), [body('Utilized_Sale_ID').notEmpty()], async (req, res) => {
   try {
     const booking = await db('tbl_rate_booking').where({ Booking_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!booking) return sendError(res, 404, 'Booking not found.');
@@ -92,7 +93,7 @@ router.post('/rate-bookings/:id/utilize', authenticate, [body('Utilized_Sale_ID'
 });
 
 // ── Agent Commission ────────────────────────────────────────────────────────────
-router.get('/commissions', authenticate, async (req, res) => {
+router.get('/commissions', authenticate, requireModuleAccess('rate_booking_agent_commission', 'View'), async (req, res) => {
   const { agentId, status } = req.query;
   try {
     let qb = db('tbl_agent_commission_transactions as t')
@@ -107,7 +108,7 @@ router.get('/commissions', authenticate, async (req, res) => {
 // POST /commissions — computes commission from the agent's own default
 // rate (or an override) against a source amount (a sale or scheme
 // enrollment), so the caller doesn't have to duplicate the % math.
-router.post('/commissions', authenticate, [
+router.post('/commissions', authenticate, requireModuleAccess('rate_booking_agent_commission', 'Add'), [
   body('Agent_ID').notEmpty(), body('Source_Type').isIn(['Sale', 'Scheme']), body('Source_ID').notEmpty(), body('Commission_Base_Amount').isFloat({ gt: 0 }),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -125,7 +126,7 @@ router.post('/commissions', authenticate, [
   } catch (err) { return sendError(res, 500, 'Failed to calculate commission.'); }
 });
 
-router.post('/commissions/:id/pay', authenticate, [body('Payment_Reference').optional()], async (req, res) => {
+router.post('/commissions/:id/pay', authenticate, requireModuleAccess('rate_booking_agent_commission', 'Approve'), [body('Payment_Reference').optional()], async (req, res) => {
   try {
     const [row] = await db('tbl_agent_commission_transactions').where({ Txn_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Paid', Paid_Date: dayjs().format('YYYY-MM-DD'), Payment_Reference: req.body.Payment_Reference || null }).returning('*');

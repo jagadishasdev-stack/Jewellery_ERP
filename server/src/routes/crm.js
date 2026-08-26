@@ -3,10 +3,11 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const dayjs = require('dayjs');
 
 // ── Leads ───────────────────────────────────────────────────────────────────────
-router.get('/leads', authenticate, async (req, res) => {
+router.get('/leads', authenticate, requireModuleAccess('crm', 'View'), async (req, res) => {
   const { status, assignedTo } = req.query;
   try {
     let qb = db('tbl_crm_lead as l')
@@ -19,7 +20,7 @@ router.get('/leads', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch leads.'); }
 });
 
-router.post('/leads', authenticate, [body('Lead_Name').notEmpty(), body('Mobile').notEmpty()], async (req, res) => {
+router.post('/leads', authenticate, requireModuleAccess('crm', 'Add'), [body('Lead_Name').notEmpty(), body('Mobile').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -28,7 +29,7 @@ router.post('/leads', authenticate, [body('Lead_Name').notEmpty(), body('Mobile'
   } catch (err) { return sendError(res, 500, 'Failed to create lead.'); }
 });
 
-router.put('/leads/:id', authenticate, async (req, res) => {
+router.put('/leads/:id', authenticate, requireModuleAccess('crm', 'Edit'), async (req, res) => {
   try {
     const [row] = await db('tbl_crm_lead').where({ Lead_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ ...req.body, Modified_Date: new Date() }).returning('*');
@@ -40,7 +41,7 @@ router.put('/leads/:id', authenticate, async (req, res) => {
 // POST /api/crm/leads/:id/convert — turns a lead into a real customer record
 // in one step (rather than the caller having to POST /customers separately
 // and then remember to also close out the lead).
-router.post('/leads/:id/convert', authenticate, async (req, res) => {
+router.post('/leads/:id/convert', authenticate, requireModuleAccess('crm', 'Approve'), async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
     const lead = await db('tbl_crm_lead').where({ Lead_ID: req.params.id, Tenant_ID: tenantId }).first();
@@ -66,7 +67,7 @@ router.post('/leads/:id/convert', authenticate, async (req, res) => {
 });
 
 // ── Follow-ups ───────────────────────────────────────────────────────────────────
-router.get('/followups', authenticate, async (req, res) => {
+router.get('/followups', authenticate, requireModuleAccess('crm', 'View'), async (req, res) => {
   const { leadId, customerId, dueOnly } = req.query;
   try {
     let qb = db('tbl_crm_followup').where('Tenant_ID', req.user.tenantId);
@@ -77,7 +78,7 @@ router.get('/followups', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch follow-ups.'); }
 });
 
-router.post('/followups', authenticate, [body('Remarks').notEmpty()], async (req, res) => {
+router.post('/followups', authenticate, requireModuleAccess('crm', 'Add'), [body('Remarks').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -87,7 +88,7 @@ router.post('/followups', authenticate, [body('Remarks').notEmpty()], async (req
 });
 
 // ── Feedback ─────────────────────────────────────────────────────────────────────
-router.get('/feedback', authenticate, async (req, res) => {
+router.get('/feedback', authenticate, requireModuleAccess('crm', 'View'), async (req, res) => {
   const { status } = req.query;
   try {
     let qb = db('tbl_customer_feedback as f')
@@ -99,7 +100,7 @@ router.get('/feedback', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch feedback.'); }
 });
 
-router.post('/feedback', authenticate, [body('Rating').isInt({ min: 1, max: 5 })], async (req, res) => {
+router.post('/feedback', authenticate, requireModuleAccess('crm', 'Add'), [body('Rating').isInt({ min: 1, max: 5 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -108,7 +109,7 @@ router.post('/feedback', authenticate, [body('Rating').isInt({ min: 1, max: 5 })
   } catch (err) { return sendError(res, 500, 'Failed to record feedback.'); }
 });
 
-router.put('/feedback/:id/resolve', authenticate, [body('Resolution_Notes').notEmpty()], async (req, res) => {
+router.put('/feedback/:id/resolve', authenticate, requireModuleAccess('crm', 'Edit'), [body('Resolution_Notes').notEmpty()], async (req, res) => {
   try {
     const [row] = await db('tbl_customer_feedback').where({ Feedback_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Resolved', Resolution_Notes: req.body.Resolution_Notes }).returning('*');

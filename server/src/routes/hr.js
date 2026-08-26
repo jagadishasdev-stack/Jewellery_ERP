@@ -8,12 +8,13 @@ const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const dayjs = require('dayjs');
 const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 
 // ── Staff list (for attendance/salary/payroll pickers) ────────────────────────
 // No existing route exposed the tenant's staff for a UI dropdown — every
 // other module here needs one, so it lives here rather than being
 // duplicated per screen.
-router.get('/staff', authenticate, async (req, res) => {
+router.get('/staff', authenticate, requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   try {
     const rows = await db('tbl_user_master as u')
       .leftJoin('tbl_employee_details as e', 'u.User_ID', 'e.User_ID')
@@ -24,12 +25,12 @@ router.get('/staff', authenticate, async (req, res) => {
 });
 
 // ── Holiday Master ─────────────────────────────────────────────────────────────
-router.get('/holidays', authenticate, async (req, res) => {
+router.get('/holidays', authenticate, requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_holiday_master').where('Tenant_ID', req.user.tenantId).orderBy('Holiday_Date')); }
   catch (err) { return sendError(res, 500, 'Failed to fetch holidays.'); }
 });
 
-router.post('/holidays', authenticate, [body('Holiday_Date').notEmpty(), body('Holiday_Name').notEmpty()], async (req, res) => {
+router.post('/holidays', authenticate, requireModuleAccess('hr_payroll', 'Add'), [body('Holiday_Date').notEmpty(), body('Holiday_Name').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -39,7 +40,7 @@ router.post('/holidays', authenticate, [body('Holiday_Date').notEmpty(), body('H
 });
 
 // ── Attendance ──────────────────────────────────────────────────────────────
-router.get('/attendance', authenticate, async (req, res) => {
+router.get('/attendance', authenticate, requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   const { userId, from, to, date } = req.query;
   try {
     let qb = db('tbl_attendance as a')
@@ -56,7 +57,7 @@ router.get('/attendance', authenticate, async (req, res) => {
 
 // Mark/update one day's attendance for one or many staff — upsert on
 // (User_ID, Attendance_Date), matching the unique constraint on that table.
-router.post('/attendance', authenticate, [body('records').isArray({ min: 1 })], async (req, res) => {
+router.post('/attendance', authenticate, requireModuleAccess('hr_payroll', 'Add'), [body('records').isArray({ min: 1 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
@@ -84,7 +85,7 @@ router.post('/attendance', authenticate, [body('records').isArray({ min: 1 })], 
 // it scopes purely by User_ID, so tenant isolation here has to go
 // through tbl_user_master (which IS Tenant_ID-scoped) instead of a
 // column that doesn't exist on this table.
-router.get('/salary-structure/:userId', authenticate, requirePermission('accounts'), async (req, res) => {
+router.get('/salary-structure/:userId', authenticate, requirePermission('accounts'), requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   try {
     const owner = await db('tbl_user_master').where({ User_ID: req.params.userId, Tenant_ID: req.user.tenantId }).first('User_ID');
     if (!owner) return sendError(res, 404, 'User not found.');
@@ -93,7 +94,7 @@ router.get('/salary-structure/:userId', authenticate, requirePermission('account
   } catch (err) { return sendError(res, 500, 'Failed to fetch salary structure.'); }
 });
 
-router.post('/salary-structure', authenticate, requirePermission('accounts'), [body('User_ID').notEmpty(), body('Basic').isFloat({ gt: 0 }), body('Effective_From').notEmpty()], async (req, res) => {
+router.post('/salary-structure', authenticate, requirePermission('accounts'), requireModuleAccess('hr_payroll', 'Add'), [body('User_ID').notEmpty(), body('Basic').isFloat({ gt: 0 }), body('Effective_From').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -107,12 +108,12 @@ router.post('/salary-structure', authenticate, requirePermission('accounts'), [b
 });
 
 // ── Incentive Slabs ─────────────────────────────────────────────────────────────
-router.get('/incentive-slabs', authenticate, async (req, res) => {
+router.get('/incentive-slabs', authenticate, requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_incentive_slab_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true).orderBy('Amount_From')); }
   catch (err) { return sendError(res, 500, 'Failed to fetch incentive slabs.'); }
 });
 
-router.post('/incentive-slabs', authenticate, [body('Slab_Name').notEmpty(), body('Amount_From').isFloat({ min: 0 }), body('Incentive_Pct').isFloat({ gt: 0 })], async (req, res) => {
+router.post('/incentive-slabs', authenticate, requireModuleAccess('hr_payroll', 'Add'), [body('Slab_Name').notEmpty(), body('Amount_From').isFloat({ min: 0 }), body('Incentive_Pct').isFloat({ gt: 0 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -124,7 +125,7 @@ router.post('/incentive-slabs', authenticate, [body('Slab_Name').notEmpty(), bod
 // ── Sales Incentive Transactions ────────────────────────────────────────────────
 // Computes the incentive for one sale against the applicable slab and logs
 // it — called from the sales flow (or manually here) once a sale is billed.
-router.post('/sales-incentive', authenticate, [body('Sale_ID').notEmpty(), body('User_ID').notEmpty(), body('Sale_Base_Amount').isFloat({ gt: 0 })], async (req, res) => {
+router.post('/sales-incentive', authenticate, requireModuleAccess('hr_payroll', 'Add'), [body('Sale_ID').notEmpty(), body('User_ID').notEmpty(), body('Sale_Base_Amount').isFloat({ gt: 0 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
@@ -144,7 +145,7 @@ router.post('/sales-incentive', authenticate, [body('Sale_ID').notEmpty(), body(
   } catch (err) { return sendError(res, 500, 'Failed to calculate incentive: ' + err.message); }
 });
 
-router.get('/sales-incentive', authenticate, async (req, res) => {
+router.get('/sales-incentive', authenticate, requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   const { userId, payrollRunId } = req.query;
   try {
     let qb = db('tbl_sales_incentive_transactions as si')
@@ -159,7 +160,7 @@ router.get('/sales-incentive', authenticate, async (req, res) => {
 });
 
 // ── Payroll ─────────────────────────────────────────────────────────────────────
-router.get('/payroll/runs', authenticate, requireValidBranch, async (req, res) => {
+router.get('/payroll/runs', authenticate, requireValidBranch, requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   try {
     let qb = db('tbl_payroll_run').where('Tenant_ID', req.user.tenantId);
     qb = withBranch(qb, req);
@@ -168,7 +169,7 @@ router.get('/payroll/runs', authenticate, requireValidBranch, async (req, res) =
   catch (err) { return sendError(res, 500, 'Failed to fetch payroll runs.'); }
 });
 
-router.get('/payroll/runs/:id', authenticate, async (req, res) => {
+router.get('/payroll/runs/:id', authenticate, requireModuleAccess('hr_payroll', 'View'), async (req, res) => {
   try {
     const run = await db('tbl_payroll_run').where({ Run_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!run) return sendError(res, 404, 'Payroll run not found.');
@@ -183,7 +184,7 @@ router.get('/payroll/runs/:id', authenticate, async (req, res) => {
 // active staff member with a salary structure: attendance-based gross,
 // PF/ESI deductions from the structure's percentages, plus any pending
 // sales incentives, in one draft run.
-router.post('/payroll/runs', authenticate, requireValidBranch, requirePermission('accounts'), [body('Pay_Month').isInt({ min: 1, max: 12 }), body('Pay_Year').isInt({ min: 2020 })], async (req, res) => {
+router.post('/payroll/runs', authenticate, requireValidBranch, requirePermission('accounts'), requireModuleAccess('hr_payroll', 'Add'), [body('Pay_Month').isInt({ min: 1, max: 12 }), body('Pay_Year').isInt({ min: 2020 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
@@ -257,7 +258,7 @@ router.post('/payroll/runs', authenticate, requireValidBranch, requirePermission
 // frontend's only action on a Draft run is this one "Finalize" button,
 // so — matching that single-step UX exactly — finalizing IS paying:
 // every staff member's Net_Salary is marked paid here, in one go.
-router.post('/payroll/runs/:id/finalize', authenticate, requireValidBranch, requirePermission('accounts'), async (req, res) => {
+router.post('/payroll/runs/:id/finalize', authenticate, requireValidBranch, requirePermission('accounts'), requireModuleAccess('hr_payroll', 'Approve'), async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
     let existingQb = db('tbl_payroll_run').where({ Run_ID: req.params.id, Tenant_ID: tenantId });

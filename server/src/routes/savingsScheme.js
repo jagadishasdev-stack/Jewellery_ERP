@@ -10,6 +10,7 @@ const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const { generateSchemeAdjustmentNumber } = require('../utils/invoiceNumber');
 const { nextNumber } = require('../utils/numberFormat');
+const { resolveBranchForInsert } = require('../utils/branchAccess');
 
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -450,7 +451,11 @@ router.post('/collect', authenticate, [
       Cheque_Date: req.body.Cheque_Date || null,
       Collection_Source: req.body.Collection_Source || 'Counter',
       Collected_By: req.user.userId,
-      Branch_ID: req.body.Branch_ID || null,
+      // Active X-Branch-ID context now wins over a raw client-supplied
+      // Branch_ID (same resolveBranchForInsert convention every other
+      // module uses) — this used to trust req.body.Branch_ID directly,
+      // ignoring the active branch context entirely.
+      Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
       Agent_Code: req.body.Agent_Code || req.user.agentCode || null,
       Data_Mode: modeVal(req),
       Created_By: req.user.username,
@@ -501,16 +506,18 @@ router.post('/collect', authenticate, [
 
     await trx.commit();
 
-    // ── POST TO THE REAL LEDGER (non-blocking, same convention as Sales/
-    // Purchase/Day Close) — this used to ONLY write into a separate,
+    // ── POST TO THE REAL LEDGER — this used to ONLY write into a separate,
     // disconnected tbl_scheme_accounting_entries table that never reached
     // tbl_accounting_journal, so scheme collections never showed up in
     // Trial Balance, Ledger, Day Book, the Accounting Dashboard, or Tally
     // (see reports.js's balance-sheet comment on this exact gap). The
     // shadow-table insert below stays too — it's this module's own
     // scheme-specific audit trail — but the money now also actually lands
-    // in the books.
-    (async () => {
+    // in the books. Awaited (was fire-and-forget until now, despite this
+    // comment once claiming otherwise) — the response used to go out
+    // before the journal was guaranteed committed, the same race every
+    // other module in this codebase was already fixed for.
+    await (async () => {
       await db('tbl_scheme_accounting_entries').insert({
         Tenant_ID: tid, Txn_ID: txn.Txn_ID, Entry_Date: new Date(), Receipt_No: receiptNumber, Member_ID: member.Member_ID,
         Debit_Account: debitLedger.account, Credit_Account: creditLedger.account, Amount: netAmount,
@@ -518,7 +525,7 @@ router.post('/collect', authenticate, [
       }).catch(() => {}); // non-fatal if table doesn't exist yet
 
       await postJournal({
-        tenantId: tid, sourceType: 'RECEIPT', sourceId: txn.Txn_ID, reference: receiptNumber, narration: entryNarration,
+        tenantId: tid, sourceType: 'RECEIPT', sourceId: txn.Txn_ID, reference: receiptNumber, narration: entryNarration, branchId: txn.Branch_ID,
         createdBy: req.user.username,
         lines: [
           { account: debitLedger.account, group: debitLedger.group, sub: debitLedger.sub, type: 'Dr', amount: netAmount },
@@ -534,7 +541,7 @@ router.post('/collect', authenticate, [
           Amount: bonusGroup.Bonus_Amount, Narration: bonusNarration, Created_By: 'system',
         }).catch(() => {});
         await postJournal({
-          tenantId: tid, sourceType: 'JOURNAL', reference: `BONUS-${receiptNumber}`, narration: bonusNarration, createdBy: 'system',
+          tenantId: tid, sourceType: 'JOURNAL', reference: `BONUS-${receiptNumber}`, narration: bonusNarration, createdBy: 'system', branchId: txn.Branch_ID,
           lines: [
             { account: 'Scheme Bonus Expense Account', group: 'Expenses', sub: 'Indirect Expense', type: 'Dr', amount: bonusGroup.Bonus_Amount },
             { account: 'Scheme Bonus Provision Account', group: 'Liabilities', sub: 'Provision', type: 'Cr', amount: bonusGroup.Bonus_Amount },
@@ -974,8 +981,8 @@ router.post('/members/:id/adjust-invoice', authenticate, requirePermission('acco
 
     await trx.commit();
 
-    // ── Post to the real ledger (non-blocking, same convention as everywhere else) ──
-    (async () => {
+    // ── Post to the real ledger — awaited (see /collect's own comment above for why) ──
+    await (async () => {
       const lines = [];
       if (amount > 0) lines.push({ account: 'Customer Scheme Deposit Account', group: 'Liabilities', sub: 'Advance', type: 'Dr', amount });
       if (bonusAmount > 0) lines.push({ account: 'Scheme Bonus Provision Account', group: 'Liabilities', sub: 'Provision', type: 'Dr', amount: bonusAmount });
@@ -992,7 +999,7 @@ router.post('/members/:id/adjust-invoice', authenticate, requirePermission('acco
       }
       if (lines.length) {
         await postJournal({
-          tenantId: tid, sourceType: 'JOURNAL', reference: schemeVoucherNumber,
+          tenantId: tid, sourceType: 'JOURNAL', reference: schemeVoucherNumber, branchId: sale.Branch_ID,
           narration: `Scheme adjustment (post-hoc) | ${member.Member_Number} | ${sale.Invoice_Number}`, createdBy: req.user.username,
           lines,
         });
@@ -1098,8 +1105,8 @@ router.post('/members/:id/foreclose', authenticate, requirePermission('accounts'
 
     await trx.commit();
 
-    // ── Post to the real ledger (non-blocking) ──────────────────────────────
-    (async () => {
+    // ── Post to the real ledger — awaited (see /collect's own comment above for why) ──
+    await (async () => {
       const lines = [
         { account: 'Customer Scheme Deposit Account', group: 'Liabilities', sub: 'Advance', type: 'Dr', amount: availableBalance },
       ];
@@ -1113,7 +1120,12 @@ router.post('/members/:id/foreclose', authenticate, requirePermission('accounts'
         lines.push({ account: payoutLedger.account, group: payoutLedger.group, sub: payoutLedger.sub, type: 'Cr', amount: refundAmount });
       }
       await postJournal({
-        tenantId: tid, sourceType: 'JOURNAL', reference: schemeVoucherNumber,
+        // sale is only set for Settlement_Mode === 'Adjustment' — a pure
+        // Cash/Bank payout has no invoice to inherit a branch from, and
+        // tbl_scheme_members/tbl_scheme_groups have no Branch_ID at all,
+        // so there's genuinely no real branch signal to stamp in that
+        // case (left null/tenant-wide rather than guessed).
+        tenantId: tid, sourceType: 'JOURNAL', reference: schemeVoucherNumber, branchId: sale?.Branch_ID || null,
         narration: `Scheme foreclosure | ${member.Member_Number} | ${req.body.Reason || 'early closure'}`, createdBy: req.user.username,
         lines,
       });

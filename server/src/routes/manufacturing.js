@@ -3,15 +3,16 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
+const { requireModuleAccess } = require('../utils/moduleOverride');
 const dayjs = require('dayjs');
 
 // ── Production Departments ──────────────────────────────────────────────────────
-router.get('/departments', authenticate, async (req, res) => {
+router.get('/departments', authenticate, requireModuleAccess('manufacturing_bom', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_production_department_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true).orderBy('Sequence_No')); }
   catch (err) { return sendError(res, 500, 'Failed to fetch departments.'); }
 });
 
-router.post('/departments', authenticate, [body('Dept_Code').notEmpty(), body('Dept_Name').notEmpty()], async (req, res) => {
+router.post('/departments', authenticate, requireModuleAccess('manufacturing_bom', 'Add'), [body('Dept_Code').notEmpty(), body('Dept_Name').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -21,7 +22,7 @@ router.post('/departments', authenticate, [body('Dept_Code').notEmpty(), body('D
 });
 
 // ── BOM ──────────────────────────────────────────────────────────────────────────
-router.get('/bom', authenticate, async (req, res) => {
+router.get('/bom', authenticate, requireModuleAccess('manufacturing_bom', 'View'), async (req, res) => {
   const { designId } = req.query;
   try {
     let qb = db('tbl_bom_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true);
@@ -30,7 +31,7 @@ router.get('/bom', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch BOMs.'); }
 });
 
-router.get('/bom/:id', authenticate, async (req, res) => {
+router.get('/bom/:id', authenticate, requireModuleAccess('manufacturing_bom', 'View'), async (req, res) => {
   try {
     const bom = await db('tbl_bom_master').where({ BOM_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!bom) return sendError(res, 404, 'BOM not found.');
@@ -41,7 +42,7 @@ router.get('/bom/:id', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch BOM.'); }
 });
 
-router.post('/bom', authenticate, [body('BOM_Name').notEmpty()], async (req, res) => {
+router.post('/bom', authenticate, requireModuleAccess('manufacturing_bom', 'Add'), [body('BOM_Name').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const { stages, ...header } = req.body;
@@ -55,7 +56,7 @@ router.post('/bom', authenticate, [body('BOM_Name').notEmpty()], async (req, res
 });
 
 // ── Production Transactions ─────────────────────────────────────────────────────
-router.get('/production', authenticate, async (req, res) => {
+router.get('/production', authenticate, requireModuleAccess('manufacturing_bom', 'View'), async (req, res) => {
   const { deptId, status } = req.query;
   try {
     let qb = db('tbl_production_transaction as p')
@@ -68,7 +69,7 @@ router.get('/production', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch production transactions.'); }
 });
 
-router.post('/production', authenticate, [body('Input_Weight').isFloat({ gt: 0 }), body('Txn_Date').notEmpty()], async (req, res) => {
+router.post('/production', authenticate, requireModuleAccess('manufacturing_bom', 'Add'), [body('Input_Weight').isFloat({ gt: 0 }), body('Txn_Date').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -80,7 +81,7 @@ router.post('/production', authenticate, [body('Input_Weight').isFloat({ gt: 0 }
 // PUT /:id/complete — records the actual output weight, deriving wastage
 // from the input/output difference rather than requiring the caller to
 // compute it.
-router.put('/production/:id/complete', authenticate, [body('Output_Weight').isFloat({ gt: 0 })], async (req, res) => {
+router.put('/production/:id/complete', authenticate, requireModuleAccess('manufacturing_bom', 'Approve'), [body('Output_Weight').isFloat({ gt: 0 })], async (req, res) => {
   try {
     const txn = await db('tbl_production_transaction').where({ Txn_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!txn) return sendError(res, 404, 'Production transaction not found.');
@@ -94,7 +95,7 @@ router.put('/production/:id/complete', authenticate, [body('Output_Weight').isFl
 });
 
 // ── Melting / Refining Log ─────────────────────────────────────────────────────
-router.get('/melting-refining', authenticate, async (req, res) => {
+router.get('/melting-refining', authenticate, requireModuleAccess('manufacturing_bom', 'View'), async (req, res) => {
   const { processType } = req.query;
   try {
     let qb = db('tbl_melting_refining_log').where('Tenant_ID', req.user.tenantId);
@@ -103,7 +104,7 @@ router.get('/melting-refining', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch melting/refining log.'); }
 });
 
-router.post('/melting-refining', authenticate, [
+router.post('/melting-refining', authenticate, requireModuleAccess('manufacturing_bom', 'Add'), [
   body('Process_Type').isIn(['Melting', 'Refining']), body('Metal_Type').notEmpty(), body('Weight_In').isFloat({ gt: 0 }), body('Log_Date').notEmpty(),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -121,12 +122,12 @@ router.post('/melting-refining', authenticate, [
 });
 
 // ── Mould / Rubber BOM Stock ─────────────────────────────────────────────────────
-router.get('/moulds', authenticate, async (req, res) => {
+router.get('/moulds', authenticate, requireModuleAccess('manufacturing_bom', 'View'), async (req, res) => {
   try { return sendSuccess(res, await db('tbl_mould_bom_stock').where('Tenant_ID', req.user.tenantId).where('Is_Active', true)); }
   catch (err) { return sendError(res, 500, 'Failed to fetch moulds.'); }
 });
 
-router.post('/moulds', authenticate, [body('Mould_Name').notEmpty()], async (req, res) => {
+router.post('/moulds', authenticate, requireModuleAccess('manufacturing_bom', 'Add'), [body('Mould_Name').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -135,7 +136,7 @@ router.post('/moulds', authenticate, [body('Mould_Name').notEmpty()], async (req
   } catch (err) { return sendError(res, 500, 'Failed to create mould.'); }
 });
 
-router.put('/moulds/:id/stock', authenticate, [body('delta').isInt()], async (req, res) => {
+router.put('/moulds/:id/stock', authenticate, requireModuleAccess('manufacturing_bom', 'Edit'), [body('delta').isInt()], async (req, res) => {
   try {
     const [row] = await db('tbl_mould_bom_stock').where({ Mould_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .increment('Stock_Qty', req.body.delta).returning('*');

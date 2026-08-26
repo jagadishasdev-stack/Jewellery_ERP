@@ -4,15 +4,26 @@ const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
 const { postJournal } = require('../utils/accountingEngine');
+const { requireModuleAccess } = require('../utils/moduleOverride');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const dayjs = require('dayjs');
 
 // ── Bank Accounts ──────────────────────────────────────────────────────────────
-router.get('/accounts', authenticate, async (req, res) => {
-  try { return sendSuccess(res, await db('tbl_bank_account_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true)); }
+// This whole file had NO branch awareness at all (found via audit) even
+// though tbl_bank_account_master already had a Branch_ID column — a real
+// bank account physically belongs to one branch. requireValidBranch/
+// withBranch/resolveBranchForInsert now applied the same way every other
+// module in this codebase already uses them.
+router.get('/accounts', authenticate, requireModuleAccess('bank_cheque', 'View'), requireValidBranch, async (req, res) => {
+  try {
+    let qb = db('tbl_bank_account_master').where('Tenant_ID', req.user.tenantId).where('Is_Active', true);
+    qb = withBranch(qb, req);
+    return sendSuccess(res, await qb);
+  }
   catch (err) { return sendError(res, 500, 'Failed to fetch bank accounts.'); }
 });
 
-router.post('/accounts', authenticate, [body('Bank_Name').notEmpty(), body('Account_Number').notEmpty()], async (req, res) => {
+router.post('/accounts', authenticate, requireModuleAccess('bank_cheque', 'Add'), requireValidBranch, [body('Bank_Name').notEmpty(), body('Account_Number').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
@@ -26,7 +37,8 @@ router.post('/accounts', authenticate, [body('Bank_Name').notEmpty(), body('Acco
     // accountingEngine.js's bank-balance sync — see the comment below on
     // why a plain static field here would silently break Trial Balance).
     const [row] = await db('tbl_bank_account_master').insert({
-      ...req.body, Tenant_ID: tenantId, Opening_Balance: openingBalance, Current_Balance: 0,
+      ...req.body, Tenant_ID: tenantId, Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
+      Opening_Balance: openingBalance, Current_Balance: 0,
       Created_By: req.user.username,
     }).returning('*');
 
@@ -63,7 +75,7 @@ router.post('/accounts', authenticate, [body('Bank_Name').notEmpty(), body('Acco
     // explaining where it came from, same as everything else in the ledger.
     if (openingBalance > 0) {
       await postJournal({
-        tenantId, sourceType: 'JOURNAL', reference: `OPENING-${row.Account_ID}`,
+        tenantId, sourceType: 'JOURNAL', reference: `OPENING-${row.Account_ID}`, branchId: row.Branch_ID,
         narration: `Opening balance — ${label}`, createdBy: req.user.username,
         lines: [
           { account: label, group: 'Assets', sub: 'Bank', type: 'Dr', amount: openingBalance },
@@ -77,20 +89,27 @@ router.post('/accounts', authenticate, [body('Bank_Name').notEmpty(), body('Acco
 });
 
 // ── Cheque Register ────────────────────────────────────────────────────────────
-router.get('/cheques', authenticate, async (req, res) => {
+// tbl_cheque_register has no Branch_ID column of its own — a cheque's
+// branch is whatever branch its linked bank account belongs to (via the
+// existing Account_ID join), same inheritance pattern used elsewhere in
+// this codebase (e.g. karigar returns inheriting the parent issue's
+// branch). A cheque with no bank account linked yet is only visible from
+// "All Branches" — never silently shown across every branch.
+router.get('/cheques', authenticate, requireModuleAccess('bank_cheque', 'View'), requireValidBranch, async (req, res) => {
   const { status, type } = req.query;
   try {
     let qb = db('tbl_cheque_register as c')
       .leftJoin('tbl_bank_account_master as b', 'c.Account_ID', 'b.Account_ID')
       .where('c.Tenant_ID', req.user.tenantId)
       .select('c.*', 'b.Bank_Name as Own_Bank_Name');
+    qb = withBranch(qb, req, 'b.Branch_ID');
     if (status) qb = qb.where('c.Status', status);
     if (type) qb = qb.where('c.Cheque_Type', type);
     return sendSuccess(res, await qb.orderBy('c.Cheque_Date', 'desc'));
   } catch (err) { return sendError(res, 500, 'Failed to fetch cheques.'); }
 });
 
-router.post('/cheques', authenticate, [
+router.post('/cheques', authenticate, requireModuleAccess('bank_cheque', 'Add'), [
   body('Cheque_Type').isIn(['Received', 'Issued']),
   body('Party_Name').notEmpty(),
   body('Cheque_Number').notEmpty(),
@@ -104,7 +123,7 @@ router.post('/cheques', authenticate, [
   } catch (err) { return sendError(res, 500, 'Failed to log cheque.'); }
 });
 
-router.post('/cheques/:id/deposit', authenticate, async (req, res) => {
+router.post('/cheques/:id/deposit', authenticate, requireModuleAccess('bank_cheque', 'Edit'), async (req, res) => {
   try {
     const [row] = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Deposited', Deposit_Date: dayjs().format('YYYY-MM-DD') }).returning('*');
@@ -117,7 +136,7 @@ router.post('/cheques/:id/deposit', authenticate, async (req, res) => {
 // Received cheque, adjust the receiving bank account's running balance —
 // an Issued cheque doesn't move our own balance until it clears against
 // whatever the counterparty's bank does, which this register doesn't track.
-router.post('/cheques/:id/clear', authenticate, async (req, res) => {
+router.post('/cheques/:id/clear', authenticate, requireModuleAccess('bank_cheque', 'Approve'), async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
     const cheque = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: tenantId }).first();
@@ -136,7 +155,7 @@ router.post('/cheques/:id/clear', authenticate, async (req, res) => {
       const bank = await db('tbl_bank_account_master').where('Account_ID', cheque.Account_ID).first();
       const label = `${bank.Bank_Name} (${bank.Account_Number})`;
       await postJournal({
-        tenantId, sourceType: 'JOURNAL', reference: `CHQCLR-${cheque.Cheque_ID}`,
+        tenantId, sourceType: 'JOURNAL', reference: `CHQCLR-${cheque.Cheque_ID}`, branchId: bank.Branch_ID,
         narration: `Cheque ${cheque.Cheque_Number} cleared — ${cheque.Party_Name}`, createdBy: req.user.username,
         lines: [
           { account: label, group: 'Assets', sub: 'Bank', type: 'Dr', amount: parseFloat(cheque.Amount) },
@@ -148,7 +167,7 @@ router.post('/cheques/:id/clear', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to clear cheque.'); }
 });
 
-router.post('/cheques/:id/bounce', authenticate, [body('Bounce_Charge').optional().isFloat({ min: 0 })], async (req, res) => {
+router.post('/cheques/:id/bounce', authenticate, requireModuleAccess('bank_cheque', 'Edit'), [body('Bounce_Charge').optional().isFloat({ min: 0 })], async (req, res) => {
   try {
     const [row] = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Bounced', Bounce_Charge: req.body.Bounce_Charge || 0, Modified_Date: new Date() }).returning('*');
