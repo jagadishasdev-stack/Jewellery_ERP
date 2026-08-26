@@ -11,6 +11,37 @@ const { modeVal } = require('../utils/dataModeFilter');
 const { postJournal } = require('../utils/accountingEngine');
 const { requireValidBranch, branchVal, withBranch } = require('../utils/branchAccess');
 
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+// Expected cash for a given tenant/branch/date, computed directly from the
+// real ledger rather than a hand-rolled sum of "known" cash sources.
+// Previously Cash_In_Hand was derived ONLY from cash sales — it ignored
+// repair advances/deliveries, karigar settlements, purchase payments, and
+// old-gold payouts, all of which move real cash and all of which the same
+// ledger already records once posted through postJournal(). Reading the
+// Cash Account ledger's own net movement for the day is correct by
+// construction for EVERY cash-moving action, present or future, instead
+// of a list that's easy to leave a source out of (which is exactly how
+// this bug happened the first time).
+async function computeExpectedCash(tid, dm, bId, date) {
+  const prevClose = await db('tbl_day_close')
+    .where({ Tenant_ID: tid, Branch_ID: bId, Status: 'Closed' })
+    .where('Close_Date', '<', date)
+    .orderBy('Close_Date', 'desc').first();
+  const opening = prevClose ? parseFloat(prevClose.Verified_Cash || 0) : 0;
+
+  let qb = db('tbl_accounting_entries as e')
+    .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
+    .where('e.Tenant_ID', tid).where('e.Ledger_Account', 'Cash Account')
+    .where('j.Entry_Date', date).where('j.Data_Mode', dm);
+  if (bId) qb = qb.where('j.Branch_ID', bId);
+  const rows = await qb.select('e.Entry_Type').sum('e.Amount as total').groupBy('e.Entry_Type');
+  let net = 0;
+  for (const r of rows) net += (r.Entry_Type === 'Dr' ? 1 : -1) * parseFloat(r.total);
+
+  return round2(opening + net);
+}
+
 // ── GET /api/day-close/today ────────────────────────────────────────────────────
 // Multi-Branch Management §25/26 — tbl_day_close's schema already had a
 // Branch_ID column AND a unique (Tenant_ID, Branch_ID, Close_Date) index
@@ -26,32 +57,42 @@ router.get('/today', authenticate, requireValidBranch, async (req, res) => {
   try {
     let record = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today, Branch_ID: bId }).first().catch(() => null);
 
+    // Sales/UPI/Card totals — display-only breakdown, sales-based (this
+    // page's own summary cards). Cash_In_Hand itself is NOT derived from
+    // this — see computeExpectedCash's own comment for why.
+    let salesQb = db('tbl_sales_header')
+      .where('Tenant_ID', tid)
+      .where('Data_Mode', dm)
+      .whereRaw(`DATE("Sale_Date") = ?`, [today])
+      .whereNot('Payment_Status', 'Cancelled');
+    salesQb = withBranch(salesQb, req);
+    const [sales] = await salesQb.select(
+        db.raw('COALESCE(SUM("Net_Payable_Amount"), 0) AS total_sales'),
+        db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" = \'Cash\' THEN "Amount_Paid" ELSE 0 END), 0) AS cash_sales'),
+        db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" = \'UPI\' THEN "Amount_Paid" ELSE 0 END), 0) AS upi_sales'),
+        db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" IN (\'Card\',\'Debit Card\',\'Credit Card\') THEN "Amount_Paid" ELSE 0 END), 0) AS card_sales')
+      );
+
     if (!record) {
-      // Auto-create today's record with calculated totals for this mode
-      // and branch — a branch-less context still means "the whole
-      // tenant," matching the pre-branch-awareness behavior exactly.
-      let salesQb = db('tbl_sales_header')
-        .where('Tenant_ID', tid)
-        .where('Data_Mode', dm)
-        .whereRaw(`DATE("Sale_Date") = ?`, [today])
-        .whereNot('Payment_Status', 'Cancelled');
-      salesQb = withBranch(salesQb, req);
-      const [sales] = await salesQb.select(
-          db.raw('COALESCE(SUM("Net_Payable_Amount"), 0) AS total_sales'),
-          db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" = \'Cash\' THEN "Amount_Paid" ELSE 0 END), 0) AS cash_sales'),
-          db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" = \'UPI\' THEN "Amount_Paid" ELSE 0 END), 0) AS upi_sales'),
-          db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" IN (\'Card\',\'Debit Card\',\'Credit Card\') THEN "Amount_Paid" ELSE 0 END), 0) AS card_sales')
-        );
       [record] = await db('tbl_day_close').insert({
         Tenant_ID: tid, Branch_ID: bId, Close_Date: today, Status: 'Open',
-        Cash_Sales:   sales.cash_sales  || 0,
-        UPI_Sales:    sales.upi_sales   || 0,
-        Card_Sales:   sales.card_sales  || 0,
-        Total_Sales:  sales.total_sales || 0,
-        Cash_In_Hand: sales.cash_sales  || 0,
       }).returning('*').catch(() => [null]);
     }
-    return sendSuccess(res, record);
+
+    // Recomputed on every call while the day is still Open — this used to
+    // only be set once, at auto-create time, and then never touched again;
+    // a page left open since 10am showed a number that stopped moving,
+    // and /close then used that stale figure as "expected cash." A
+    // Closed day keeps its final recorded figures (Verified_Cash is the
+    // number of record at that point, not a live one).
+    const cashInHand = record?.Status === 'Closed' ? parseFloat(record.Cash_In_Hand || 0) : await computeExpectedCash(tid, dm, bId, today);
+
+    return sendSuccess(res, {
+      ...record,
+      Total_Sales: sales.total_sales || 0, Cash_Sales: sales.cash_sales || 0,
+      UPI_Sales: sales.upi_sales || 0, Card_Sales: sales.card_sales || 0,
+      Cash_In_Hand: cashInHand,
+    });
   } catch (err) { console.error(err); return sendError(res, 500, 'Failed.'); }
 });
 
@@ -78,15 +119,38 @@ router.post('/close', authenticate, requireValidBranch, async (req, res) => {
   }
   const bId = branchVal(req);
   try {
-    const existing = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today, Branch_ID: bId }).first();
+    let existing = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today, Branch_ID: bId }).first();
+    if (!existing) {
+      // Used to be possible to close a day that GET /today had never been
+      // called for — .update() then matched zero rows, `record` came back
+      // undefined, and the route still returned "Day closed successfully."
+      // with sourceId: undefined on the posted journals. Auto-create it
+      // here instead of silently no-op'ing.
+      [existing] = await db('tbl_day_close').insert({ Tenant_ID: tid, Branch_ID: bId, Close_Date: today, Status: 'Open' }).returning('*');
+    }
+    if (existing.Status === 'Closed') {
+      return sendError(res, 400, `${today} is already closed for this branch.`);
+    }
+
     const cashExpenses = parseFloat(req.body.cash_expenses || 0);
     const verifiedCash = parseFloat(req.body.verified_cash || 0);
-    const cashInHand = parseFloat(req.body.cash_in_hand ?? existing?.Cash_In_Hand ?? 0);
-    const difference = verifiedCash - cashInHand;
+    // Computed from the real ledger, not trusted from the client or a
+    // stale stored value — see computeExpectedCash's own comment.
+    const cashInHand = await computeExpectedCash(tid, dm, bId, today);
+    // Expenses paid out of the till during the day reduce what SHOULD be
+    // left in physical cash — comparing verifiedCash against cashInHand
+    // alone (without subtracting expenses first) meant Cash Account got
+    // credited TWICE for the same money: once by the expense journal
+    // below, and again by a shortage journal that treated the entire
+    // expense amount as an unexplained loss on top of it. A ₹5,000
+    // expense day used to remove ₹10,000 from the ledger's cash balance.
+    const expectedAfterExpenses = round2(cashInHand - cashExpenses);
+    const difference = round2(verifiedCash - expectedAfterExpenses);
 
     const [record] = await db('tbl_day_close')
       .where({ Tenant_ID: tid, Close_Date: today, Branch_ID: bId })
       .update({
+        Cash_In_Hand: cashInHand,
         Verified_Cash: verifiedCash,
         Difference: difference,
         Cash_Expenses: cashExpenses,
