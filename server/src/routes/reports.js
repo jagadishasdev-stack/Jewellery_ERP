@@ -287,8 +287,11 @@ router.get('/gst-summary', authenticate, requireValidBranch, async (req, res) =>
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
       .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
-      .groupByRaw(`COALESCE("t"."HSN_Code", '7113'), "sd"."GST_Percentage_Applied"`)
-      .select(db.raw(`COALESCE("t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied', db.raw('SUM("sd"."Taxable_Value") as taxable_value'), db.raw('SUM("sd"."GST_Amount") as gst_amount'), db.raw('COUNT(*) as items'), db.raw(`'PCS' as uqc`))
+      // sd.HSN_Code is the real captured snapshot (added after this route
+      // was first built) — preferred over the name-match join, which is
+      // now only a fallback for sales rows that predate it.
+      .groupByRaw(`COALESCE("sd"."HSN_Code", "t"."HSN_Code", '7113'), "sd"."GST_Percentage_Applied"`)
+      .select(db.raw(`COALESCE("sd"."HSN_Code", "t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied', db.raw('SUM("sd"."Taxable_Value") as taxable_value'), db.raw('SUM("sd"."GST_Amount") as gst_amount'), db.raw('COUNT(*) as items'), db.raw(`'PCS' as uqc`))
       .catch(() => []);
     return sendSuccess(res, {
       ...gstData,
@@ -372,9 +375,10 @@ router.get('/gstr1', authenticate, requireValidBranch, async (req, res) => {
     }
     const b2cs = Array.from(b2csMap.values()).sort((a, b) => a.place_of_supply.localeCompare(b.place_of_supply));
 
-    // HSN summary — via the real Ornament_ID -> Type_ID -> HSN_Code FK
-    // chain (gst-summary's own HSN query above uses a text-name match
-    // instead; this one doesn't have to since it's a fresh query).
+    // HSN summary — sd.HSN_Code is now a real captured snapshot (taken at
+    // sale time from the ornament, itself snapshotted at creation time);
+    // the Ornament_ID -> Type_ID -> HSN_Code FK chain is kept only as a
+    // fallback for sales rows that predate that column.
     let hsnQb = db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .leftJoin('tbl_ornament_master as o', 'sd.Ornament_ID', 'o.Ornament_ID')
@@ -384,9 +388,9 @@ router.get('/gstr1', authenticate, requireValidBranch, async (req, res) => {
       .whereNot('sh.Payment_Status', 'Cancelled').where('sh.Invoice_Type', 'Tax Invoice');
     hsnQb = withBranch(hsnQb, req, 'sh.Branch_ID');
     const hsnSummary = await excludeHiddenStockSales(hsnQb, req, 'sh')
-      .groupByRaw(`COALESCE("t"."HSN_Code", '7113'), "sd"."GST_Percentage_Applied"`)
+      .groupByRaw(`COALESCE("sd"."HSN_Code", "t"."HSN_Code", '7113'), "sd"."GST_Percentage_Applied"`)
       .select(
-        db.raw(`COALESCE("t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied as rate',
+        db.raw(`COALESCE("sd"."HSN_Code", "t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied as rate',
         db.raw(`'NOS' as uqc`), db.raw('COUNT(*) as total_quantity'),
         db.raw('SUM("sd"."Taxable_Value") as taxable_value'), db.raw('SUM("sd"."GST_Amount") as total_gst')
       )

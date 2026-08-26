@@ -60,7 +60,7 @@ export const printThermalReceipt = async (sale, items, tenant) => {
       item_name: item.Item_Type_Name || 'Item', purity: item.Purity_Code,
       gross_weight: item.Gross_Weight, net_weight: item.Net_Gold_Weight || item.Gross_Weight,
       rate: item.Gold_Rate_Per_Gram, making_charge: item.Making_Charge_Applied,
-      gst_amount: item.GST_Amount, huid: item.HUID_Number, amount: item.Total_Line_Price,
+      gst_amount: item.GST_Amount, huid: item.HUID_Number, hsn: item.HSN_Code, amount: item.Total_Line_Price,
     })),
     subtotal: sale.Subtotal_Amount, discount: sale.Discount_Amount, gst_amt: sale.GST_Amount,
     cgst_amt: sale.CGST_Amount, sgst_amt: sale.SGST_Amount, igst_amt: sale.IGST_Amount,
@@ -100,7 +100,7 @@ export const printThermalReceipt = async (sale, items, tenant) => {
     );
     const amount = `₹${parseFloat(item.Total_Line_Price || 0).toLocaleString('en-IN')}`;
     lines.push(`${name.padEnd(22)} ${grossWt.padStart(7)} ${amount.padStart(10)}`);
-    lines.push(`  Net Gold Wt: ${netWt.padStart(8)} | ${item.Purity_Code || '-'}`);
+    lines.push(`  Net Gold Wt: ${netWt.padStart(8)} | ${item.Purity_Code || '-'}${item.HSN_Code ? ` | HSN: ${item.HSN_Code}` : ''}`);
     lines.push(`  Rate: ₹${parseFloat(item.Gold_Rate_Per_Gram || 0).toLocaleString('en-IN')}/g`);
     if (parseFloat(item.Making_Charge_Applied || 0) > 0) {
       lines.push(`  Making: ₹${parseFloat(item.Making_Charge_Applied).toLocaleString('en-IN')}`);

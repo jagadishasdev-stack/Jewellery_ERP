@@ -149,12 +149,22 @@ router.post('/create', authenticate, requireValidBranch, requirePermission('inve
       Created_By: req.user.username,
     }).returning('*');
 
+    // HSN was only ever resolved via a live join at report time — never
+    // captured on the ornament itself. Snapshotted here at creation, same
+    // as the ornaments.js create route now does, so a later edit to an
+    // item type's HSN code doesn't silently rewrite past tax history.
+    const typeIdsInPurchase = [...new Set(items.map((i) => i.Type_ID).filter(Boolean))];
+    const hsnByTypeId = typeIdsInPurchase.length > 0
+      ? Object.fromEntries((await trx('tbl_item_type_master').whereIn('Type_ID', typeIdsInPurchase).select('Type_ID', 'HSN_Code')).map((t) => [t.Type_ID, t.HSN_Code]))
+      : {};
+
     // Insert line items and create ornament records
     const lineItems = [];
     for (const item of items) {
       // Auto-generate article number and create ornament in inventory
       const articleNumber = item.Article_Number || await generateArticleNumber(tenantId);
       let ornamentId = null;
+      const hsnCode = item.HSN_Code || (item.Type_ID ? hsnByTypeId[item.Type_ID] : null) || null;
 
       if (item.Create_Inventory !== false) {
         const [ornament] = await trx('tbl_ornament_master').insert({
@@ -174,6 +184,7 @@ router.post('/create', authenticate, requireValidBranch, requirePermission('inve
           Purchase_Cost: item.Purchase_Rate,
           Taxable_Value: item.Purchase_Rate,
           Total_Price: item.Purchase_Rate,
+          HSN_Code: hsnCode,
           Supplier_ID: header.Supplier_ID || null,
           Is_Active: true,
           Is_Stock_Available: true,
@@ -200,6 +211,7 @@ router.post('/create', authenticate, requireValidBranch, requirePermission('inve
         Stone_Value: item.Stone_Value || 0,
         Purchase_Rate: item.Purchase_Rate,
         Total_Line_Value: item.Purchase_Rate,
+        HSN_Code: hsnCode,
         Created_By: req.user.username,
       });
     }

@@ -386,12 +386,20 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     }).returning('*');
 
     // Insert line items
+    // HSN_Code was only ever resolved via a live join at report time —
+    // never actually captured on the sold line item, so a later edit to
+    // an item type's HSN code would silently rewrite tax history for
+    // every past sale of that type. Snapshotted here from the ornament's
+    // own HSN_Code (itself snapshotted at creation time in ornaments.js/
+    // purchase.js) — immune to any later type-level edit, same as
+    // Purity_Code/GST_Percentage_Applied already are.
     const lineItems = items.map((item, idx) => ({
       Sale_ID: sale.Sale_ID,
       Tenant_ID: tenantId,
       Ornament_ID: item.Ornament_ID,
       Article_Number: item.Article_Number,
       Item_Type_Name: item.Item_Type_Name,
+      HSN_Code: ownedById.get(String(item.Ornament_ID))?.HSN_Code || item.HSN_Code || null,
       Quantity: item.Quantity || 1,
       Gross_Weight: item.Gross_Weight,
       Net_Gold_Weight: item.Net_Gold_Weight,

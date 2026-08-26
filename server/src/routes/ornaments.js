@@ -204,6 +204,17 @@ router.post('/', authenticate, requireValidBranch, [
     const wastagePercent = parseFloat(req.body.Wastage_Percentage || 3);
     const discountPercent = parseFloat(req.body.Discount_Percentage || 0);
 
+    // HSN was only ever resolved via a live join at report time — never
+    // actually captured on the ornament itself, so a later edit to the
+    // item type's HSN code would silently rewrite tax history for every
+    // item of that type, sold or not. Snapshotted here instead, same as
+    // every other tax-relevant attribute already is at creation time.
+    let hsnCode = req.body.HSN_Code || null;
+    if (!hsnCode && req.body.Type_ID) {
+      const itemType = await db('tbl_item_type_master').where({ Type_ID: req.body.Type_ID }).first('HSN_Code');
+      hsnCode = itemType?.HSN_Code || null;
+    }
+
     const wastageWeight = (netGoldWeight * wastagePercent) / 100;
     const wastageAmount = wastageWeight * goldRate;
     const goldValue = netGoldWeight * goldRate;
@@ -227,6 +238,7 @@ router.post('/', authenticate, requireValidBranch, [
       Taxable_Value: taxableValue,
       GST_Amount: gstAmount,
       Total_Price: totalPrice,
+      HSN_Code: hsnCode,
       Data_Mode: modeVal(req),
       Created_By: req.user.username,
     }).returning('*');
