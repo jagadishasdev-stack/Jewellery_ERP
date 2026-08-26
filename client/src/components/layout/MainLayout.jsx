@@ -273,6 +273,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/reports/financial-reports', label: '🏦 Financial Reports' },
         { key: '/reports/customer-reports', label: '👥 Customer Reports' },
         { key: '/reports/gift-vouchers', label: '🎁 Gift Vouchers' },
+        { key: '/reports/gst-returns', label: '📄 GST Returns (GSTR-1/3B)' },
         // Both existed and worked (real routes, real pages) but had no
         // menu entry anywhere — unreachable except by typing the URL.
         ...((isEnabled('purchase') || isEnabled('old_gold')) ? [{ key: '/reports/purchase', label: '🛍️ Purchase Reports' }] : []),

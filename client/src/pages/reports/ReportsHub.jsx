@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { Row, Col, Card, Typography, Tag, Space, Button } from 'antd';
 import {
   BarChartOutlined, GoldOutlined, BankOutlined, TeamOutlined,
-  LineChartOutlined, DashboardOutlined,
+  LineChartOutlined, DashboardOutlined, FileProtectOutlined,
 } from '@ant-design/icons';
 import PageTour from '../../components/PageTour';
 
@@ -31,6 +31,12 @@ const REPORT_CATEGORIES = [
     title: 'Financial Reports', color: '#1890ff', badge: 'Finance', badgeColor: 'blue',
     route: '/reports/financial-reports',
     reports: ['Cash Book', 'Bank Book', 'Day Book', 'Ledger Report', 'Profit & Loss', 'Balance Sheet'],
+  },
+  {
+    key: 'gst-returns', icon: <FileProtectOutlined style={{ fontSize: 32, color: '#B8860B' }} />,
+    title: 'GST Returns', color: '#B8860B', badge: 'GSTR-1/3B', badgeColor: 'gold',
+    route: '/reports/gst-returns',
+    reports: ['B2B', 'B2CL', 'B2CS', 'HSN Summary', 'GSTR-3B Summary'],
   },
   {
     key: 'customer', icon: <TeamOutlined style={{ fontSize: 32, color: '#722ed1' }} />,

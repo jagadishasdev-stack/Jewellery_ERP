@@ -301,6 +301,194 @@ router.get('/gst-summary', authenticate, requireValidBranch, async (req, res) =>
   }
 });
 
+// ─── GET /api/reports/gstr1 ─────────────────────────────────────────────────────
+// The gst-summary route above deliberately stopped short of this ("that's
+// a real, separate feature") — this is that feature: the actual GSTR-1
+// return tables (B2B, B2CL, B2CS, HSN summary, document summary), built
+// to match the return's own structure closely enough for an accountant
+// to file from directly or cross-check against the GST portal/offline
+// utility. This is NOT a GSTN-schema JSON upload file — the real portal
+// format has extensive validation rules (state codes, POS codes, exact
+// field names) this doesn't attempt to replicate; see HelpCenterPage's
+// own existing guidance ("the numbers are ready, filing itself is not
+// automatic"). Place of Supply is the customer's raw State text, not the
+// 2-digit GST state code the portal expects — a real limitation, not an
+// oversight, since no state-code mapping table exists in this schema.
+const B2CL_THRESHOLD = 250000;
+router.get('/gstr1', authenticate, requireValidBranch, async (req, res) => {
+  const { fromDate, toDate } = req.query;
+  if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
+  try {
+    const tenantId = req.user.tenantId;
+    const dm = modeVal(req);
+
+    let salesQb = db('tbl_sales_header as sh')
+      .leftJoin('tbl_customer_master as c', 'sh.Customer_ID', 'c.Customer_ID')
+      .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
+      .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereNot('sh.Payment_Status', 'Cancelled').where('sh.Invoice_Type', 'Tax Invoice');
+    salesQb = withBranch(salesQb, req, 'sh.Branch_ID');
+    const sales = await excludeHiddenStockSales(salesQb, req, 'sh')
+      .select(
+        'sh.Sale_ID', 'sh.Invoice_Number', 'sh.Sale_Date', 'sh.Net_Payable_Amount', 'sh.Subtotal_Amount',
+        'sh.GST_Amount', 'sh.CGST_Amount', 'sh.SGST_Amount', 'sh.IGST_Amount', 'sh.Is_Interstate',
+        'c.GST_No', 'c.Customer_Name', 'c.State'
+      )
+      .orderBy('sh.Sale_Date', 'asc');
+
+    const b2b = [], b2cl = [], b2csMap = new Map();
+    for (const s of sales) {
+      const taxableValue = round2(parseFloat(s.Subtotal_Amount || 0));
+      const cgst = round2(parseFloat(s.CGST_Amount || 0));
+      const sgst = round2(parseFloat(s.SGST_Amount || 0));
+      const igst = round2(parseFloat(s.IGST_Amount || 0));
+      const rate = taxableValue > 0 ? round2(((cgst + sgst + igst) / taxableValue) * 100) : 0;
+      const placeOfSupply = s.State || 'Unknown';
+      const isRegistered = !!(s.GST_No && s.GST_No.trim());
+
+      if (isRegistered) {
+        b2b.push({
+          gstin: s.GST_No, receiver_name: s.Customer_Name, invoice_number: s.Invoice_Number,
+          invoice_date: s.Sale_Date, invoice_value: round2(parseFloat(s.Net_Payable_Amount || 0)),
+          place_of_supply: placeOfSupply, reverse_charge: 'N', invoice_type: 'Regular B2B',
+          rate, taxable_value: taxableValue, cgst, sgst, igst,
+        });
+      } else if (s.Is_Interstate && parseFloat(s.Net_Payable_Amount || 0) > B2CL_THRESHOLD) {
+        b2cl.push({
+          invoice_number: s.Invoice_Number, invoice_date: s.Sale_Date,
+          invoice_value: round2(parseFloat(s.Net_Payable_Amount || 0)),
+          place_of_supply: placeOfSupply, rate, taxable_value: taxableValue, igst,
+        });
+      } else {
+        const key = `${placeOfSupply}|${rate}`;
+        const existing = b2csMap.get(key) || { place_of_supply: placeOfSupply, rate, type: 'OE', taxable_value: 0, cgst: 0, sgst: 0, igst: 0, invoice_count: 0 };
+        existing.taxable_value = round2(existing.taxable_value + taxableValue);
+        existing.cgst = round2(existing.cgst + cgst);
+        existing.sgst = round2(existing.sgst + sgst);
+        existing.igst = round2(existing.igst + igst);
+        existing.invoice_count += 1;
+        b2csMap.set(key, existing);
+      }
+    }
+    const b2cs = Array.from(b2csMap.values()).sort((a, b) => a.place_of_supply.localeCompare(b.place_of_supply));
+
+    // HSN summary — via the real Ornament_ID -> Type_ID -> HSN_Code FK
+    // chain (gst-summary's own HSN query above uses a text-name match
+    // instead; this one doesn't have to since it's a fresh query).
+    let hsnQb = db('tbl_sales_details as sd')
+      .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
+      .leftJoin('tbl_ornament_master as o', 'sd.Ornament_ID', 'o.Ornament_ID')
+      .leftJoin('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
+      .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
+      .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereNot('sh.Payment_Status', 'Cancelled').where('sh.Invoice_Type', 'Tax Invoice');
+    hsnQb = withBranch(hsnQb, req, 'sh.Branch_ID');
+    const hsnSummary = await excludeHiddenStockSales(hsnQb, req, 'sh')
+      .groupByRaw(`COALESCE("t"."HSN_Code", '7113'), "sd"."GST_Percentage_Applied"`)
+      .select(
+        db.raw(`COALESCE("t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied as rate',
+        db.raw(`'NOS' as uqc`), db.raw('COUNT(*) as total_quantity'),
+        db.raw('SUM("sd"."Taxable_Value") as taxable_value'), db.raw('SUM("sd"."GST_Amount") as total_gst')
+      )
+      .catch(() => []);
+
+    // Document summary — Invoice_Number is a formatted string (not a bare
+    // sequence), so "from/to" is chronological first/last within the
+    // period, not a numeric range.
+    const cancelledCount = await (async () => {
+      let qb = db('tbl_sales_header').where({ Tenant_ID: tenantId, Data_Mode: dm, Payment_Status: 'Cancelled' })
+        .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate]);
+      qb = withBranch(qb, req);
+      const [row] = await qb.count('Sale_ID as c');
+      return parseInt(row.c) || 0;
+    })();
+    const docSummary = {
+      nature_of_document: 'Invoice for outward supply',
+      from_invoice: sales[0]?.Invoice_Number || null,
+      to_invoice: sales[sales.length - 1]?.Invoice_Number || null,
+      total_count: sales.length,
+      cancelled_count: cancelledCount,
+    };
+
+    return sendSuccess(res, { b2b, b2cl, b2cs, hsnSummary, docSummary, fromDate, toDate });
+  } catch (err) {
+    console.error('GSTR-1 report error:', err);
+    return sendError(res, 500, 'Failed to generate GSTR-1 report.');
+  }
+});
+
+// ─── GET /api/reports/gstr3b ────────────────────────────────────────────────────
+// Section 3.1 (outward taxable supplies) and section 4 (ITC available) —
+// the two sections that actually need real ledger/sales data. Sections
+// covering exempt/nil-rated/non-GST supplies and reverse-charge inward
+// supplies are always 0 for a standard retail jewellery business model,
+// so they're returned as fixed 0 rather than fabricated from data that
+// doesn't exist in this schema (there is no exempt-supply concept
+// anywhere in sales.js).
+router.get('/gstr3b', authenticate, requireValidBranch, async (req, res) => {
+  const { fromDate, toDate } = req.query;
+  if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
+  try {
+    const tenantId = req.user.tenantId;
+    const dm = modeVal(req);
+
+    let outwardQb = db('tbl_sales_header')
+      .where({ Tenant_ID: tenantId, Data_Mode: dm, Invoice_Type: 'Tax Invoice' })
+      .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereNot('Payment_Status', 'Cancelled');
+    outwardQb = withBranch(outwardQb, req);
+    const [outward] = await excludeHiddenStockSales(outwardQb, req)
+      .select(
+        db.raw('SUM("Subtotal_Amount") as taxable_value'), db.raw('SUM("CGST_Amount") as cgst'),
+        db.raw('SUM("SGST_Amount") as sgst'), db.raw('SUM("IGST_Amount") as igst')
+      );
+
+    // ITC available — same Output-vs-Input netting the Balance Sheet's
+    // gstPayable already does (see /financial route above), but ITC here
+    // is the Input side alone, for the period only (not cumulative).
+    const accounts = await db('tbl_chart_of_accounts').where({ Tenant_ID: tenantId, Is_Active: true });
+    const byName = Object.fromEntries(accounts.map((a) => [a.Account_Name, a]));
+    const entries = await db('tbl_accounting_entries as e')
+      .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
+      .where('e.Tenant_ID', tenantId)
+      .whereRaw(`DATE("j"."Entry_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .select('e.Account_ID', 'e.Entry_Type', 'e.Amount');
+    const itcFor = (accountName) => {
+      const id = byName[accountName]?.Account_ID;
+      if (!id) return 0;
+      return round2(entries.filter((e) => e.Account_ID === id)
+        .reduce((s, e) => s + (e.Entry_Type === 'Dr' ? 1 : -1) * parseFloat(e.Amount), 0));
+    };
+    const itcCgst = itcFor('Input CGST Account');
+    const itcSgst = itcFor('Input SGST Account');
+    const itcIgst = itcFor('Input IGST Account');
+
+    const outwardCgst = round2(parseFloat(outward.cgst || 0));
+    const outwardSgst = round2(parseFloat(outward.sgst || 0));
+    const outwardIgst = round2(parseFloat(outward.igst || 0));
+
+    return sendSuccess(res, {
+      outward_taxable_supplies: {
+        taxable_value: round2(parseFloat(outward.taxable_value || 0)),
+        igst: outwardIgst, cgst: outwardCgst, sgst: outwardSgst, cess: 0,
+      },
+      outward_zero_rated: 0, outward_nil_exempt: 0, inward_reverse_charge: 0,
+      itc_available: { igst: itcIgst, cgst: itcCgst, sgst: itcSgst, cess: 0 },
+      itc_reversed: 0,
+      net_itc: { igst: itcIgst, cgst: itcCgst, sgst: itcSgst },
+      tax_payable: {
+        igst: round2(Math.max(0, outwardIgst - itcIgst)),
+        cgst: round2(Math.max(0, outwardCgst - itcCgst)),
+        sgst: round2(Math.max(0, outwardSgst - itcSgst)),
+      },
+      fromDate, toDate,
+    });
+  } catch (err) {
+    console.error('GSTR-3B report error:', err);
+    return sendError(res, 500, 'Failed to generate GSTR-3B report.');
+  }
+});
+
 // ─── GET /api/reports/item-wise-sales ─────────────────────────────────────────
 router.get('/item-wise-sales', authenticate, async (req, res) => {
   const { fromDate, toDate, classification } = req.query;
