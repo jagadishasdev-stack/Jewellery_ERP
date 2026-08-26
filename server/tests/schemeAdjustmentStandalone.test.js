@@ -252,4 +252,35 @@ describe('POST /savings/members/:id/foreclose', () => {
     expect(lines.some((l) => l.Ledger_Account === 'Cash Account' && l.Entry_Type === 'Cr' && parseFloat(l.Amount) === 1500)).toBe(true);
     expect(lines.some((l) => l.Ledger_Account === 'Sales Account')).toBe(false); // the regression, once more
   });
+
+  // Was Active-only — a Matured member had NO payout path anywhere in the
+  // app (adjust-invoice always needs a real bill, even for a pure
+  // refund). Extended to accept Matured too, with no early-exit
+  // deduction (that penalty only makes sense for stopping in progress).
+  test('a Matured member can be paid out too, with no deduction applied even if one is sent', async () => {
+    const memberId = await makeMaturedMember('9911100015'); // ₹1000 available, already Matured
+    const res = await request(app).post(`/api/savings/members/${memberId}/foreclose`).set(auth()).send({
+      Settlement_Mode: 'Cash', Deduction_Amount: 300, Bonus_Amount: 50, Reason: 'Scheme matured — paid out',
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data.available_balance).toBe(1000);
+    expect(res.body.data.deduction).toBe(0); // ignored — this member is Matured, not foreclosing early
+    expect(res.body.data.net_payout).toBe(1050); // 1000 - 0 + 50
+
+    const member = await db('tbl_scheme_members').where({ Member_ID: memberId }).first();
+    expect(member.Status).toBe('Closed');
+
+    const lines = await waitForJournalLines(res.body.data.receipt_number);
+    expect(lines.some((l) => l.Ledger_Account === 'Scheme Foreclosure Income Account')).toBe(false); // no deduction income posted
+    expect(lines.some((l) => l.Ledger_Account === 'Scheme Bonus Expense Account' && l.Entry_Type === 'Dr' && parseFloat(l.Amount) === 50)).toBe(true);
+    expect(lines.some((l) => l.Ledger_Account === 'Cash Account' && l.Entry_Type === 'Cr' && parseFloat(l.Amount) === 1050)).toBe(true);
+  });
+
+  test('a Closed member cannot be paid out again (neither Active nor Matured)', async () => {
+    const memberId = await makeMaturedMember('9911100016');
+    await request(app).post(`/api/savings/members/${memberId}/foreclose`).set(auth()).send({ Settlement_Mode: 'Cash' });
+    const res = await request(app).post(`/api/savings/members/${memberId}/foreclose`).set(auth()).send({ Settlement_Mode: 'Cash' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/not Active/);
+  });
 });

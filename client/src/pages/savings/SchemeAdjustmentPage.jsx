@@ -114,11 +114,14 @@ export default function SchemeAdjustmentPage() {
                     <Button size="small" icon={<FileTextOutlined />} onClick={() => { setSelectedMember(m); setAdjustInvoiceModal(true); }}>
                       Adjust Against a Bill
                     </Button>
-                    {m.Status === 'Active' && (
-                      <Button size="small" danger icon={<StopOutlined />} onClick={() => { setSelectedMember(m); setForecloseModal(true); }}>
-                        Foreclose
-                      </Button>
-                    )}
+                    {/* Was Active-only — a Matured member had no payout
+                        path anywhere in the app (adjust-invoice always
+                        needs a real bill, even for a pure refund). The
+                        backend now accepts Matured too, with no early-
+                        exit deduction. */}
+                    <Button size="small" danger icon={<StopOutlined />} onClick={() => { setSelectedMember(m); setForecloseModal(true); }}>
+                      {m.Status === 'Matured' ? 'Redeem / Payout' : 'Foreclose'}
+                    </Button>
                   </Space>
                 </Space>
               </Card>
@@ -168,12 +171,14 @@ export default function SchemeAdjustmentPage() {
         </Form>
       </Modal>
 
-      {/* ── Foreclose ── */}
-      <Modal title={`Foreclose ${selectedMember?.Member_Number || ''}'s Scheme`}
+      {/* ── Foreclose / Matured Payout ── */}
+      <Modal title={`${selectedMember?.Status === 'Matured' ? 'Redeem / Payout' : 'Foreclose'} ${selectedMember?.Member_Number || ''}'s Scheme`}
         open={forecloseModal} onCancel={() => { setForecloseModal(false); forecloseForm.resetFields(); setForecloseMode('Cash'); }}
         footer={null} destroyOnClose>
-        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-          message="For a customer stopping this scheme before it matures. Enter any deduction (kept as business income) or goodwill bonus, then settle the net amount." />
+        <Alert type={selectedMember?.Status === 'Matured' ? 'success' : 'warning'} showIcon style={{ marginBottom: 12 }}
+          message={selectedMember?.Status === 'Matured'
+            ? 'This scheme has run its full term — pay out the full amount collected (plus any goodwill bonus), no early-exit deduction applies.'
+            : 'For a customer stopping this scheme before it matures. Enter any deduction (kept as business income) or goodwill bonus, then settle the net amount.'} />
         {selectedMember && (
           <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
             Amount collected so far: <Text strong>{formatCurrency(selectedMember.Available_Balance)}</Text>
@@ -182,12 +187,14 @@ export default function SchemeAdjustmentPage() {
         <Form form={forecloseForm} layout="vertical" onFinish={(v) => forecloseMutation.mutate(v)}
           initialValues={{ Settlement_Mode: 'Cash', Deduction_Amount: 0, Bonus_Amount: 0 }}>
           <Row gutter={12}>
-            <Col xs={12}>
-              <Form.Item name="Deduction_Amount" label="Deduction / Penalty (₹)">
-                <InputNumber style={{ width: '100%' }} min={0} />
-              </Form.Item>
-            </Col>
-            <Col xs={12}>
+            {selectedMember?.Status !== 'Matured' && (
+              <Col xs={12}>
+                <Form.Item name="Deduction_Amount" label="Deduction / Penalty (₹)">
+                  <InputNumber style={{ width: '100%' }} min={0} />
+                </Form.Item>
+              </Col>
+            )}
+            <Col xs={selectedMember?.Status === 'Matured' ? 24 : 12}>
               <Form.Item name="Bonus_Amount" label="Goodwill Bonus (₹)">
                 <InputNumber style={{ width: '100%' }} min={0} />
               </Form.Item>
@@ -210,10 +217,10 @@ export default function SchemeAdjustmentPage() {
             </Form.Item>
           )}
           <Form.Item name="Reason" label="Reason" rules={[{ required: true, message: 'A reason is required.' }]}>
-            <Input.TextArea rows={2} placeholder="e.g. Customer requested early closure" />
+            <Input.TextArea rows={2} placeholder={selectedMember?.Status === 'Matured' ? 'e.g. Scheme matured — paid out' : 'e.g. Customer requested early closure'} />
           </Form.Item>
           <Button type="primary" danger htmlType="submit" block loading={forecloseMutation.isPending}>
-            Foreclose Scheme
+            {selectedMember?.Status === 'Matured' ? 'Confirm Payout' : 'Foreclose Scheme'}
           </Button>
         </Form>
       </Modal>

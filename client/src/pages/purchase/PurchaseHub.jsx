@@ -15,7 +15,7 @@ import {
   DollarOutlined, RollbackOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { purchaseApi, karigarApi, masterApi } from '../../api/modules';
+import { purchaseApi, karigarApi, masterApi, dayCloseApi, savingsApi, customersApi } from '../../api/modules';
 import api from '../../api/axios';
 import { formatCurrency } from '../../utils/calculations';
 import { useGoldRate } from '../../hooks/useGoldRate';
@@ -53,8 +53,8 @@ const ADDITIONAL_TYPES = [
   { key: 'advance_adj', icon: '📋', title: 'Advance Adjustment', subtitle: 'Adjust advance against bill', color: '#1890ff', badge: 'Adjustment', badgeColor: 'blue' },
   { key: 'gift_voucher', icon: '🎁', title: 'Gift Voucher Bill', subtitle: 'Issue a gift voucher to customer', color: '#eb2f96', badge: 'Voucher', badgeColor: 'magenta' },
   { key: 'scheme_receipt', icon: '🪙', title: 'Scheme Receipt', subtitle: 'Scheme installment receipt', color: '#B8860B', badge: 'Scheme', badgeColor: 'gold' },
-  { key: 'scheme_refund', icon: '↩️', title: 'Scheme Refund', subtitle: 'Refund scheme amount to member', color: '#ff4d4f', badge: 'Refund', badgeColor: 'red' },
-  { key: 'scheme_maturity', icon: '✅', title: 'Scheme Maturity Adj.', subtitle: 'Maturity amount adjustment in sale', color: '#13c2c2', badge: 'Maturity', badgeColor: 'cyan' },
+  { key: 'scheme_refund', icon: '↩️', title: 'Scheme Refund', subtitle: 'Opens Scheme Adjustment — payout a member', color: '#ff4d4f', badge: 'Refund', badgeColor: 'red' },
+  { key: 'scheme_maturity', icon: '✅', title: 'Scheme Maturity Adj.', subtitle: 'Opens Scheme Adjustment — apply to a bill', color: '#13c2c2', badge: 'Maturity', badgeColor: 'cyan' },
 ];
 
 // ── Print helpers ─────────────────────────────────────────────────────────────
@@ -135,8 +135,25 @@ export default function PurchaseHub() {
     onError: (err) => message.error(err.response?.data?.message || 'Failed to create purchase.'),
   });
 
-  const openModal = (key) => { setActiveModal(key); form.resetFields(); setPurchaseItems([{ id: 1 }]); };
-  const closeModal = () => { setActiveModal(null); form.resetFields(); };
+  // Scheme Refund and Scheme Maturity Adjustment both need real member
+  // lookup + invoice/payout handling that already exists, fully built and
+  // tested, on the dedicated Scheme Adjustment page — rather than
+  // building a second, divergent copy of that logic in a small modal
+  // here, these two cards jump straight there.
+  const openModal = (key) => {
+    if (key === 'scheme_refund' || key === 'scheme_maturity') { navigate('/savings/adjustment'); return; }
+    setActiveModal(key); form.resetFields(); setPurchaseItems([{ id: 1 }]);
+  };
+  const closeModal = () => { setActiveModal(null); form.resetFields(); setMemberQuery(''); };
+
+  // ── Member lookup for Scheme Receipt (savings/collect needs a real
+  // Member_ID, not a free-text member number) ────────────────────────────────
+  const [memberQuery, setMemberQuery] = useState('');
+  const { data: memberResults, isFetching: memberSearching } = useQuery({
+    queryKey: ['scheme-member-search-hub', memberQuery],
+    queryFn: () => savingsApi.searchForPos(memberQuery).then((r) => r.data.data || []),
+    enabled: activeModal === 'scheme_receipt' && memberQuery.trim().length >= 2,
+  });
 
   // No single "onNew" here — the hub's own cards ARE the "new entry"
   // choice (Gold/Silver/.../Scheme Maturity), so Save/Cancel are the only
@@ -198,15 +215,45 @@ export default function PurchaseHub() {
   };
 
   // ── Submit old gold / exchange ─────────────────────────────────────────────
-  const onSubmitExchange = (values) => {
+  // This used to only print a paper receipt — nothing was ever saved, so
+  // the gold/silver bought here never entered stock and no money ever
+  // moved on the books. It's a real purchase (we pay the walk-in seller
+  // cash for their old metal), so it now books through the same
+  // purchase.js route the Purchase Bill modal uses — Create_Inventory:
+  // false since it's raw melt-down material, not a resalable ornament
+  // with its own design/article number.
+  const round2Hub = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const onSubmitExchange = async (values) => {
     const w = parseFloat(values.weight || 0);
     const purity = parseFloat(values.purity_pct || 91.67) / 100;
     const melt = parseFloat(values.melt_deduct || 2) / 100;
     const rate = parseFloat(values.gold_rate || goldRate);
     const pureWt = w * purity;
     const netWt = pureWt * (1 - melt);
-    const value = netWt * rate;
+    const value = round2Hub(netWt * rate);
     const titleMap = { old_gold: 'OLD GOLD PURCHASE', gold_exchange: 'GOLD EXCHANGE', silver_exchange: 'SILVER EXCHANGE' };
+    const purchaseTypeMap = { old_gold: 'Old Gold', gold_exchange: 'Gold Exchange', silver_exchange: 'Silver Exchange' };
+    const metalMap = { old_gold: 'Gold', gold_exchange: 'Gold', silver_exchange: 'Silver' };
+
+    try {
+      await createMutation.mutateAsync({
+        Supplier_Name: values.customer_name || 'Walk-in',
+        Purchase_Type: purchaseTypeMap[activeModal],
+        Purchase_Date: new Date().toISOString(),
+        Subtotal_Amount: value, Total_Amount: value,
+        Amount_Paid: value, Payment_Mode: values.payment_mode || 'Cash',
+        Notes: `${values.item_desc || 'Old metal'} — ${values.mobile ? `Mobile ${values.mobile}, ` : ''}Gross ${w}g @ ${values.purity_label || values.purity_pct + '%'} purity, ${values.melt_deduct || 2}% melting deduction`,
+        items: [{
+          Item_Description: values.item_desc || `${metalMap[activeModal]} exchange`, Metal_Type: metalMap[activeModal],
+          Gross_Weight: w, Stone_Weight: 0, Gold_Rate: rate, Making_Charge: 0,
+          Purchase_Rate: value, Total_Line_Value: value, Create_Inventory: false,
+        }],
+      });
+    } catch (err) {
+      message.error(err.response?.data?.message || 'Failed to save this purchase.');
+      return;
+    }
+
     const rows = `
       <div class="row"><span class="label">Customer Name</span><span class="val">${values.customer_name || 'Walk-in'}</span></div>
       <div class="row"><span class="label">Mobile</span><span class="val">${values.mobile || '-'}</span></div>
@@ -222,21 +269,27 @@ export default function PurchaseHub() {
     const footer = `<div class="row"><span class="total">NET PAYABLE: ₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
       <div style="margin-top:20px">Customer Signature: ___________________________</div>`;
     printBill(titleMap[activeModal], rows, footer);
-    message.success(`${titleMap[activeModal]} receipt printed!`);
+    message.success(`${titleMap[activeModal]} saved & receipt printed!`);
     closeModal();
   };
 
   // ── Submit additional bills ───────────────────────────────────────────────
-  const onSubmitAdditional = (values) => {
+  // gift_voucher and scheme_receipt now actually persist (dayCloseApi/
+  // savingsApi both already existed, fully built — this card just never
+  // called them). advance_receipt/advance_adj still only print: there is
+  // no generic (not-tied-to-an-order) customer-advance ledger anywhere in
+  // the backend yet to save them against — flagged as its own follow-up
+  // rather than silently faked.
+  const onSubmitAdditional = async (values) => {
     const titleMap = {
       advance_receipt: 'ADVANCE RECEIPT', advance_adj: 'ADVANCE ADJUSTMENT',
       gift_voucher: 'GIFT VOUCHER', scheme_receipt: 'SCHEME INSTALLMENT RECEIPT',
-      scheme_refund: 'SCHEME REFUND', scheme_maturity: 'SCHEME MATURITY ADJUSTMENT',
     };
     const title = titleMap[activeModal] || 'RECEIPT';
     let rows = `<div class="row"><span class="label">Customer Name</span><span class="val">${values.customer_name || 'Walk-in'}</span></div>
       <div class="row"><span class="label">Mobile</span><span class="val">${values.mobile || '-'}</span></div>
       <div class="dline"></div>`;
+    let voucherCode = values.voucher_code;
 
     if (activeModal === 'advance_receipt') {
       rows += `<div class="row"><span class="label">Purpose</span><span class="val">${values.purpose || 'Advance'}</span></div>
@@ -248,29 +301,46 @@ export default function PurchaseHub() {
         <div class="row"><span class="label">Bill Amount</span><span class="val">₹${parseFloat(values.bill_amount || 0).toLocaleString('en-IN')}</span></div>
         <div class="row"><span class="label">Advance Adjusted</span><span class="val">₹${parseFloat(values.advance_amount || 0).toLocaleString('en-IN')}</span></div>`;
     } else if (activeModal === 'gift_voucher') {
-      rows += `<div class="row"><span class="label">Voucher Code</span><span class="val">${values.voucher_code || 'GV-' + Date.now().toString().slice(-6)}</span></div>
+      // Best-effort link to an existing customer by mobile — the voucher
+      // still issues fine (Issued_To_Customer_ID is nullable) if nothing
+      // matches or the lookup fails.
+      let customerId = null;
+      if (values.mobile) {
+        try {
+          const found = await customersApi.search({ mobile: values.mobile });
+          customerId = found.data.data?.[0]?.Customer_ID || null;
+        } catch { /* non-fatal — issue unlinked */ }
+      }
+      try {
+        const res = await dayCloseApi.createVoucher({
+          value: values.voucher_amount,
+          expiry_date: values.valid_till?.toISOString() || null,
+          customer_id: customerId,
+        });
+        voucherCode = res.data.data.Voucher_Code;
+      } catch (err) {
+        message.error(err.response?.data?.message || 'Failed to issue gift voucher.');
+        return;
+      }
+      rows += `<div class="row"><span class="label">Voucher Code</span><span class="val">${voucherCode}</span></div>
         <div class="row"><span class="label">Valid Till</span><span class="val">${values.valid_till?.format('DD-MMM-YYYY') || 'No expiry'}</span></div>
         <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
     } else if (activeModal === 'scheme_receipt') {
-      rows += `<div class="row"><span class="label">Member No</span><span class="val">${values.member_no || '-'}</span></div>
-        <div class="row"><span class="label">Scheme Name</span><span class="val">${values.scheme_name || '-'}</span></div>
-        <div class="row"><span class="label">Installment No</span><span class="val">${values.installment_no || '-'}</span></div>
+      if (!values.Member_ID) { message.error('Search and select a scheme member first.'); return; }
+      try {
+        await savingsApi.collect({ Member_ID: values.Member_ID, Amount: values.amount, Payment_Mode: values.payment_mode || 'Cash' });
+      } catch (err) {
+        message.error(err.response?.data?.message || 'Failed to collect installment.');
+        return;
+      }
+      rows += `<div class="row"><span class="label">Member</span><span class="val">${values.member_label || '-'}</span></div>
         <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
-    } else if (activeModal === 'scheme_refund') {
-      rows += `<div class="row"><span class="label">Member No</span><span class="val">${values.member_no || '-'}</span></div>
-        <div class="row"><span class="label">Reason</span><span class="val">${values.reason || '-'}</span></div>
-        <div class="row"><span class="label">Refund Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
-    } else if (activeModal === 'scheme_maturity') {
-      rows += `<div class="row"><span class="label">Member No</span><span class="val">${values.member_no || '-'}</span></div>
-        <div class="row"><span class="label">Sale Invoice</span><span class="val">${values.invoice_no || '-'}</span></div>
-        <div class="row"><span class="label">Bill Amount</span><span class="val">₹${parseFloat(values.bill_amount || 0).toLocaleString('en-IN')}</span></div>
-        <div class="row"><span class="label">Scheme Amount Adjusted</span><span class="val">₹${parseFloat(values.scheme_amount || 0).toLocaleString('en-IN')}</span></div>`;
     }
 
-    const net = parseFloat(values.amount || values.advance_amount || values.voucher_amount || values.scheme_amount || 0);
+    const net = parseFloat(values.amount || values.advance_amount || values.voucher_amount || 0);
     const footer = `<div class="row"><span class="total">AMOUNT: ₹${net.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>`;
     printBill(title, rows, footer);
-    message.success(`${title} printed!`);
+    message.success(`${title} ${['advance_receipt', 'advance_adj'].includes(activeModal) ? 'printed' : 'saved & printed'}!`);
     closeModal();
   };
 
@@ -511,56 +581,52 @@ export default function PurchaseHub() {
         </Form>
       </Modal>
 
-      {/* Gift Voucher */}
+      {/* Gift Voucher — now really issues a tbl_gift_vouchers row via the
+          existing dayCloseApi.createVoucher route; the code is always
+          server-generated (real, unique, checked at redemption), so a
+          client-typed one would only ever have been discarded silently
+          before — removed rather than left as a misleading no-op field. */}
       <Modal title="🎁 Gift Voucher Bill" open={activeModal==='gift_voucher'} onCancel={closeModal} footer={null} width={480} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={onSubmitAdditional}>
           <Row gutter={12}><Col xs={12}><Form.Item name="customer_name" label="Issued To" rules={[{required:true}]}><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="mobile" label="Mobile"><Input /></Form.Item></Col></Row>
+            <Col xs={12}><Form.Item name="mobile" label="Mobile" extra="Used to link this voucher to an existing customer, if found."><Input /></Form.Item></Col></Row>
           <Row gutter={12}><Col xs={12}><Form.Item name="voucher_amount" label="Voucher Amount (₹)" rules={[{required:true}]}><InputNumber style={{width:'100%'}} min={1} formatter={v=>`₹ ${v}`} /></Form.Item></Col>
             <Col xs={12}><Form.Item name="valid_till" label="Valid Till"><DatePicker style={{width:'100%'}} disabledDate={d=>d&&d<dayjs()} /></Form.Item></Col></Row>
-          <Row gutter={12}><Col xs={12}><Form.Item name="payment_mode" label="Payment Mode" initialValue="Cash"><Select><Option value="Cash">Cash</Option><Option value="UPI">UPI</Option><Option value="Card">Card</Option></Select></Form.Item></Col>
-            <Col xs={12}><Form.Item name="voucher_code" label="Voucher Code"><Input placeholder="Auto-generated if blank" /></Form.Item></Col></Row>
+          <Form.Item name="payment_mode" label="Payment Mode" initialValue="Cash"><Select><Option value="Cash">Cash</Option><Option value="UPI">UPI</Option><Option value="Card">Card</Option></Select></Form.Item>
           <Button type="primary" htmlType="submit" block size="large" style={{background:'#eb2f96',borderColor:'#eb2f96',fontWeight:700}}><PrinterOutlined /> Issue Gift Voucher</Button>
         </Form>
       </Modal>
 
-      {/* Scheme Receipt */}
+      {/* Scheme Receipt — now really posts via savingsApi.collect (POST
+          /savings/collect), which needs a real Member_ID, not the free-
+          text member number the old print-only form took. Member Number/
+          Scheme Name/Installment # were also never real inputs the
+          backend could use — replaced with a proper member search
+          (same GET /savings/members/search-for-pos POS itself uses). */}
       <Modal title="🪙 Scheme Installment Receipt" open={activeModal==='scheme_receipt'} onCancel={closeModal} footer={null} width={480} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={onSubmitAdditional}>
-          <Row gutter={12}><Col xs={12}><Form.Item name="customer_name" label="Member Name" rules={[{required:true}]}><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="mobile" label="Mobile"><Input /></Form.Item></Col></Row>
-          <Row gutter={12}><Col xs={12}><Form.Item name="member_no" label="Member Number"><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="scheme_name" label="Scheme Name"><Input /></Form.Item></Col></Row>
-          <Row gutter={12}><Col xs={8}><Form.Item name="installment_no" label="Installment #"><InputNumber style={{width:'100%'}} min={1} /></Form.Item></Col>
-            <Col xs={8}><Form.Item name="amount" label="Amount (₹)" rules={[{required:true}]}><InputNumber style={{width:'100%'}} min={1} formatter={v=>`₹ ${v}`} /></Form.Item></Col>
-            <Col xs={8}><Form.Item name="payment_mode" label="Mode" initialValue="Cash"><Select><Option value="Cash">Cash</Option><Option value="UPI">UPI</Option><Option value="Cheque">Cheque</Option></Select></Form.Item></Col></Row>
-          <Button type="primary" htmlType="submit" block size="large" style={{background:'#B8860B',borderColor:'#B8860B',fontWeight:700}}><PrinterOutlined /> Print Scheme Receipt</Button>
-        </Form>
-      </Modal>
-
-      {/* Scheme Refund */}
-      <Modal title="↩️ Scheme Refund" open={activeModal==='scheme_refund'} onCancel={closeModal} footer={null} width={480} destroyOnClose>
-        <Form form={form} layout="vertical" onFinish={onSubmitAdditional}>
-          <Row gutter={12}><Col xs={12}><Form.Item name="customer_name" label="Member Name" rules={[{required:true}]}><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="mobile" label="Mobile"><Input /></Form.Item></Col></Row>
-          <Row gutter={12}><Col xs={12}><Form.Item name="member_no" label="Member Number"><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="amount" label="Refund Amount (₹)" rules={[{required:true}]}><InputNumber style={{width:'100%'}} min={1} formatter={v=>`₹ ${v}`} /></Form.Item></Col></Row>
-          <Form.Item name="reason" label="Refund Reason"><Input.TextArea rows={2} /></Form.Item>
-          <Row gutter={12}><Col xs={12}><Form.Item name="payment_mode" label="Refund Mode" initialValue="Cash"><Select><Option value="Cash">Cash</Option><Option value="UPI">UPI</Option><Option value="Cheque">Cheque</Option><Option value="NEFT">NEFT</Option></Select></Form.Item></Col></Row>
-          <Button type="primary" htmlType="submit" block size="large" style={{background:'#ff4d4f',borderColor:'#ff4d4f',fontWeight:700}}><PrinterOutlined /> Print Refund Receipt</Button>
-        </Form>
-      </Modal>
-
-      {/* Scheme Maturity Adjustment */}
-      <Modal title="✅ Scheme Maturity Adjustment" open={activeModal==='scheme_maturity'} onCancel={closeModal} footer={null} width={480} destroyOnClose>
-        <Alert message="Use this when adjusting maturity amount against a sale bill." type="info" showIcon style={{marginBottom:12,fontSize:11}} />
-        <Form form={form} layout="vertical" onFinish={onSubmitAdditional}>
-          <Row gutter={12}><Col xs={12}><Form.Item name="customer_name" label="Member Name" rules={[{required:true}]}><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="member_no" label="Member Number"><Input /></Form.Item></Col></Row>
-          <Row gutter={12}><Col xs={12}><Form.Item name="invoice_no" label="Sale Invoice No"><Input /></Form.Item></Col>
-            <Col xs={12}><Form.Item name="bill_amount" label="Bill Amount (₹)"><InputNumber style={{width:'100%'}} min={0} formatter={v=>`₹ ${v}`} /></Form.Item></Col></Row>
-          <Form.Item name="scheme_amount" label="Scheme Amount Adjusted (₹)" rules={[{required:true}]}><InputNumber style={{width:'100%'}} min={1} formatter={v=>`₹ ${v}`} /></Form.Item>
-          <Button type="primary" htmlType="submit" block size="large" style={{background:'#13c2c2',borderColor:'#13c2c2',fontWeight:700}}><PrinterOutlined /> Print Maturity Adjustment Receipt</Button>
+          <Form.Item label="Member" required>
+            <Select
+              showSearch placeholder="Search by name, mobile, or member number"
+              filterOption={false} loading={memberSearching}
+              onSearch={setMemberQuery}
+              notFoundContent={memberQuery.trim().length < 2 ? 'Type at least 2 characters' : (memberSearching ? 'Searching…' : 'No match')}
+              onChange={(memberId, opt) => { form.setFieldsValue({ Member_ID: memberId, member_label: opt?.label }); }}
+            >
+              {(memberResults || []).map((m) => (
+                <Option key={m.Member_ID} value={m.Member_ID} label={`${m.Member_Name} (${m.Member_Number})`}>
+                  {m.Member_Name} — {m.Member_Number} · {m.Mobile} <Tag color={m.Status === 'Matured' ? 'gold' : 'blue'} style={{marginLeft:4}}>{m.Status}</Tag>
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="Member_ID" hidden rules={[{ required: true, message: 'Select a member.' }]}><Input /></Form.Item>
+          <Form.Item name="member_label" hidden><Input /></Form.Item>
+          <Row gutter={12}>
+            <Col xs={12}><Form.Item name="amount" label="Amount (₹)" rules={[{required:true}]}><InputNumber style={{width:'100%'}} min={1} formatter={v=>`₹ ${v}`} /></Form.Item></Col>
+            <Col xs={12}><Form.Item name="payment_mode" label="Mode" initialValue="Cash"><Select><Option value="Cash">Cash</Option><Option value="UPI">UPI</Option><Option value="Cheque">Cheque</Option></Select></Form.Item></Col>
+          </Row>
+          <Button type="primary" htmlType="submit" block size="large" style={{background:'#B8860B',borderColor:'#B8860B',fontWeight:700}}><PrinterOutlined /> Collect & Print Scheme Receipt</Button>
         </Form>
       </Modal>
 

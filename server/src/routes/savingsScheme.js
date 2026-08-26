@@ -1026,13 +1026,20 @@ router.post('/members/:id/adjust-invoice', authenticate, requirePermission('acco
 // penalty, kept as the business's income) and/or a discretionary bonus,
 // then either pays out the net amount in cash/bank or applies it against
 // a sale invoice — same mechanism as adjust-invoice above.
+// Was Active-only ("A Matured scheme should be redeemed/adjusted normally
+// instead") but nothing else in the app actually offered that — adjust-
+// invoice always requires a real Invoice_Number even for a pure payout,
+// and no route existed for "pay out a Matured member with no bill
+// involved at all". Extended to accept Matured too; a Matured member
+// pays out with NO early-exit deduction (that penalty only makes sense
+// for stopping an in-progress scheme early) — Deduction_Amount is
+// ignored entirely in that case regardless of what the caller sends.
 router.post('/members/:id/foreclose', authenticate, requirePermission('accounts'), [
   body('Settlement_Mode').isIn(['Cash', 'Bank', 'Adjustment']),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tid = req.user.tenantId;
-  const deduction = parseFloat(req.body.Deduction_Amount || 0);
   const bonus = parseFloat(req.body.Bonus_Amount || 0);
   if (req.body.Settlement_Mode === 'Adjustment' && !req.body.Invoice_Number) {
     return sendError(res, 400, 'Invoice_Number is required when settling by Adjustment.');
@@ -1045,10 +1052,12 @@ router.post('/members/:id/foreclose', authenticate, requirePermission('accounts'
   try {
     const member = await trx('tbl_scheme_members').where({ Member_ID: req.params.id, Tenant_ID: tid }).forUpdate().first();
     if (!member) { await trx.rollback(); return sendError(res, 404, 'Member not found.'); }
-    if (member.Status !== 'Active') {
+    if (!['Active', 'Matured'].includes(member.Status)) {
       await trx.rollback();
-      return sendError(res, 400, `${member.Member_Number}'s scheme is ${member.Status}, not Active — foreclosure is only for stopping an in-progress scheme early. A Matured scheme should be redeemed/adjusted normally instead.`);
+      return sendError(res, 400, `${member.Member_Number}'s scheme is ${member.Status}, not Active or Matured — a payout only applies to a scheme that's in progress (foreclosing it early) or has completed (Matured).`);
     }
+    const isMatured = member.Status === 'Matured';
+    const deduction = isMatured ? 0 : parseFloat(req.body.Deduction_Amount || 0);
 
     const availableBalance = round2(Math.max(0, parseFloat(member.Total_Amount_Paid || 0) - parseFloat(member.Amount_Redeemed || 0)));
     if (deduction > availableBalance + 0.01) {
@@ -1082,8 +1091,9 @@ router.post('/members/:id/foreclose', authenticate, requirePermission('accounts'
       }
     }
 
+    const defaultReason = isMatured ? 'Matured — redeemed' : 'Foreclosed before maturity';
     await trx('tbl_scheme_members').where('Member_ID', member.Member_ID).update({
-      Status: 'Closed', Closure_Reason: (req.body.Reason || 'Foreclosed before maturity').slice(0, 200),
+      Status: 'Closed', Closure_Reason: (req.body.Reason || defaultReason).slice(0, 200),
       Amount_Redeemed: parseFloat(member.Total_Amount_Paid || 0), // the whole collected amount is now accounted for — paid out, adjusted, or kept as deduction income
       Redemption_Date: new Date(), Redemption_Sale_ID: sale?.Sale_ID || null, Modified_Date: new Date(),
     });
@@ -1091,16 +1101,16 @@ router.post('/members/:id/foreclose', authenticate, requirePermission('accounts'
     const schemeVoucherNumber = await generateSchemeAdjustmentNumber(tid);
     const [txn] = await trx('tbl_scheme_transactions').insert({
       Tenant_ID: tid, Receipt_Number: schemeVoucherNumber, Member_ID: member.Member_ID, Tenant_Member_No: member.Member_Number,
-      Txn_Type: 'Foreclosure', Installment_No: 0, Amount: availableBalance, Penalty_Amount: deduction, Net_Amount: netPayout,
+      Txn_Type: isMatured ? 'Redemption' : 'Foreclosure', Installment_No: 0, Amount: availableBalance, Penalty_Amount: deduction, Net_Amount: netPayout,
       Payment_Mode: req.body.Settlement_Mode, Payment_Reference: sale?.Invoice_Number || null, Collection_Source: 'Counter', Collected_By: req.user.userId,
-      Notes: req.body.Reason || 'Foreclosed before maturity', Created_By: req.user.username,
+      Notes: req.body.Reason || defaultReason, Created_By: req.user.username,
     }).returning('*');
 
     await trx('tbl_scheme_accounting_entries').insert({
       Tenant_ID: tid, Txn_ID: txn.Txn_ID, Entry_Date: new Date(), Receipt_No: schemeVoucherNumber, Member_ID: member.Member_ID,
       Debit_Account: 'Customer Scheme Deposit Account',
       Credit_Account: req.body.Settlement_Mode === 'Adjustment' ? 'Customer Receivable Account' : (req.body.Settlement_Mode === 'Bank' ? 'Bank Account (Unassigned — pre-dates per-bank ledgers)' : 'Cash Account'),
-      Amount: availableBalance, Narration: `Scheme foreclosure | ${member.Member_Number} | ${req.body.Reason || 'early closure'}`, Created_By: req.user.username,
+      Amount: availableBalance, Narration: `Scheme ${isMatured ? 'redemption' : 'foreclosure'} | ${member.Member_Number} | ${req.body.Reason || defaultReason}`, Created_By: req.user.username,
     }).catch(() => {});
 
     await trx.commit();
@@ -1126,7 +1136,7 @@ router.post('/members/:id/foreclose', authenticate, requirePermission('accounts'
         // so there's genuinely no real branch signal to stamp in that
         // case (left null/tenant-wide rather than guessed).
         tenantId: tid, sourceType: 'JOURNAL', reference: schemeVoucherNumber, branchId: sale?.Branch_ID || null,
-        narration: `Scheme foreclosure | ${member.Member_Number} | ${req.body.Reason || 'early closure'}`, createdBy: req.user.username,
+        narration: `Scheme ${isMatured ? 'redemption' : 'foreclosure'} | ${member.Member_Number} | ${req.body.Reason || defaultReason}`, createdBy: req.user.username,
         lines,
       });
     })().catch((err) => console.error('[SavingsScheme] foreclose ledger post failed:', err.message));
