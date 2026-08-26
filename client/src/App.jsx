@@ -213,7 +213,7 @@ function App() {
         <Route path="/repair/job-cards" element={<JobCardReport />} />
         <Route path="/pawnbroking" element={<PawnbrokingPage />} />
         <Route path="/insurance-amc" element={<InsuranceAmcPage />} />
-        <Route path="/hr-payroll" element={<HrPayrollPage />} />
+        <Route path="/hr-payroll" element={<ProtectedRoute permission="accounts"><HrPayrollPage /></ProtectedRoute>} />
         <Route path="/crm" element={<CrmPage />} />
         <Route path="/bank-cheque" element={<BankChequePage />} />
         <Route path="/accounting" element={<ProtectedRoute permission="accounts"><AccountingDashboardPage /></ProtectedRoute>} />

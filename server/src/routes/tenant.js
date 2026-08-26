@@ -126,7 +126,7 @@ router.get('/stats', authenticate, async (req, res) => {
 });
 
 // ─── PUT /api/tenant/settings ─────────────────────────────────────────────────
-router.put('/settings', authenticate, async (req, res) => {
+router.put('/settings', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     // Prevent modification of license fields
@@ -378,7 +378,7 @@ router.get('/users', authenticate, async (req, res) => {
   }
 });
 
-router.post('/users', authenticate, [
+router.post('/users', authenticate, requirePermission('tenant_management'), [
   body('Username').trim().notEmpty().withMessage('Username required'),
   body('Password').isLength({ min: 8 }).withMessage('Password min 8 chars'),
   body('Full_Name').trim().notEmpty().withMessage('Full name required'),
@@ -420,11 +420,19 @@ router.post('/users', authenticate, [
 });
 
 // ─── PUT /api/tenant/users/:id — Edit user ────────────────────────────────────
-router.put('/users/:id', authenticate, async (req, res) => {
+router.put('/users/:id', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
     const { Password, PIN, Custom_Permissions, ...updateData } = req.body;
     // Prevent changing tenant
     delete updateData.Tenant_ID;
+
+    // Guard: cannot change your own role, even with tenant_management —
+    // otherwise a Client Admin editing their own account could silently
+    // widen their own access (or a compromised admin session could
+    // self-escalate further) with no second person ever reviewing it.
+    if (parseInt(req.params.id) === req.user.userId && updateData.Role_ID !== undefined) {
+      return sendError(res, 400, 'You cannot change your own role.');
+    }
 
     // If password reset requested
     if (Password) {
@@ -486,7 +494,7 @@ router.put('/users/:id', authenticate, async (req, res) => {
 });
 
 // ─── DELETE /api/tenant/users/:id — Soft delete ───────────────────────────────
-router.delete('/users/:id', authenticate, async (req, res) => {
+router.delete('/users/:id', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
 
@@ -532,7 +540,7 @@ router.delete('/users/:id', authenticate, async (req, res) => {
 });
 
 // ─── POST /api/tenant/users/:id/unlock — Unlock account ──────────────────────
-router.post('/users/:id/unlock', authenticate, async (req, res) => {
+router.post('/users/:id/unlock', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
     await db('tbl_user_master')
       .where({ User_ID: req.params.id, Tenant_ID: req.user.tenantId })
@@ -554,7 +562,7 @@ router.get('/roles', authenticate, async (req, res) => {
 });
 
 // ─── POST /api/tenant/roles ───────────────────────────────────────────────────
-router.post('/roles', authenticate, [
+router.post('/roles', authenticate, requirePermission('tenant_management'), [
   body('Role_Name').trim().notEmpty().withMessage('Role name required'),
   body('Permissions').isObject().withMessage('Permissions must be an object'),
 ], async (req, res) => {
@@ -576,11 +584,17 @@ router.post('/roles', authenticate, [
 });
 
 // ─── PUT /api/tenant/roles/:id ────────────────────────────────────────────────
-router.put('/roles/:id', authenticate, async (req, res) => {
+router.put('/roles/:id', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
     const existing = await db('tbl_role_master').where('Role_ID', req.params.id).first();
     if (!existing) return sendError(res, 404, 'Role not found.');
     if (existing.Role_Name === 'Super Admin') return sendError(res, 403, 'Super Admin role cannot be modified.');
+    // Guard: cannot widen the permissions of your OWN role — otherwise a
+    // Client Admin (who has tenant_management) could silently grant
+    // themselves more access with no second person ever reviewing it.
+    if (parseInt(req.params.id) === req.user.roleId && req.body.Permissions) {
+      return sendError(res, 400, 'You cannot change your own role\'s permissions. Ask another admin.');
+    }
 
     const updateData = {};
     if (req.body.Role_Name) updateData.Role_Name = req.body.Role_Name;
@@ -612,7 +626,7 @@ router.put('/roles/:id', authenticate, async (req, res) => {
 });
 
 // ─── DELETE /api/tenant/roles/:id ─────────────────────────────────────────────
-router.delete('/roles/:id', authenticate, async (req, res) => {
+router.delete('/roles/:id', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
     const role = await db('tbl_role_master').where('Role_ID', req.params.id).first();
     if (!role) return sendError(res, 404, 'Role not found.');
@@ -629,9 +643,12 @@ router.delete('/roles/:id', authenticate, async (req, res) => {
 });
 
 // ─── PUT /api/tenant/users/:id/permissions — User-wise custom permissions ─────
-router.put('/users/:id/permissions', authenticate, async (req, res) => {
+router.put('/users/:id/permissions', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {
     const { permissions } = req.body;
+    if (parseInt(req.params.id) === req.user.userId) {
+      return sendError(res, 400, 'You cannot change your own custom permissions.');
+    }
     const [updated] = await db('tbl_user_master')
       .where({ User_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Custom_Permissions: JSON.stringify(permissions), Modified_Date: new Date() })

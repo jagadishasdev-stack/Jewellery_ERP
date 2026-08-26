@@ -75,9 +75,20 @@ router.post(
         return sendError(res, 403, 'License expired. Please renew.');
       }
 
-      // Build JWT payload
-      const permissions = typeof role.Permissions === 'string'
+      // Build JWT payload. tbl_user_master.Custom_Permissions is a per-user
+      // override on top of the role's own permissions — set via the
+      // "Custom Permissions" modal in UsersPage.jsx, which only ever writes
+      // the keys an admin explicitly toggled away from the role default
+      // (see that page's `effective = custom !== undefined ? custom : fromRole`).
+      // A shallow merge with the override last reproduces that exact
+      // semantics server-side: any key not explicitly overridden falls
+      // back to the role's value.
+      const rolePermissions = typeof role.Permissions === 'string'
         ? JSON.parse(role.Permissions) : role.Permissions;
+      const customPermissions = user.Custom_Permissions
+        ? (typeof user.Custom_Permissions === 'string' ? JSON.parse(user.Custom_Permissions) : user.Custom_Permissions)
+        : {};
+      const permissions = { ...rolePermissions, ...customPermissions };
 
       const tokenPayload = {
         userId: user.User_ID,
@@ -201,8 +212,13 @@ router.post('/refresh', async (req, res) => {
     const role = await db('tbl_role_master').where({ Role_ID: user.Role_ID }).first();
     if (!role) return sendError(res, 500, 'User role is misconfigured.');
 
-    const permissions = typeof role.Permissions === 'string'
+    // Same Custom_Permissions merge as /login — see the comment there.
+    const rolePermissions = typeof role.Permissions === 'string'
       ? JSON.parse(role.Permissions) : role.Permissions;
+    const customPermissions = user.Custom_Permissions
+      ? (typeof user.Custom_Permissions === 'string' ? JSON.parse(user.Custom_Permissions) : user.Custom_Permissions)
+      : {};
+    const permissions = { ...rolePermissions, ...customPermissions };
 
     const newToken = jwt.sign(
       { userId: user.User_ID, tenantId: user.Tenant_ID, roleId: user.Role_ID, roleName: role.Role_Name, username: user.Username, fullName: user.Full_Name, permissions },

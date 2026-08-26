@@ -778,6 +778,17 @@ router.post('/staff-pin-login', authenticate, async (req, res) => {
     if (!valid) return sendError(res, 401, 'Incorrect PIN.');
 
     const role = await db('tbl_role_master').where({ Role_ID: user.Role_ID }).first();
+    // permissions used to be hardcoded {} here — meaning a PIN-derived
+    // token could never pass ANY requirePermission() check regardless of
+    // the staff member's actual role, silently blocking every permission-
+    // gated write from the Image App the moment one existed. Same
+    // role-permissions + Custom_Permissions merge as the real /login and
+    // /refresh routes (see auth.js).
+    const rolePermissions = role ? (typeof role.Permissions === 'string' ? JSON.parse(role.Permissions) : role.Permissions) : {};
+    const customPermissions = user.Custom_Permissions
+      ? (typeof user.Custom_Permissions === 'string' ? JSON.parse(user.Custom_Permissions) : user.Custom_Permissions)
+      : {};
+    const permissions = { ...rolePermissions, ...customPermissions };
 
     // Short-lived on purpose — this identifies who's using the device for
     // roughly one shift, not a long-term session like the license-device
@@ -790,7 +801,7 @@ router.post('/staff-pin-login', authenticate, async (req, res) => {
       username: user.Username,
       fullName: user.Full_Name,
       loginType: 'staff-pin',
-      permissions: {},
+      permissions,
     }, process.env.JWT_SECRET, { expiresIn: '12h' });
 
     return sendSuccess(res, {

@@ -5,11 +5,15 @@ const { sendSuccess, sendError, sendValidationError } = require('../utils/respon
 const { authenticate, requirePermission } = require('../middleware/auth');
 const { auditLog } = require('../utils/auditLogger');
 const { applyStockVisibility, modeVal } = require('../utils/dataModeFilter');
+const { requireValidBranch, withBranch } = require('../utils/branchAccess');
 const dayjs = require('dayjs');
 
 // ── GET /api/floors  ──────────────────────────────────────────────────────────
-router.get('/', authenticate, async (req, res) => {
-  const { branchId } = req.query;
+// requireValidBranch/withBranch — NOT a raw req.query.branchId — so a user
+// restricted to one branch can't read another branch's floor layout by
+// just passing a different ?branchId (see utils/branchAccess.js's own
+// header comment on exactly this class of bug).
+router.get('/', authenticate, requireValidBranch, async (req, res) => {
   try {
     let qb = db('tbl_floor_master as f')
       .leftJoin('tbl_branch_master as b', 'f.Branch_ID', 'b.Branch_ID')
@@ -17,7 +21,7 @@ router.get('/', authenticate, async (req, res) => {
       .where('f.Is_Active', true)
       .select('f.*', 'b.Branch_Name')
       .orderBy('f.Branch_ID').orderBy('f.Floor_Number');
-    if (branchId) qb = qb.where('f.Branch_ID', branchId);
+    qb = withBranch(qb, req, 'f.Branch_ID');
     return sendSuccess(res, await qb);
   } catch (err) { return sendError(res, 500, 'Failed to fetch floors.'); }
 });
@@ -349,8 +353,8 @@ router.get('/reports/hidden-stock-sales', authenticate, requirePermission('tenan
 // Live stock, grouped by floor / counter / tray / the legacy free-text location.
 // Official mode excludes hidden stock; Unofficial mode shows the complete
 // inventory (see applyStockVisibility in dataModeFilter.js).
-router.get('/stock', authenticate, async (req, res) => {
-  const { branchId, groupBy = 'location' } = req.query;
+router.get('/stock', authenticate, requireValidBranch, async (req, res) => {
+  const { groupBy = 'location' } = req.query;
   const groupConfig = {
     location: { column: 'o.Physical_Location', joins: [] },
     floor: {
@@ -385,7 +389,7 @@ router.get('/stock', authenticate, async (req, res) => {
       db.raw('SUM("o"."Gross_Weight") as total_weight'),
       db.raw('SUM("o"."Total_Price") as total_value')
     ).groupBy(db.raw(quotedColumn));
-    if (branchId) qb = qb.where('o.Branch_ID', branchId);
+    qb = withBranch(qb, req, 'o.Branch_ID');
     return sendSuccess(res, await qb);
   } catch (err) { return sendError(res, 500, 'Failed to fetch floor stock.'); }
 });

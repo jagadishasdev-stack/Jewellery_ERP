@@ -107,6 +107,7 @@ router.get('/barcode/:code', authenticate, async (req, res) => {
       .leftJoin('tbl_purity_master as p', 'o.Purity_ID', 'p.Purity_ID')
       .leftJoin('tbl_design_master as d', 'o.Design_ID', 'd.Design_ID')
       .where('o.Article_Number', req.params.code)
+      .where('o.Tenant_ID', req.user.tenantId)
       .select('o.*', 't.Type_Name', 'p.Purity_Code', 'd.Design_Name');
     const ornament = await applyStockVisibility(qb, req, 'o').first();
 
@@ -382,9 +383,14 @@ router.put('/stock-classification/by-location', authenticate, requirePermission(
 });
 
 // ─── PUT /api/ornaments/:id ───────────────────────────────────────────────────
-router.put('/:id', authenticate, async (req, res) => {
+// requirePermission('inventory') + Tenant_ID on both the read and the
+// write — this route used to have neither, so any authenticated user of
+// ANY tenant could rewrite another tenant's stock (weights, rates,
+// prices) by guessing a numeric Ornament_ID, the same class of bug
+// GET /:id above was already hardened against.
+router.put('/:id', authenticate, requirePermission('inventory'), async (req, res) => {
   try {
-    const old = await db('tbl_ornament_master').where({ Ornament_ID: req.params.id }).first();
+    const old = await db('tbl_ornament_master').where({ Ornament_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!old) return sendError(res, 404, 'Ornament not found.');
 
     // Is_Hidden/Data_Mode must never be settable through this generic
@@ -398,10 +404,13 @@ router.put('/:id', authenticate, async (req, res) => {
     // by-location] above) for the same reason — every classification
     // change must leave a real audit record per the Special Stock spec's
     // own requirement, which a silent field on this generic update would bypass.
-    const { Is_Hidden, Data_Mode, Hidden_Location_ID, Hidden_By, Hidden_Date, Hidden_Reason, Restored_By, Restored_Date, Stock_Classification, Special_Stock_Type, ...safeBody } = req.body;
+    // Tenant_ID also stripped here — belt and suspenders on top of the
+    // Tenant_ID-scoped WHERE clause below, so this can never move a row
+    // to another tenant even if the WHERE were ever loosened by accident.
+    const { Is_Hidden, Data_Mode, Hidden_Location_ID, Hidden_By, Hidden_Date, Hidden_Reason, Restored_By, Restored_Date, Stock_Classification, Special_Stock_Type, Tenant_ID, ...safeBody } = req.body;
 
     const [updated] = await db('tbl_ornament_master')
-      .where({ Ornament_ID: req.params.id })
+      .where({ Ornament_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ ...safeBody, Last_Updated_By: req.user.username, Last_Updated_Date: new Date() })
       .returning('*');
 

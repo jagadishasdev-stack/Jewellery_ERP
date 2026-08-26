@@ -19,7 +19,11 @@ beforeAll(async () => {
   const res = await request(app).post('/api/auth/login').send({ username: tenant.username, password: tenant.password, tenantId: tenant.tenantId });
   adminToken = res.body.data.token;
 
-  const roleRes = await db('tbl_role_master').where({ Role_Name: 'Billing Operator' }).first();
+  // Store Manager, not Billing Operator — the attribution check below edits
+  // ornament stock data, which requirePermission('inventory') now correctly
+  // reserves for a role that actually has inventory access (a Billing
+  // Operator legitimately shouldn't be able to edit stock weights/rates).
+  const roleRes = await db('tbl_role_master').where({ Role_Name: 'Store Manager' }).first();
   const staffRes = await request(app).post('/api/tenant/users').set(auth(adminToken)).send({
     Username: 'qa_pin_test_staff', Password: 'TempPass@2026', Full_Name: 'QA PIN Test Staff', Role_ID: roleRes.Role_ID,
   });

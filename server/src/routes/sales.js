@@ -619,7 +619,7 @@ router.get('/:id', authenticate, async (req, res) => {
   try {
     const sale = await db('tbl_sales_header as s')
       .leftJoin('tbl_customer_master as c', 's.Customer_ID', 'c.Customer_ID')
-      .where({ 's.Sale_ID': req.params.id })
+      .where({ 's.Sale_ID': req.params.id, 's.Tenant_ID': req.user.tenantId })
       .select('s.*', 'c.Email as Customer_Email', 'c.Date_Of_Birth')
       .first();
 
@@ -641,7 +641,7 @@ router.get('/:id', authenticate, async (req, res) => {
 // ─── GET /api/sales/invoice/:number ──────────────────────────────────────────
 router.get('/invoice/:number', authenticate, async (req, res) => {
   try {
-    const sale = await db('tbl_sales_header').where({ Invoice_Number: req.params.number }).first();
+    const sale = await db('tbl_sales_header').where({ Invoice_Number: req.params.number, Tenant_ID: req.user.tenantId }).first();
     if (!sale) return sendError(res, 404, 'Invoice not found.');
 
     const items = await db('tbl_sales_details').where({ Sale_ID: sale.Sale_ID });
@@ -655,7 +655,7 @@ router.get('/invoice/:number', authenticate, async (req, res) => {
 router.post('/:id/cancel', authenticate, requirePermission('sales'), async (req, res) => {
   const trx = await db.transaction();
   try {
-    const sale = await trx('tbl_sales_header').where({ Sale_ID: req.params.id }).first();
+    const sale = await trx('tbl_sales_header').where({ Sale_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!sale) { await trx.rollback(); return sendError(res, 404, 'Sale not found.'); }
     if (sale.Payment_Status === 'Paid') { await trx.rollback(); return sendError(res, 400, 'Cannot cancel a fully paid sale.'); }
 

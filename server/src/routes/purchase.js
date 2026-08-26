@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requirePermission } = require('../middleware/auth');
 const { generateArticleNumber } = require('../utils/invoiceNumber');
 const { nextNumber } = require('../utils/numberFormat');
 const { auditLog } = require('../utils/auditLogger');
@@ -85,7 +85,7 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
 });
 
 // ── POST /api/purchase/create  ────────────────────────────────────────────────
-router.post('/create', authenticate, requireValidBranch, [
+router.post('/create', authenticate, requireValidBranch, requirePermission('inventory'), [
   body('items').isArray({ min: 1 }),
   body('Total_Amount').isFloat({ min: 0.01 }),
 ], async (req, res) => {
@@ -229,7 +229,7 @@ router.get('/:id', authenticate, async (req, res) => {
   try {
     const purchase = await db('tbl_purchase_header as p')
       .leftJoin('tbl_vendor_master as v','p.Supplier_ID','v.Vendor_ID')
-      .where({ 'p.Purchase_ID': req.params.id })
+      .where({ 'p.Purchase_ID': req.params.id, 'p.Tenant_ID': req.user.tenantId })
       .select(
         'p.*',
         db.raw('COALESCE(v."Vendor_Name", p."Supplier_Name") AS "Supplier_Name_Resolved"')
@@ -245,13 +245,22 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // ── POST /api/purchase/:id/approve  ───────────────────────────────────────────
-router.post('/:id/approve', authenticate, async (req, res) => {
+// Real second-person sign-off: the same user who created the purchase
+// cannot also approve it, and only a Draft can be approved (previously
+// this was a rubber stamp — no permission check, no creator/approver
+// separation, no status guard, so any user could approve their own
+// entry, or re-approve an already-approved one, any number of times).
+router.post('/:id/approve', authenticate, requirePermission('inventory'), async (req, res) => {
   try {
+    const purchase = await db('tbl_purchase_header').where({ Purchase_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!purchase) return sendError(res, 404, 'Purchase not found.');
+    if (purchase.Status !== 'Draft') return sendError(res, 400, `Only a Draft purchase can be approved (this one is ${purchase.Status}).`);
+    if (purchase.Created_By === req.user.username) return sendError(res, 403, 'The purchase must be approved by someone other than who created it.');
+
     const [updated] = await db('tbl_purchase_header')
       .where({ Purchase_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Approved', Approved_By: req.user.username, Approved_Date: new Date() })
       .returning('*');
-    if (!updated) return sendError(res, 404, 'Purchase not found.');
     return sendSuccess(res, updated, 'Purchase approved.');
   } catch (err) { return sendError(res, 500, 'Failed to approve.'); }
 });

@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { body, validationResult } = require('express-validator');
 const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requirePermission } = require('../middleware/auth');
 const { auditLog } = require('../utils/auditLogger');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
@@ -63,7 +63,7 @@ router.post('/attendance', authenticate, [body('records').isArray({ min: 1 })], 
   try {
     const results = [];
     for (const rec of req.body.records) {
-      const existing = await db('tbl_attendance').where({ User_ID: rec.User_ID, Attendance_Date: rec.Attendance_Date }).first();
+      const existing = await db('tbl_attendance').where({ User_ID: rec.User_ID, Attendance_Date: rec.Attendance_Date, Tenant_ID: tenantId }).first();
       if (existing) {
         const [row] = await db('tbl_attendance').where('Attendance_ID', existing.Attendance_ID).update({ ...rec, Created_By: req.user.username }).returning('*');
         results.push(row);
@@ -77,17 +77,28 @@ router.post('/attendance', authenticate, [body('records').isArray({ min: 1 })], 
 });
 
 // ── Salary Structure ───────────────────────────────────────────────────────────
-router.get('/salary-structure/:userId', authenticate, async (req, res) => {
+// requirePermission('accounts') — this used to be authenticate-only, so
+// any logged-in user (including a floor salesperson) could read or set
+// any colleague's salary. tbl_salary_structure itself has NO Tenant_ID
+// column (verified against the live schema — unlike tbl_attendance) —
+// it scopes purely by User_ID, so tenant isolation here has to go
+// through tbl_user_master (which IS Tenant_ID-scoped) instead of a
+// column that doesn't exist on this table.
+router.get('/salary-structure/:userId', authenticate, requirePermission('accounts'), async (req, res) => {
   try {
+    const owner = await db('tbl_user_master').where({ User_ID: req.params.userId, Tenant_ID: req.user.tenantId }).first('User_ID');
+    if (!owner) return sendError(res, 404, 'User not found.');
     const row = await db('tbl_salary_structure').where({ User_ID: req.params.userId, Is_Active: true }).orderBy('Effective_From', 'desc').first();
     return sendSuccess(res, row || null);
   } catch (err) { return sendError(res, 500, 'Failed to fetch salary structure.'); }
 });
 
-router.post('/salary-structure', authenticate, [body('User_ID').notEmpty(), body('Basic').isFloat({ gt: 0 }), body('Effective_From').notEmpty()], async (req, res) => {
+router.post('/salary-structure', authenticate, requirePermission('accounts'), [body('User_ID').notEmpty(), body('Basic').isFloat({ gt: 0 }), body('Effective_From').notEmpty()], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
+    const owner = await db('tbl_user_master').where({ User_ID: req.body.User_ID, Tenant_ID: req.user.tenantId }).first('User_ID');
+    if (!owner) return sendError(res, 404, 'User not found.');
     // Superseding structure — deactivate any previous active one for this user.
     await db('tbl_salary_structure').where({ User_ID: req.body.User_ID, Is_Active: true }).update({ Is_Active: false });
     const [row] = await db('tbl_salary_structure').insert({ ...req.body, Created_By: req.user.username }).returning('*');
@@ -172,7 +183,7 @@ router.get('/payroll/runs/:id', authenticate, async (req, res) => {
 // active staff member with a salary structure: attendance-based gross,
 // PF/ESI deductions from the structure's percentages, plus any pending
 // sales incentives, in one draft run.
-router.post('/payroll/runs', authenticate, requireValidBranch, [body('Pay_Month').isInt({ min: 1, max: 12 }), body('Pay_Year').isInt({ min: 2020 })], async (req, res) => {
+router.post('/payroll/runs', authenticate, requireValidBranch, requirePermission('accounts'), [body('Pay_Month').isInt({ min: 1, max: 12 }), body('Pay_Year').isInt({ min: 2020 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
@@ -246,10 +257,12 @@ router.post('/payroll/runs', authenticate, requireValidBranch, [body('Pay_Month'
 // frontend's only action on a Draft run is this one "Finalize" button,
 // so — matching that single-step UX exactly — finalizing IS paying:
 // every staff member's Net_Salary is marked paid here, in one go.
-router.post('/payroll/runs/:id/finalize', authenticate, async (req, res) => {
+router.post('/payroll/runs/:id/finalize', authenticate, requireValidBranch, requirePermission('accounts'), async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
-    const existing = await db('tbl_payroll_run').where({ Run_ID: req.params.id, Tenant_ID: tenantId }).first();
+    let existingQb = db('tbl_payroll_run').where({ Run_ID: req.params.id, Tenant_ID: tenantId });
+    existingQb = withBranch(existingQb, req);
+    const existing = await existingQb.first();
     if (!existing) return sendError(res, 404, 'Payroll run not found.');
     if (existing.Status === 'Finalized') return sendError(res, 400, 'This payroll run is already finalized.');
 
