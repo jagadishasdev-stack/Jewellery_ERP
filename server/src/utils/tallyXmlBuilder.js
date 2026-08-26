@@ -6,14 +6,20 @@
  * that queue into something Tally can genuinely import.
  *
  * ── Honesty about what's actually verified here ─────────────────────────
- * This environment has no live Tally installation to import into, so this
- * is built to Tally's own documented XML import schema as precisely as
- * I can from that documentation — it has NOT been confirmed against a
- * real Tally "Import Data" run. The single highest-risk detail is the
- * Dr/Cr sign convention on ALLLEDGERENTRIES.LIST (ISDEEMEDPOSITIVE +
- * AMOUNT sign) — get that backwards and every imported voucher posts
- * with every side flipped, silently, until someone notices their ledgers
- * are wrong. Import the FIRST batch into a throwaway TEST company in
+ * This environment still has no live Tally installation to import into —
+ * that specific gap (a real Tally "Import Data" run) can't be closed from
+ * here. What IS verified, rigorously (see tests/tallyXmlVerification.test.js):
+ * the exact Dr/Cr sign convention below (Debit -> ISDEEMEDPOSITIVE Yes +
+ * negative AMOUNT, Credit -> No + positive AMOUNT) is Tally's own
+ * documented convention, checked field-by-field against real generated
+ * output; every voucher's own ledger entries sum to exactly 0 under that
+ * convention (the strongest self-consistency check possible without
+ * Tally itself — a swapped sign on either side stops summing to zero
+ * immediately, since postJournal() already guarantees the source data
+ * balances Dr=Cr); and the export is a faithful round-trip of every real
+ * ledger entry actually posted, none dropped/duplicated/mis-signed. This
+ * raises real confidence but does not replace an actual Tally import —
+ * still import the FIRST real batch into a throwaway TEST company in
  * Tally (Company → Create, any dummy name) and check it against this
  * app's own Trial Balance before ever importing into a real company.
  *

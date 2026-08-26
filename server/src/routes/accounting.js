@@ -496,11 +496,13 @@ router.get('/balance-sheet', authenticate, requirePermission('accounts'), requir
     }
 
     // Current period's P&L rolls into Capital as "Current Profit" — real
-    // retained-earnings closing only happens at financial-year-end (not
-    // built yet, see the comment on currentFinancialYear()); until then,
-    // the balance sheet needs this to actually balance day-to-day. Branch-
-    // filtered the same as the main totals above — an unfiltered P&L
-    // folded into a branch-filtered Assets/Liabilities would never balance.
+    // retained-earnings closing now exists (POST /close-financial-year),
+    // which rolls a PAST year's P&L permanently into Retained Earnings
+    // Account and zeroes its Income/Expense accounts; this bolt-on is
+    // still needed for the ONGOING (not-yet-closed) year, so the balance
+    // sheet keeps balancing day-to-day before that year's own close runs.
+    // Branch-filtered the same as the main totals above — an unfiltered
+    // P&L folded into a branch-filtered Assets/Liabilities would never balance.
     const fy = currentFinancialYear();
     let plTotalsQb = db('tbl_accounting_entries as e')
       .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
@@ -726,6 +728,111 @@ router.post('/voucher/:id/reverse', authenticate, requirePermission('accounts'),
     });
     return sendSuccess(res, { journalId, journalNumber }, `Reversed ${original.Journal_Number}.`, 201);
   } catch (err) { return sendError(res, 400, err.message); }
+});
+
+// ── GET /api/accounting/financial-year-closes ───────────────────────────────────
+router.get('/financial-year-closes', authenticate, requirePermission('accounts'), async (req, res) => {
+  try {
+    const closes = await db('tbl_financial_year_close').where({ Tenant_ID: req.user.tenantId }).orderBy('FY_Start', 'desc');
+    return sendSuccess(res, closes);
+  } catch (err) { return sendError(res, 500, 'Failed to fetch financial year closes.'); }
+});
+
+// ── POST /api/accounting/close-financial-year ───────────────────────────────────
+// The gap flagged directly in balance-sheet's own comment above. A real
+// closing entry (standard double-entry mechanics): Dr every Income
+// account for its accumulated Cr balance (zeroing it), Cr every Expense
+// account for its accumulated Dr balance (zeroing it), and the net
+// difference goes to Retained Earnings Account — Cr if the year was
+// profitable, Dr if it was a loss. Scoped from the day after the last
+// close's FY_End (or since inception, if this is the first-ever close)
+// through the given FY_End, so nothing is double-closed or skipped.
+//
+// What this does NOT do (a real, separate, larger follow-up, not
+// silently claimed): it doesn't lock the closed period against later
+// backdated entries in every other route that posts a journal — closing
+// itself is complete and correct, but nothing yet stops a sale dated
+// before FY_End from being entered after this close runs.
+router.post('/close-financial-year', authenticate, requirePermission('accounts'), async (req, res) => {
+  const tenantId = req.user.tenantId;
+  const { FY_Start, FY_End } = req.body;
+  if (!FY_Start || !FY_End) return sendError(res, 400, 'FY_Start and FY_End are both required.');
+  if (FY_End < FY_Start) return sendError(res, 400, 'FY_End cannot be before FY_Start.');
+  if (FY_End > today()) return sendError(res, 400, 'Cannot close a financial year that has not ended yet.');
+
+  try {
+    const lastClose = await db('tbl_financial_year_close').where({ Tenant_ID: tenantId }).orderBy('FY_End', 'desc').first();
+    if (lastClose && FY_Start <= lastClose.FY_End) {
+      return sendError(res, 400, `This overlaps the already-closed period ending ${lastClose.FY_End} (${lastClose.Journal_Reference}). FY_Start must be after that.`);
+    }
+    const alreadyClosedThisEnd = await db('tbl_financial_year_close').where({ Tenant_ID: tenantId, FY_End }).first();
+    if (alreadyClosedThisEnd) return sendError(res, 400, `${FY_End} has already been closed (${alreadyClosedThisEnd.Journal_Reference}).`);
+
+    // Everything since the last close (or since inception) through FY_End —
+    // NOT strictly bounded to [FY_Start, FY_End] alone, so a gap between
+    // "since inception" and the caller's chosen FY_Start can never leave
+    // un-closed Income/Expense history stranded and un-rolled forever.
+    const periodStart = lastClose ? lastClose.FY_End : null;
+    const accounts = await db('tbl_chart_of_accounts')
+      .where({ Tenant_ID: tenantId, Is_Active: true }).whereIn('Account_Group', ['Income', 'Expenses']);
+    if (accounts.length === 0) return sendError(res, 400, 'No Income/Expense accounts exist yet — nothing to close.');
+
+    let entriesQb = db('tbl_accounting_entries as e')
+      .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
+      .where({ 'e.Tenant_ID': tenantId }).where('j.Entry_Date', '<=', FY_End)
+      .whereIn('e.Account_ID', accounts.map((a) => a.Account_ID));
+    if (periodStart) entriesQb = entriesQb.where('j.Entry_Date', '>', periodStart);
+    const totals = await entriesQb.groupBy('e.Account_ID', 'e.Entry_Type').select('e.Account_ID', 'e.Entry_Type').sum('e.Amount as total');
+    const byAccount = {};
+    for (const t of totals) { byAccount[t.Account_ID] = byAccount[t.Account_ID] || { dr: 0, cr: 0 }; byAccount[t.Account_ID][t.Entry_Type === 'Dr' ? 'dr' : 'cr'] = parseFloat(t.total); }
+
+    const lines = [];
+    let totalIncome = 0, totalExpense = 0;
+    for (const a of accounts) {
+      const t = byAccount[a.Account_ID] || { dr: 0, cr: 0 };
+      if (a.Account_Group === 'Income') {
+        const netCr = Math.round((t.cr - t.dr) * 100) / 100; // Income's natural side is Cr
+        if (Math.abs(netCr) >= 0.01) {
+          lines.push({ account: a.Account_Name, group: a.Account_Group, sub: a.Account_Sub_Group, type: netCr > 0 ? 'Dr' : 'Cr', amount: Math.abs(netCr), narration: `FY Close ${FY_End} — zeroing ${a.Account_Name}` });
+          totalIncome += netCr;
+        }
+      } else {
+        const netDr = Math.round((t.dr - t.cr) * 100) / 100; // Expenses' natural side is Dr
+        if (Math.abs(netDr) >= 0.01) {
+          lines.push({ account: a.Account_Name, group: a.Account_Group, sub: a.Account_Sub_Group, type: netDr > 0 ? 'Cr' : 'Dr', amount: Math.abs(netDr), narration: `FY Close ${FY_End} — zeroing ${a.Account_Name}` });
+          totalExpense += netDr;
+        }
+      }
+    }
+
+    const netProfit = Math.round((totalIncome - totalExpense) * 100) / 100;
+    if (lines.length === 0) return sendError(res, 400, 'Nothing to close — no Income/Expense activity in this period.');
+    if (Math.abs(netProfit) >= 0.01) {
+      lines.push({
+        account: 'Retained Earnings Account', group: 'Capital', sub: 'Capital',
+        type: netProfit > 0 ? 'Cr' : 'Dr', amount: Math.abs(netProfit),
+        narration: `FY Close ${FY_End} — Net ${netProfit > 0 ? 'Profit' : 'Loss'} rolled into Retained Earnings`,
+      });
+    }
+
+    const journalReference = `FYCLOSE-${FY_End}`;
+    const { journalId, journalNumber } = await postJournal({
+      tenantId, sourceType: 'JOURNAL', reference: journalReference,
+      narration: `Financial Year Close ${FY_Start} to ${FY_End} — Net ${netProfit >= 0 ? 'Profit' : 'Loss'} ₹${Math.abs(netProfit).toLocaleString('en-IN')}`,
+      createdBy: req.user.username, lines,
+    });
+
+    const [closeRow] = await db('tbl_financial_year_close').insert({
+      Tenant_ID: tenantId, FY_Start, FY_End,
+      Total_Income: Math.round(totalIncome * 100) / 100, Total_Expense: Math.round(totalExpense * 100) / 100,
+      Net_Profit: netProfit, Journal_Reference: journalNumber, Closed_By: req.user.username,
+    }).returning('*');
+
+    return sendSuccess(res, { ...closeRow, journalId }, `Financial year ${FY_Start} to ${FY_End} closed — Net ${netProfit >= 0 ? 'Profit' : 'Loss'} ₹${Math.abs(netProfit).toLocaleString('en-IN')} rolled into Retained Earnings.`, 201);
+  } catch (err) {
+    console.error('Financial year close error:', err.message);
+    return sendError(res, 500, 'Failed to close financial year: ' + err.message);
+  }
 });
 
 module.exports = router;

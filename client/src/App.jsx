@@ -87,6 +87,7 @@ import ProfitLossPage from './pages/accounting/ProfitLossPage';
 import BalanceSheetPage from './pages/accounting/BalanceSheetPage';
 import DayBookPage from './pages/accounting/DayBookPage';
 import VouchersPage from './pages/accounting/VouchersPage';
+import FinancialYearClosePage from './pages/accounting/FinancialYearClosePage';
 import RateAgentPage from './pages/rate-agent/RateAgentPage';
 import CompliancePage from './pages/compliance/CompliancePage';
 import ManufacturingPage from './pages/manufacturing/ManufacturingPage';
@@ -235,6 +236,7 @@ function App() {
         <Route path="/accounting/balance-sheet" element={<ProtectedRoute permission="accounts"><BalanceSheetPage /></ProtectedRoute>} />
         <Route path="/accounting/day-book" element={<ProtectedRoute permission="accounts"><DayBookPage /></ProtectedRoute>} />
         <Route path="/accounting/vouchers" element={<ProtectedRoute permission="accounts"><VouchersPage /></ProtectedRoute>} />
+        <Route path="/accounting/financial-year-close" element={<ProtectedRoute permission="accounts"><FinancialYearClosePage /></ProtectedRoute>} />
         <Route path="/rate-agent" element={<RateAgentPage />} />
         <Route path="/compliance" element={<CompliancePage />} />
         <Route path="/manufacturing" element={<ManufacturingPage />} />

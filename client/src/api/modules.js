@@ -637,6 +637,8 @@ export const accountingApi = {
   getBranchOpeningBalances: (branchId) => api.get('/accounting/branch-opening-balances', { params: { branchId } }),
   saveBranchOpeningBalance: (data) => api.put('/accounting/branch-opening-balances', data),
   reconcileBranchOpeningBalance: (accountId) => api.get('/accounting/branch-opening-balances/reconcile', { params: { accountId } }),
+  getFinancialYearCloses: () => api.get('/accounting/financial-year-closes'),
+  closeFinancialYear: (data) => api.post('/accounting/close-financial-year', data),
 };
 
 // ─── User Permission Overrides ───────────────────────────────────────────────────

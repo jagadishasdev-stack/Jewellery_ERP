@@ -103,6 +103,7 @@ async function teardown() {
   await db('tbl_agent_master').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_tally_sync_log').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_tally_config').where({ Tenant_ID: TENANT_ID }).del();
+  await db('tbl_financial_year_close').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_sync_log').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_sync_queue').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_tenant_subscription').where({ Tenant_ID: TENANT_ID }).del();

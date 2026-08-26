@@ -175,6 +175,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/accounting/branch-opening-balances', label: '🏢 Branch Opening Balances' },
         { key: '/accounting/day-book', label: '📅 Day Book' },
         { key: '/accounting/vouchers', label: '✍️ Voucher Entry' },
+        { key: '/accounting/financial-year-close', label: '🔒 Financial Year Close' },
       ],
     });
   }
