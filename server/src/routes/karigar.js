@@ -381,7 +381,32 @@ router.post('/settle', authenticate, requirePermission('karigar_management'), re
 });
 
 // ─── Vendor CRUD (for both Karigars and Suppliers) ────────────────────────────
-router.post('/vendor', authenticate, [
+// Vendor_ID/tbl_vendor_master is the one shared master behind both the
+// Karigar and Purchase modules (Vendor_Type: Karigar/Supplier/Both) — a
+// user who manages either can create/edit/deactivate a vendor record.
+const requireVendorManagePermission = (req, res, next) => {
+  const p = req.user?.permissions || {};
+  if (p.karigar_management || p.inventory) return next();
+  return sendError(res, 403, "Access denied. Required permission: 'karigar_management' or 'inventory'.");
+};
+
+// Fields a caller may set on a vendor — excludes Vendor_ID/Tenant_ID/Vendor_Code/
+// Current_Balance/Created_By/Created_Date (system-managed) so a client can't
+// smuggle a balance change or hop tenants through this route.
+const VENDOR_EDITABLE_FIELDS = [
+  'Vendor_Name', 'Vendor_Type', 'Contact_Person', 'Mobile_1', 'Mobile_2', 'Email',
+  'Address_Line1', 'Address_Line2', 'City', 'State', 'Pincode', 'GST_No', 'PAN_No',
+  'Bank_Name', 'Bank_Account_No', 'IFSC_Code', 'Credit_Limit', 'Credit_Days',
+  'Karigar_Skill', 'Karigar_Experience_Years', 'Karigar_Daily_Capacity',
+  'Karigar_Wastage_Allowed_Percent', 'Notes',
+];
+function pickVendorFields(body) {
+  const out = {};
+  for (const f of VENDOR_EDITABLE_FIELDS) if (body[f] !== undefined) out[f] = body[f];
+  return out;
+}
+
+router.post('/vendor', authenticate, requireVendorManagePermission, [
   body('Vendor_Name').trim().notEmpty(),
   body('Vendor_Type').isIn(['Supplier', 'Karigar', 'Both']),
   body('Mobile_1').trim().notEmpty(),
@@ -395,7 +420,9 @@ router.post('/vendor', authenticate, [
     const vendorCode = `VND-${tenantId.replace('_', '')}-${String(parseInt(count.c) + 1).padStart(4, '0')}`;
 
     const [vendor] = await db('tbl_vendor_master').insert({
-      ...req.body,
+      ...pickVendorFields(req.body),
+      Opening_Balance: req.body.Opening_Balance || 0,
+      Current_Balance: req.body.Opening_Balance || 0,
       Tenant_ID: tenantId,
       Vendor_Code: vendorCode,
       Created_By: req.user.username,
@@ -409,14 +436,97 @@ router.post('/vendor', authenticate, [
 });
 
 router.get('/vendors', authenticate, async (req, res) => {
-  const { type } = req.query;
+  const { type, includeInactive } = req.query;
   try {
-    let qb = db('tbl_vendor_master').where({ Tenant_ID: req.user.tenantId, Is_Active: true });
+    let qb = db('tbl_vendor_master').where({ Tenant_ID: req.user.tenantId });
+    if (!includeInactive || includeInactive === 'false') qb = qb.where({ Is_Active: true });
     if (type) qb = qb.whereIn('Vendor_Type', [type, 'Both']);
     const vendors = await qb.orderBy('Vendor_Name');
     return sendSuccess(res, vendors);
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch vendors.');
+  }
+});
+
+// ─── PUT /api/karigar/vendor/:id ───────────────────────────────────────────────
+// Was entirely missing — a karigar/supplier's mobile, GSTIN, address, wastage
+// allowance, or bank details could be set once at creation and never
+// corrected or updated through the app.
+router.put('/vendor/:id', authenticate, requireVendorManagePermission, async (req, res) => {
+  try {
+    const existing = await db('tbl_vendor_master').where({ Vendor_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!existing) return sendError(res, 404, 'Vendor not found.');
+
+    const updates = pickVendorFields(req.body);
+    if (Object.keys(updates).length === 0) return sendError(res, 400, 'No editable fields provided.');
+    updates.Modified_Date = new Date();
+
+    const [vendor] = await db('tbl_vendor_master').where({ Vendor_ID: req.params.id }).update(updates).returning('*');
+    return sendSuccess(res, vendor, 'Vendor updated.');
+  } catch (err) {
+    return sendError(res, 500, 'Failed to update vendor.');
+  }
+});
+
+// ─── PATCH /api/karigar/vendor/:id/deactivate & /reactivate ───────────────────
+// Also entirely missing — a vendor could be created but never retired, so a
+// karigar who left or a supplier the business stopped dealing with stayed
+// in every dropdown forever with no way to hide them.
+router.patch('/vendor/:id/deactivate', authenticate, requireVendorManagePermission, async (req, res) => {
+  try {
+    const existing = await db('tbl_vendor_master').where({ Vendor_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!existing) return sendError(res, 404, 'Vendor not found.');
+    if (parseFloat(existing.Current_Balance) !== 0) {
+      return sendError(res, 400, `Cannot deactivate — outstanding balance of ₹${existing.Current_Balance}. Settle it first.`);
+    }
+    const openIssue = await db('tbl_issue_to_karigar').where({ Karigar_ID: req.params.id, Tenant_ID: req.user.tenantId }).whereNot('Status', 'Completed').first();
+    if (openIssue) return sendError(res, 400, `Cannot deactivate — issue ${openIssue.Issue_Number} is still open with this karigar.`);
+
+    const [vendor] = await db('tbl_vendor_master').where({ Vendor_ID: req.params.id }).update({ Is_Active: false, Modified_Date: new Date() }).returning('*');
+    return sendSuccess(res, vendor, 'Vendor deactivated.');
+  } catch (err) {
+    return sendError(res, 500, 'Failed to deactivate vendor.');
+  }
+});
+
+router.patch('/vendor/:id/reactivate', authenticate, requireVendorManagePermission, async (req, res) => {
+  try {
+    const existing = await db('tbl_vendor_master').where({ Vendor_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!existing) return sendError(res, 404, 'Vendor not found.');
+    const [vendor] = await db('tbl_vendor_master').where({ Vendor_ID: req.params.id }).update({ Is_Active: true, Modified_Date: new Date() }).returning('*');
+    return sendSuccess(res, vendor, 'Vendor reactivated.');
+  } catch (err) {
+    return sendError(res, 500, 'Failed to reactivate vendor.');
+  }
+});
+
+// ─── GET /api/karigar/outstanding ──────────────────────────────────────────────
+// Karigar-summary (below) only ever reported issued vs. returned weight —
+// there was no money-based "who do I owe wages to, and how much" view,
+// unlike Customer Reports' outstanding tab. Aggregates every open
+// (Is_Settled=false, Status='Completed') issue's estimated wages, plus any
+// still-open (not yet Completed) issue's gold-with-karigar value, per karigar.
+router.get('/outstanding', authenticate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const rows = await db('tbl_vendor_master as v')
+      .where('v.Tenant_ID', tenantId)
+      .whereIn('v.Vendor_Type', ['Karigar', 'Both'])
+      .leftJoin('tbl_issue_to_karigar as i', function () {
+        this.on('i.Karigar_ID', 'v.Vendor_ID').andOn('i.Tenant_ID', db.raw('?', [tenantId]));
+      })
+      .groupBy('v.Vendor_ID', 'v.Vendor_Name', 'v.Vendor_Code', 'v.Mobile_1', 'v.Current_Balance')
+      .select(
+        'v.Vendor_ID', 'v.Vendor_Name', 'v.Vendor_Code', 'v.Mobile_1', 'v.Current_Balance',
+        db.raw(`COALESCE(SUM(CASE WHEN i."Status" != 'Completed' THEN i."Total_Value_Issued" ELSE 0 END), 0) as gold_with_karigar_value`),
+        db.raw(`COALESCE(SUM(CASE WHEN i."Is_Settled" = false AND i."Status" = 'Completed' THEN i."Estimated_Wages" ELSE 0 END), 0) as wages_payable`),
+        db.raw(`COUNT(CASE WHEN i."Status" != 'Completed' THEN 1 END) as open_issues`),
+        db.raw(`COUNT(CASE WHEN i."Is_Settled" = false AND i."Status" = 'Completed' THEN 1 END) as unsettled_completed_issues`)
+      )
+      .orderBy('wages_payable', 'desc');
+    return sendSuccess(res, rows);
+  } catch (err) {
+    return sendError(res, 500, 'Failed to fetch karigar outstanding summary.');
   }
 });
 

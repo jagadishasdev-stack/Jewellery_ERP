@@ -591,6 +591,33 @@ router.get('/customer-outstanding', authenticate, requireValidBranch, async (req
   } catch (err) { return sendError(res, 500, 'Failed.'); }
 });
 
+// ─── GET /api/reports/supplier-outstanding ────────────────────────────────────
+// Mirrors customer-outstanding — tbl_vendor_master.Current_Balance and
+// tbl_purchase_header.Balance_Amount already held exactly this data, but
+// there was no report surfacing it (only a per-invoice Balance Due column
+// on the Purchase page itself, no per-supplier rollup).
+router.get('/supplier-outstanding', authenticate, requireValidBranch, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const data = await withBranch(db('tbl_purchase_header')
+      .where('tbl_purchase_header.Tenant_ID', tenantId)
+      .whereIn('tbl_purchase_header.Payment_Status', ['Partial', 'Pending'])
+      .whereNotNull('tbl_purchase_header.Supplier_ID')
+      .whereNot('tbl_purchase_header.Status', 'Cancelled'), req, 'tbl_purchase_header.Branch_ID')
+      .join('tbl_vendor_master as v', 'v.Vendor_ID', 'tbl_purchase_header.Supplier_ID')
+      .groupBy('tbl_purchase_header.Supplier_ID', 'v.Vendor_Name', 'v.Vendor_Code', 'v.Mobile_1')
+      .select(
+        'tbl_purchase_header.Supplier_ID', 'v.Vendor_Name', 'v.Vendor_Code', 'v.Mobile_1',
+        db.raw('SUM("tbl_purchase_header"."Total_Amount") as total_purchases'),
+        db.raw('SUM("tbl_purchase_header"."Amount_Paid") as total_paid'),
+        db.raw('SUM("tbl_purchase_header"."Balance_Amount") as outstanding'),
+        db.raw('MAX("tbl_purchase_header"."Purchase_Date") as last_purchase_date')
+      )
+      .orderBy('outstanding', 'desc');
+    return sendSuccess(res, data);
+  } catch (err) { return sendError(res, 500, 'Failed to fetch supplier outstanding.'); }
+});
+
 // ─── GET /api/reports/scheme-adjustments ─────────────────────────────────────
 router.get('/scheme-adjustments', authenticate, async (req, res) => {
   const { fromDate, toDate } = req.query;

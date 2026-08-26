@@ -89,6 +89,12 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
       children: [
         { key: '/purchase/hub', label: '🥇 Purchase Hub' },
         { key: '/purchase', label: '📜 Purchase History' },
+        // The only page that can create/edit a Supplier record was
+        // gated behind the Karigar menu below, which needs Goldsmith or
+        // Manufacturing enabled — a pure Retailer/Wholesaler tenant with
+        // just Purchase on could never reach it. Same page, reachable
+        // from here too now.
+        { key: '/karigar', label: '🏭 Suppliers / Vendors' },
       ],
     });
   }
@@ -266,6 +272,10 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/reports/inventory-reports', label: '📦 Inventory Reports' },
         { key: '/reports/financial-reports', label: '🏦 Financial Reports' },
         { key: '/reports/customer-reports', label: '👥 Customer Reports' },
+        // Both existed and worked (real routes, real pages) but had no
+        // menu entry anywhere — unreachable except by typing the URL.
+        ...((isEnabled('purchase') || isEnabled('old_gold')) ? [{ key: '/reports/purchase', label: '🛍️ Purchase Reports' }] : []),
+        ...((isEnabled('goldsmith') || isEnabled('manufacturing')) ? [{ key: '/reports/karigar', label: '🔨 Karigar Reports' }] : []),
         ...(isEnabled('savings_scheme') ? [{ key: '/reports/scheme-reports', label: '🪙 Scheme Reports' }] : []),
         ...(isEnabled('approval_module') ? [{ key: '/reports/approval', label: '🔄 Approval Reports' }] : []),
         { key: '/reports/management-reports', label: '🎯 Management Reports' },
