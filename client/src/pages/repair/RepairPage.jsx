@@ -21,8 +21,10 @@ const STATUS_COLOR = { Received: 'blue', 'In-Progress': 'orange', Ready: 'purple
 export default function RepairPage() {
   const [createModal, setCreateModal] = useState(false);
   const [detailModal, setDetailModal] = useState(null);
+  const [deliverModal, setDeliverModal] = useState(null); // repair row being delivered, or null
   const [filterStatus, setFilterStatus] = useState('');
   const [form] = Form.useForm();
+  const [deliverForm] = Form.useForm();
   const qc = useQueryClient();
 
   // ── original-sale/karigar lookup (which karigar made this item?) ────────────
@@ -86,9 +88,15 @@ export default function RepairPage() {
     onSuccess: () => { message.success('Status updated.'); qc.invalidateQueries(['repairs']); setDetailModal(null); },
   });
 
+  // Used to always post the collected balance as Cash regardless of how
+  // the customer actually paid (the deliver call sent no body at all) —
+  // a UPI/card repair payment silently inflated the cash drawer, which
+  // then showed as a fake shortage at day close. This modal is what
+  // actually collects the real amount + payment mode before delivering.
   const deliverMutation = useMutation({
-    mutationFn: (id) => repairApi.deliver(id),
-    onSuccess: () => { message.success('Item delivered to customer!'); qc.invalidateQueries(['repairs']); setDetailModal(null); },
+    mutationFn: ({ id, data }) => repairApi.deliver(id, data),
+    onSuccess: () => { message.success('Item delivered to customer!'); qc.invalidateQueries(['repairs']); setDetailModal(null); setDeliverModal(null); deliverForm.resetFields(); },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to deliver.'),
   });
 
   const closeCreateModal = () => {
@@ -131,7 +139,7 @@ export default function RepairPage() {
           {r.Status === 'Ready' && (
             <Button size="small" type="primary" icon={<CheckCircleOutlined />}
               style={{ background: '#52c41a', borderColor: '#52c41a' }}
-              onClick={() => deliverMutation.mutate(r.Repair_ID)}>
+              onClick={() => setDeliverModal(r)}>
               Deliver
             </Button>
           )}
@@ -320,14 +328,36 @@ export default function RepairPage() {
               {detailModal.Status === 'Ready' && (
                 <Button type="primary" block size="large"
                   style={{ background: '#52c41a', borderColor: '#52c41a' }}
-                  loading={deliverMutation.isPending}
-                  onClick={() => deliverMutation.mutate(detailModal.Repair_ID)}>
+                  onClick={() => setDeliverModal(detailModal)}>
                   ✅ Mark as Delivered
                 </Button>
               )}
             </Space>
           </div>
         )}
+      </Modal>
+
+      <Modal title={`✅ Deliver — ${deliverModal?.Job_Card_Number}`}
+        open={!!deliverModal} onCancel={() => { setDeliverModal(null); deliverForm.resetFields(); }} footer={null} destroyOnClose>
+        {deliverModal && (() => {
+          const amountDue = Math.max(0, parseFloat(deliverModal.Balance_Due || 0) || ((parseFloat(deliverModal.Total_Charge || 0)) - parseFloat(deliverModal.Advance_Paid || 0)));
+          return (
+            <Form form={deliverForm} layout="vertical" initialValues={{ Final_Cost: amountDue, Payment_Mode: 'Cash' }}
+              onFinish={(v) => deliverMutation.mutate({ id: deliverModal.Repair_ID, data: v })}>
+              <Text type="secondary">Balance due: <Text strong>{formatCurrency(amountDue)}</Text></Text>
+              <Form.Item name="Final_Cost" label="Amount Collected (₹)" style={{ marginTop: 12 }} rules={[{ required: true }]}>
+                <InputNumber style={{ width: '100%' }} min={0} />
+              </Form.Item>
+              <Form.Item name="Payment_Mode" label="Payment Mode" rules={[{ required: true }]}>
+                <Select options={['Cash', 'UPI', 'Debit Card', 'Credit Card', 'NEFT', 'RTGS', 'IMPS', 'Bank Transfer', 'Cheque'].map(m => ({ value: m, label: m }))} />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" block loading={deliverMutation.isPending}
+                style={{ background: '#52c41a', borderColor: '#52c41a', fontWeight: 700 }}>
+                Confirm Delivery
+              </Button>
+            </Form>
+          );
+        })()}
       </Modal>
 
       <PageTour steps={tourSteps} />

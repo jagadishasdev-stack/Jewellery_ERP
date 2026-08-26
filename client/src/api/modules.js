@@ -203,7 +203,7 @@ export const repairApi = {
   getAll: (params) => api.get('/repair', { params }),
   create: (data) => api.post('/repair', data),
   update: (id, data) => api.put(`/repair/${id}`, data),
-  deliver: (id) => api.post(`/repair/${id}/deliver`),
+  deliver: (id, data) => api.post(`/repair/${id}/deliver`, data),
   lookupByInvoice: (invoiceNumber) => api.get(`/repair/lookup-by-invoice/${invoiceNumber}`),
 };
 

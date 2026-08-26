@@ -130,11 +130,19 @@ router.post('/', authenticate, requireValidBranch, [
 });
 
 // ── PUT /api/repair/:id  ──────────────────────────────────────────────────────
+// Explicit allow-list — this used to blind-spread the whole request body
+// into the UPDATE, so a caller could set Tenant_ID (moving the record to
+// another tenant), Balance_Due/Total_Charge/Advance_Paid directly
+// (bypassing every ledger posting those are supposed to only ever change
+// through), or Original_Karigar_ID (forging the repair-to-karigar link).
+const REPAIR_UPDATE_FIELDS = ['Status', 'Technician_Notes', 'Labour_Charge', 'Material_Charge', 'Total_Charge', 'Balance_Due', 'Expected_Delivery_Date', 'Remarks'];
 router.put('/:id', authenticate, async (req, res) => {
   try {
+    const safeBody = {};
+    for (const key of REPAIR_UPDATE_FIELDS) if (req.body[key] !== undefined) safeBody[key] = req.body[key];
     const [updated] = await db('tbl_repair_orders')
       .where({ Repair_ID: req.params.id, Tenant_ID: req.user.tenantId })
-      .update({ ...req.body, Modified_Date: new Date() })
+      .update({ ...safeBody, Modified_Date: new Date() })
       .returning('*');
     if (!updated) return sendError(res, 404, 'Repair not found.');
     return sendSuccess(res, updated, 'Repair updated.');
@@ -150,6 +158,7 @@ router.post('/:id/deliver', authenticate, async (req, res) => {
   try {
     const order = await db('tbl_repair_orders').where({ Repair_ID: req.params.id, Tenant_ID: tenantId }).first();
     if (!order) return sendError(res, 404, 'Repair not found.');
+    if (order.Status === 'Delivered') return sendError(res, 400, 'This repair has already been delivered.');
 
     const amountDue = Math.max(0, parseFloat(order.Balance_Due || 0) || (parseFloat(order.Total_Charge || 0) - parseFloat(order.Advance_Paid || 0)));
     const collected = req.body.Final_Cost != null ? parseFloat(req.body.Final_Cost) : amountDue;
