@@ -125,6 +125,24 @@ router.get('/stats', authenticate, async (req, res) => {
   }
 });
 
+// ─── GET /api/tenant/settings ──────────────────────────────────────────────────
+// PUT /settings has existed the whole time — nothing in the client ever
+// called it (found via audit: no page fetches or edits GST_No, address, or
+// Loyalty_Point_Value anywhere). This is the read half it needed.
+router.get('/settings', authenticate, async (req, res) => {
+  try {
+    const tenant = await db('tbl_tenant_master')
+      .where({ Tenant_ID: req.user.tenantId })
+      .select('Company_Name', 'Brand_Code', 'Address_Line1', 'Address_Line2', 'City', 'State', 'Pincode',
+        'Phone', 'Email', 'GST_No', 'PAN_No', 'Business_Type', 'Loyalty_Point_Value')
+      .first();
+    if (!tenant) return sendError(res, 404, 'Tenant not found.');
+    return sendSuccess(res, tenant);
+  } catch (err) {
+    return sendError(res, 500, 'Failed to fetch settings.');
+  }
+});
+
 // ─── PUT /api/tenant/settings ─────────────────────────────────────────────────
 router.put('/settings', authenticate, requirePermission('tenant_management'), async (req, res) => {
   try {

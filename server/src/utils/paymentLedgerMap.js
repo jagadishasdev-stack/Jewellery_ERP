@@ -28,6 +28,11 @@ const PAYMENT_LEDGER = {
   'Scheme Adjustment':   { account: 'Customer Scheme Deposit Account',   group: 'Liabilities', sub: 'Advance' },
   'Bonus Adjustment':    { account: 'Scheme Bonus Provision Account',    group: 'Liabilities', sub: 'Provision' },
   'Customer Receivable': { account: 'Customer Receivable Account',       group: 'Assets',      sub: 'Receivable' },
+  // Redeeming loyalty points for a discount — unlike Scheme Bonus (which
+  // draws down a pre-provisioned liability), points are never provisioned
+  // for at all when earned (a plain integer column, no journal entry), so
+  // redeeming them is booked as a straight expense at redemption time.
+  'Loyalty Redemption':   { account: 'Loyalty Points Redemption Expense Account', group: 'Expenses', sub: 'Indirect Expense' },
 };
 
 const FALLBACK_BANK_LEDGER = { account: 'Bank Account (Unassigned — pre-dates per-bank ledgers)', group: 'Assets', sub: 'Bank' };

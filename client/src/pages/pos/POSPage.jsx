@@ -71,6 +71,7 @@ const BANK_SELECT_MODES = new Set(['Debit Card', 'NEFT', 'RTGS', 'IMPS', 'Bank T
 
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
 const PAN_THRESHOLD = 200000;
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export default function POSPage() {
   // ── Responsive layout ────────────────────────────────────────────────────────
@@ -172,6 +173,16 @@ export default function POSPage() {
   const [appliedSchemeAdjustments, setAppliedSchemeAdjustments] = useState([]); // [{Member_ID, Member_Number, Member_Name, balanceAmount, bonusAmount}]
   const [voucherCode, setVoucherCode] = useState('');
   const [voucherEntry, setVoucherEntry] = useState({ voucherId: null, availableBalance: 0, applyAmount: 0, applied: false });
+  // Loyalty points were only ever displayed at checkout, never actually
+  // redeemable for a discount anywhere — Loyalty_Points_Used was accepted
+  // and stored by the API but never subtracted from what the customer owed.
+  const [loyaltyPointsUsed, setLoyaltyPointsUsed] = useState(0);
+  const { data: tenantSettings } = useQuery({
+    queryKey: ['tenant-settings-pos'],
+    queryFn: () => tenantApi.getSettings().then((r) => r.data.data),
+    staleTime: 10 * 60 * 1000,
+  });
+  const loyaltyPointValue = parseFloat(tenantSettings?.Loyalty_Point_Value ?? 1);
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const searchRef = useRef(null);
@@ -217,13 +228,14 @@ export default function POSPage() {
     const scheme     = appliedSchemeAdjustments.reduce((s, a) => s + parseFloat(a.balanceAmount || 0), 0);
     const bonus      = appliedSchemeAdjustments.reduce((s, a) => s + parseFloat(a.bonusAmount || 0), 0);
     const voucher    = voucherEntry.applied  ? parseFloat(voucherEntry.applyAmount) : 0;
-    const netPayable = Math.max(0, billTotal - oldGold - scheme - bonus - voucher);
+    const loyalty    = round2(loyaltyPointsUsed * loyaltyPointValue);
+    const netPayable = Math.max(0, billTotal - oldGold - scheme - bonus - voucher - loyalty);
     const totalPaid  = paymentSplits.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
     const remaining  = Math.max(0, netPayable - totalPaid);
     const isPanRequired = netPayable >= PAN_THRESHOLD;
     const isSettled  = remaining <= 0.5;
-    return { oldGold, scheme, bonus, voucher, billTotal, netPayable, totalPaid, remaining, isPanRequired, isSettled };
-  }, [cartSubtotal, oldGoldEntry, appliedSchemeAdjustments, voucherEntry, paymentSplits]);
+    return { oldGold, scheme, bonus, voucher, loyalty, billTotal, netPayable, totalPaid, remaining, isPanRequired, isSettled };
+  }, [cartSubtotal, oldGoldEntry, appliedSchemeAdjustments, voucherEntry, loyaltyPointsUsed, loyaltyPointValue, paymentSplits]);
 
   // Auto-fill first payment split with full amount when checkout opens
   useEffect(() => {
@@ -242,6 +254,7 @@ export default function POSPage() {
       bonusAmount: adjustments.bonus,
       oldGoldAmount: adjustments.oldGold,
       voucherAmount: adjustments.voucher,
+      loyaltyAmount: adjustments.loyalty,
     });
   }, [items, customer, adjustments]);
 
@@ -369,6 +382,7 @@ export default function POSPage() {
       setSchemeSearchQuery('');
       setSchemeSearchTrigger('');
       setVoucherEntry({ voucherId: null, availableBalance: 0, applyAmount: 0, applied: false });
+      setLoyaltyPointsUsed(0);
       setPanNumber('');
       setWalkInName('');
       setWalkInMobile('');
@@ -406,6 +420,7 @@ export default function POSPage() {
       Old_Gold_Exchange_ID: oldGoldEntry.exchangeId,
       Old_Gold_Exchange_Amount: adjustments.oldGold,
       Old_Gold_Weight: oldGoldEntry.weight,
+      Loyalty_Points_Used: loyaltyPointsUsed,
       payments: paymentSplits.filter(p => parseFloat(p.amount) > 0)
         .map(p => ({ ...p, Bank_Account_ID: BANK_SELECT_MODES.has(p.mode) ? (p.bankAccountId || null) : null })),
       items: items.map(i => ({
@@ -566,6 +581,19 @@ export default function POSPage() {
                   <Text strong style={{ fontSize: 12 }}>{customer.Customer_Name}</Text>
                   <Text type="secondary" style={{ fontSize: 11 }}>{customer.Mobile_1}</Text>
                   <Tag color="blue" style={{ fontSize: 10 }}>Loyalty: {customer.Loyalty_Points || 0} pts</Tag>
+                  {/* Redemption was accrue-only everywhere in the app —
+                      Loyalty_Points_Used was accepted by the API and
+                      stored, but never actually reduced what was owed. */}
+                  {parseInt(customer.Loyalty_Points || 0, 10) > 0 && (
+                    <Space size={4} style={{ marginTop: 2 }}>
+                      <InputNumber size="small" min={0} max={parseInt(customer.Loyalty_Points || 0, 10)}
+                        value={loyaltyPointsUsed} onChange={(v) => setLoyaltyPointsUsed(Math.max(0, parseInt(v || 0, 10)))}
+                        style={{ width: 80 }} placeholder="Redeem" />
+                      <Text type="secondary" style={{ fontSize: 10 }}>
+                        pts {loyaltyPointsUsed > 0 ? `= -${formatCurrency(round2(loyaltyPointsUsed * loyaltyPointValue))}` : `(₹${loyaltyPointValue}/pt)`}
+                      </Text>
+                    </Space>
+                  )}
                 </Space>
               ) : <Text type="secondary" style={{ fontSize: 12 }}>Walk-in Customer</Text>}
             </Card>
@@ -818,6 +846,12 @@ export default function POSPage() {
                   <Text style={{ color: '#722ed1' }}>- {formatCurrency(adjustments.voucher)}</Text>
                 </div>
               )}
+              {adjustments.loyalty > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                  <Text style={{ color: '#1890ff' }}>Loyalty Points ({loyaltyPointsUsed} pts)</Text>
+                  <Text style={{ color: '#1890ff' }}>- {formatCurrency(adjustments.loyalty)}</Text>
+                </div>
+              )}
 
               <Divider style={{ margin: '6px 0' }} />
 
@@ -862,7 +896,7 @@ export default function POSPage() {
 
       {/* ── Customer Search Modal ─────────────────────────────────── */}
       <CustomerSearchModal open={customerModalOpen} onClose={() => setCustomerModalOpen(false)}
-        onSelect={c => { setCustomer(c); setCustomerModalOpen(false); }} />
+        onSelect={c => { setCustomer(c); setLoyaltyPointsUsed(0); setCustomerModalOpen(false); }} />
 
       {/* ── Checkout Modal with Multi-Payment ────────────────────── */}
       <Modal title={`Checkout — ${counterName}`} open={checkoutOpen}
@@ -872,7 +906,7 @@ export default function POSPage() {
         <div style={{ background: '#f9f9f9', borderRadius: 8, padding: '12px 16px', marginBottom: 16 }}>
           <Row gutter={16}>
             <Col xs={8}><Statistic title="Bill Total" value={adjustments.billTotal} formatter={v => formatCurrency(v)} valueStyle={{ fontSize: 15, color: '#B8860B' }} /></Col>
-            <Col xs={8}><Statistic title="Adjustments" value={adjustments.oldGold + adjustments.scheme + adjustments.bonus + adjustments.voucher} formatter={v => `- ${formatCurrency(v)}`} valueStyle={{ fontSize: 15, color: '#52c41a' }} /></Col>
+            <Col xs={8}><Statistic title="Adjustments" value={adjustments.oldGold + adjustments.scheme + adjustments.bonus + adjustments.voucher + adjustments.loyalty} formatter={v => `- ${formatCurrency(v)}`} valueStyle={{ fontSize: 15, color: '#52c41a' }} /></Col>
             <Col xs={8}><Statistic title="Net Payable" value={adjustments.netPayable} formatter={v => formatCurrency(v)} valueStyle={{ fontSize: 16, fontWeight: 700, color: '#B8860B' }} /></Col>
           </Row>
         </div>

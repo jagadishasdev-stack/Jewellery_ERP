@@ -241,6 +241,7 @@ export const tenantApi = {
   createBranch: (data) => api.post('/tenant/branches', data),
   updateBranch: (id, data) => api.put(`/tenant/branches/${id}`, data),
   getStats: () => api.get('/tenant/stats'),
+  getSettings: () => api.get('/tenant/settings'),
   updateSettings: (data) => api.put('/tenant/settings', data),
   getAllTenants: () => api.get('/tenant/all'),
   createTenant: (data) => api.post('/tenant/create', data),

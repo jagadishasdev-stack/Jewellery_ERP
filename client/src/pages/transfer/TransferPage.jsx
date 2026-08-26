@@ -18,6 +18,16 @@ const { Step } = Steps;
 export default function TransferPage() {
   const [createModal, setCreateModal] = useState(false);
   const [detailModal, setDetailModal] = useState(null);
+  // The "View" button only ever re-displayed fields already in the list
+  // row (Type/Status/From/To/Date/Remarks) — GET /transfer/:id has
+  // returned full item-level detail (ornament, weight, per-item status)
+  // since the transfer module was built; nothing in the client ever
+  // called it (found via audit — transferApi.getById was dead code).
+  const { data: detailData, isLoading: detailLoading } = useQuery({
+    queryKey: ['transfer-detail', detailModal?.Transfer_ID],
+    queryFn: () => transferApi.getById(detailModal.Transfer_ID).then(r => r.data.data),
+    enabled: !!detailModal,
+  });
   const [step, setStep] = useState(0);
   const [form] = Form.useForm();
   const [selectedItems, setSelectedItems] = useState([]);
@@ -432,7 +442,7 @@ export default function TransferPage() {
         open={!!detailModal}
         onCancel={() => setDetailModal(null)}
         footer={null}
-        width={500}
+        width={640}
       >
         {detailModal && (
           <div>
@@ -451,6 +461,22 @@ export default function TransferPage() {
                 </Col>
               ))}
             </Row>
+
+            <Divider style={{ margin: '4px 0 12px' }}>Items</Divider>
+            <Table
+              size="small"
+              loading={detailLoading}
+              dataSource={detailData?.items || []}
+              rowKey="Item_ID"
+              pagination={false}
+              columns={[
+                { title: 'Article No', dataIndex: 'Article_Number' },
+                { title: 'Type', dataIndex: 'Type_Name', render: v => v || '-' },
+                { title: 'Gross Wt (g)', dataIndex: 'Gross_Weight', render: v => parseFloat(v || 0).toFixed(3) },
+                { title: 'Status', dataIndex: 'Status', render: v => <Tag color={v === 'Received' ? 'green' : v === 'Rejected' ? 'red' : 'default'}>{v}</Tag> },
+                { title: 'Remarks', dataIndex: 'Remarks', render: v => v || '-' },
+              ]}
+            />
           </div>
         )}
       </Modal>

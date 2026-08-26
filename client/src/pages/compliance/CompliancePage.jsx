@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Typography, Tabs, Tag, Button, Space, message, InputNumber, Statistic, Card, Table, Input, Form, DatePicker, Row, Col, Alert, Empty } from 'antd';
 import { FileProtectOutlined, SearchOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { complianceApi, masterExtApi } from '../../api/modules';
+import { complianceApi, masterExtApi, tenantApi } from '../../api/modules';
 import GenericCrudTab from '../../components/GenericCrudTab';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -59,6 +59,37 @@ function EinvoiceTab() {
   );
 }
 
+function RedemptionValueCard() {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ['tenant-settings-loyalty'], queryFn: () => tenantApi.getSettings().then((r) => r.data.data) });
+  const [value, setValue] = useState(null);
+
+  const saveMutation = useMutation({
+    mutationFn: (v) => tenantApi.updateSettings({ Loyalty_Point_Value: v }),
+    onSuccess: () => { message.success('Redemption value updated.'); qc.invalidateQueries({ queryKey: ['tenant-settings-loyalty'] }); },
+    onError: (e) => message.error(e.response?.data?.message || 'Failed to update.'),
+  });
+
+  const current = value ?? settings?.Loyalty_Point_Value ?? 1;
+
+  return (
+    <Card style={{ marginBottom: 16, maxWidth: 480 }} title="Redemption Value">
+      <Text type="secondary" style={{ display: 'block', marginBottom: 10, fontSize: 12 }}>
+        What one loyalty point is worth as a discount when a customer redeems points at checkout (POS/Billing).
+        Earning (above) and redemption value are independent settings.
+      </Text>
+      <Space>
+        <InputNumber addonBefore="₹" min={0} step={0.25} value={current} onChange={setValue} style={{ width: 140 }} />
+        <Text type="secondary">per point</Text>
+        <Button type="primary" style={{ background: '#B8860B', borderColor: '#B8860B' }}
+          loading={saveMutation.isPending} onClick={() => saveMutation.mutate(current)}>
+          Save
+        </Button>
+      </Space>
+    </Card>
+  );
+}
+
 function LoyaltySlabsTab() {
   const [amount, setAmount] = useState(null);
   const [result, setResult] = useState(null);
@@ -69,12 +100,15 @@ function LoyaltySlabsTab() {
   };
   return (
     <div>
-      <Card style={{ marginBottom: 16, maxWidth: 400 }}>
+      <RedemptionValueCard />
+      <Card style={{ marginBottom: 16, maxWidth: 400 }} title="Earning Calculator">
         <Space>
           <InputNumber placeholder="Sale amount ₹" value={amount} onChange={setAmount} style={{ width: 180 }} />
           <Button onClick={calc}>Calculate Points</Button>
         </Space>
         {result && <Statistic title="Points Earned" value={result.points} style={{ marginTop: 12 }} />}
+        <Alert type="warning" showIcon style={{ marginTop: 12, fontSize: 11 }}
+          message="These slabs are a reference calculator only — the actual points a sale earns is a fixed 1 point per ₹1,000 spent, computed in sales.js. Wiring real sales to use these slabs instead is a separate, larger change." />
       </Card>
       <GenericCrudTab
         queryKey={['loyalty-slabs']} listFn={complianceApi.getLoyaltySlabs} createFn={complianceApi.createLoyaltySlab}

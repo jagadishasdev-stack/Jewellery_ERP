@@ -282,7 +282,28 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
 
     const voucherAmount = parseFloat(voucherAmountInput || 0);
 
-    const netPayable = subtotal + totalGST - oldGoldAmountApplied - totalSchemeAdjustment - totalBonusAdjustment - voucherAmount;
+    // ── Validate & price Loyalty Points redemption (if any) ────────────────
+    // Loyalty_Points_Used was accepted and stored since the loyalty column
+    // was added, but never actually reduced what the customer owed — a
+    // write-only audit field. Tenant.Loyalty_Point_Value (defaults ₹1/pt,
+    // configurable per tenant — see tenant.js's settings route) is what
+    // makes real redemption math possible.
+    const loyaltyPointsUsed = parseInt(req.body.Loyalty_Points_Used || 0, 10);
+    let loyaltyDiscount = 0;
+    if (loyaltyPointsUsed > 0) {
+      if (!Customer_ID) { await trx.rollback(); return sendError(res, 400, 'Loyalty points can only be redeemed for a linked customer.'); }
+      const customerForLoyalty = await trx('tbl_customer_master').where({ Customer_ID, Tenant_ID: tenantId }).forUpdate().first();
+      if (!customerForLoyalty) { await trx.rollback(); return sendError(res, 404, 'Customer not found.'); }
+      if (loyaltyPointsUsed > parseInt(customerForLoyalty.Loyalty_Points || 0, 10)) {
+        await trx.rollback();
+        return sendError(res, 400, `Loyalty points redeemed (${loyaltyPointsUsed}) exceed the customer's available balance (${customerForLoyalty.Loyalty_Points || 0}).`);
+      }
+      const tenantForLoyalty = await trx('tbl_tenant_master').where({ Tenant_ID: tenantId }).select('Loyalty_Point_Value').first();
+      const pointValue = parseFloat(tenantForLoyalty?.Loyalty_Point_Value ?? 1);
+      loyaltyDiscount = round2(loyaltyPointsUsed * pointValue);
+    }
+
+    const netPayable = subtotal + totalGST - oldGoldAmountApplied - totalSchemeAdjustment - totalBonusAdjustment - voucherAmount - loyaltyDiscount;
     const roundOff = Math.round(netPayable) - netPayable;
     const finalPayable = Math.round(netPayable);
     // Amount_Paid=0 means "nothing paid yet, fully on credit" — a real,
@@ -331,7 +352,7 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
       Scheme_Adjustment_Amount: totalSchemeAdjustment,
       Bonus_Adjustment_Amount: totalBonusAdjustment,
       Voucher_Amount: voucherAmount,
-      Loyalty_Points_Used: parseFloat(req.body.Loyalty_Points_Used || 0),
+      Loyalty_Points_Used: loyaltyPointsUsed,
       Loyalty_Points_Earned: Math.floor(finalPayable / 1000),
       Customer_Name: Customer_Name || 'Walk-in Customer',
       Customer_Mobile: Customer_Mobile || null,
@@ -432,7 +453,7 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
           Total_Purchase_Value: db.raw(`"Total_Purchase_Value" + ?`, [finalPayable]),
           Total_Purchase_Count: db.raw(`"Total_Purchase_Count" + 1`),
           Last_Purchase_Date: new Date(),
-          Loyalty_Points: db.raw(`"Loyalty_Points" + ?`, [Math.floor(finalPayable / 1000)]),
+          Loyalty_Points: db.raw(`"Loyalty_Points" + ? - ?`, [Math.floor(finalPayable / 1000), loyaltyPointsUsed]),
         });
     }
 
@@ -590,6 +611,7 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     // and postJournal's own balance check silently dropped the whole
     // journal for any sale with a voucher applied.
     if (giftVoucherRow && voucherAmountRequested > 0) ledgerPayments.push({ Payment_Mode: 'Gift Voucher', Amount: voucherAmountRequested });
+    if (loyaltyDiscount > 0) ledgerPayments.push({ Payment_Mode: 'Loyalty Redemption', Amount: loyaltyDiscount });
     if (balance > 0) ledgerPayments.push({ Payment_Mode: 'Customer Receivable', Amount: balance });
 
     // Cost of Goods Sold, per metal type — from each sold ornament's own
@@ -863,7 +885,12 @@ router.post('/:id/cancel', authenticate, requirePermission('sales'), async (req,
       await trx('tbl_customer_master').where({ Customer_ID: sale.Customer_ID }).update({
         Total_Purchase_Value: db.raw('"Total_Purchase_Value" - ?', [parseFloat(sale.Net_Payable_Amount || 0)]),
         Total_Purchase_Count: db.raw('"Total_Purchase_Count" - 1'),
-        Loyalty_Points: db.raw('"Loyalty_Points" - ?', [parseInt(sale.Loyalty_Points_Earned || 0, 10)]),
+        // Undo both directions: the points this sale earned are taken
+        // back, and any points redeemed FOR this sale are given back —
+        // previously only the earned side was reversed, so cancelling a
+        // sale that had redeemed points silently kept those points gone
+        // forever even though the "purchase" they paid for no longer exists.
+        Loyalty_Points: db.raw('"Loyalty_Points" - ? + ?', [parseInt(sale.Loyalty_Points_Earned || 0, 10), parseInt(sale.Loyalty_Points_Used || 0, 10)]),
       });
     }
 
