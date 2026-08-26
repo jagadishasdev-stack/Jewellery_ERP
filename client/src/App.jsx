@@ -78,6 +78,7 @@ import AccountingDashboardPage from './pages/accounting/AccountingDashboardPage'
 import ChartOfAccountsPage from './pages/accounting/ChartOfAccountsPage';
 import LedgerPage from './pages/accounting/LedgerPage';
 import TrialBalancePage from './pages/accounting/TrialBalancePage';
+import BranchOpeningBalancesPage from './pages/accounting/BranchOpeningBalancesPage';
 import DayBookPage from './pages/accounting/DayBookPage';
 import VouchersPage from './pages/accounting/VouchersPage';
 import RateAgentPage from './pages/rate-agent/RateAgentPage';
@@ -219,6 +220,7 @@ function App() {
         <Route path="/accounting/chart-of-accounts" element={<ProtectedRoute permission="accounts"><ChartOfAccountsPage /></ProtectedRoute>} />
         <Route path="/accounting/ledger" element={<ProtectedRoute permission="accounts"><LedgerPage /></ProtectedRoute>} />
         <Route path="/accounting/trial-balance" element={<ProtectedRoute permission="accounts"><TrialBalancePage /></ProtectedRoute>} />
+        <Route path="/accounting/branch-opening-balances" element={<ProtectedRoute permission="accounts"><BranchOpeningBalancesPage /></ProtectedRoute>} />
         <Route path="/accounting/day-book" element={<ProtectedRoute permission="accounts"><DayBookPage /></ProtectedRoute>} />
         <Route path="/accounting/vouchers" element={<ProtectedRoute permission="accounts"><VouchersPage /></ProtectedRoute>} />
         <Route path="/rate-agent" element={<RateAgentPage />} />

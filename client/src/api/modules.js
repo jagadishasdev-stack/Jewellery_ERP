@@ -617,6 +617,9 @@ export const accountingApi = {
   postJournalVoucher: (data) => api.post('/accounting/voucher/journal', data),
   getVouchers: (params) => api.get('/accounting/vouchers', { params }),
   reverseVoucher: (id) => api.post(`/accounting/voucher/${id}/reverse`),
+  getBranchOpeningBalances: (branchId) => api.get('/accounting/branch-opening-balances', { params: { branchId } }),
+  saveBranchOpeningBalance: (data) => api.put('/accounting/branch-opening-balances', data),
+  reconcileBranchOpeningBalance: (accountId) => api.get('/accounting/branch-opening-balances/reconcile', { params: { accountId } }),
 };
 
 // ─── User Permission Overrides ───────────────────────────────────────────────────

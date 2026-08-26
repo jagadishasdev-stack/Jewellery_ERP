@@ -158,23 +158,119 @@ router.get('/ledger/:accountId', authenticate, async (req, res) => {
   } catch (err) { console.error('Ledger error:', err.message); return sendError(res, 500, 'Failed to fetch ledger.'); }
 });
 
+// ── Branch-specific opening balances (Multi-Branch Management) ────────────────
+// See this table's own migration comment (20260830000000_add_branch_opening_
+// balances.js) for the full reasoning. Gated by the same 'accounts'
+// permission as the rest of this file's chart-of-accounts/voucher routes.
+
+// GET /api/accounting/branch-opening-balances?branchId=X — every active
+// account for this tenant, with its branch-specific opening balance (0/Dr
+// if never allocated — Has_Branch_Balance distinguishes "actually zero"
+// from "not yet allocated") alongside the account's own tenant-wide
+// figure, so an admin can see at a glance what still needs allocating.
+router.get('/branch-opening-balances', authenticate, requirePermission('accounts'), async (req, res) => {
+  const { branchId } = req.query;
+  if (!branchId) return sendError(res, 400, 'branchId is required.');
+  try {
+    const tenantId = req.user.tenantId;
+    const accounts = await db('tbl_chart_of_accounts').where({ Tenant_ID: tenantId, Is_Active: true }).orderBy('Account_Code');
+    const branchBalances = await db('tbl_account_branch_opening_balance').where({ Tenant_ID: tenantId, Branch_ID: branchId });
+    const byAccount = Object.fromEntries(branchBalances.map((b) => [b.Account_ID, b]));
+
+    const rows = accounts.map((a) => {
+      const b = byAccount[a.Account_ID];
+      return {
+        Account_ID: a.Account_ID, Account_Code: a.Account_Code, Account_Name: a.Account_Name,
+        Account_Group: a.Account_Group, Account_Sub_Group: a.Account_Sub_Group,
+        Tenant_Opening_Balance: parseFloat(a.Opening_Balance || 0), Tenant_Opening_Balance_Type: a.Opening_Balance_Type,
+        Branch_Opening_Balance: b ? parseFloat(b.Opening_Balance) : 0,
+        Branch_Opening_Balance_Type: b ? b.Opening_Balance_Type : 'Dr',
+        Has_Branch_Balance: !!b,
+      };
+    });
+    return sendSuccess(res, rows);
+  } catch (err) { return sendError(res, 500, 'Failed to fetch branch opening balances.'); }
+});
+
+// PUT /api/accounting/branch-opening-balances — upsert ONE account's
+// opening balance for ONE branch.
+router.put('/branch-opening-balances', authenticate, requirePermission('accounts'), async (req, res) => {
+  const { Account_ID, Branch_ID, Opening_Balance, Opening_Balance_Type } = req.body;
+  if (!Account_ID || !Branch_ID) return sendError(res, 400, 'Account_ID and Branch_ID are required.');
+  if (!['Dr', 'Cr'].includes(Opening_Balance_Type)) return sendError(res, 400, "Opening_Balance_Type must be 'Dr' or 'Cr'.");
+  try {
+    const tenantId = req.user.tenantId;
+    const account = await db('tbl_chart_of_accounts').where({ Account_ID, Tenant_ID: tenantId }).first();
+    if (!account) return sendError(res, 404, 'Account not found.');
+
+    const existing = await db('tbl_account_branch_opening_balance').where({ Account_ID, Branch_ID }).first();
+    let row;
+    if (existing) {
+      [row] = await db('tbl_account_branch_opening_balance').where({ Balance_ID: existing.Balance_ID })
+        .update({ Opening_Balance: Opening_Balance || 0, Opening_Balance_Type, Modified_By: req.user.username, Modified_Date: new Date() })
+        .returning('*');
+    } else {
+      [row] = await db('tbl_account_branch_opening_balance').insert({
+        Tenant_ID: tenantId, Account_ID, Branch_ID, Opening_Balance: Opening_Balance || 0, Opening_Balance_Type, Created_By: req.user.username,
+      }).returning('*');
+    }
+    return sendSuccess(res, row, 'Branch opening balance saved.');
+  } catch (err) { return sendError(res, 500, 'Failed to save branch opening balance.'); }
+});
+
+// GET /api/accounting/branch-opening-balances/reconcile?accountId=X —
+// sum of what's been allocated across ALL branches for one account vs.
+// the account's own tenant-wide Opening_Balance. A mismatch isn't
+// blocked (a business might genuinely want branch totals that don't sum
+// to the tenant figure, e.g. a new branch opened after the tenant-wide
+// balance was set) — just surfaced, so it's a visible fact, not a silent one.
+router.get('/branch-opening-balances/reconcile', authenticate, requirePermission('accounts'), async (req, res) => {
+  const { accountId } = req.query;
+  if (!accountId) return sendError(res, 400, 'accountId is required.');
+  try {
+    const tenantId = req.user.tenantId;
+    const account = await db('tbl_chart_of_accounts').where({ Account_ID: accountId, Tenant_ID: tenantId }).first();
+    if (!account) return sendError(res, 404, 'Account not found.');
+    const branchRows = await db('tbl_account_branch_opening_balance').where({ Account_ID: accountId, Tenant_ID: tenantId });
+    const allocatedNet = branchRows.reduce((s, b) => s + (b.Opening_Balance_Type === 'Dr' ? parseFloat(b.Opening_Balance) : -parseFloat(b.Opening_Balance)), 0);
+    const tenantNet = account.Opening_Balance_Type === 'Dr' ? parseFloat(account.Opening_Balance) : -parseFloat(account.Opening_Balance);
+    return sendSuccess(res, {
+      tenantNet: Math.round(tenantNet * 100) / 100,
+      allocatedNet: Math.round(allocatedNet * 100) / 100,
+      unallocated: Math.round((tenantNet - allocatedNet) * 100) / 100,
+      branchesAllocated: branchRows.length,
+    });
+  } catch (err) { return sendError(res, 500, 'Failed to reconcile.'); }
+});
+
 // ── GET /api/accounting/trial-balance ──────────────────────────────────────────
-// Multi-Branch Management — deliberately NOT branch-filterable.
-// tbl_chart_of_accounts.Opening_Balance is per-account and tenant-wide
-// only; this schema has no concept of a branch-specific opening balance.
-// Filtering the entries by branch while still adding the full tenant-wide
-// opening balance would produce a report that LOOKS like a real
-// per-branch trial balance but isn't one — worse than not offering the
-// filter at all. A correct version needs branch-specific opening
-// balances added to the schema first, not a superficial query filter.
-router.get('/trial-balance', authenticate, async (req, res) => {
+// Multi-Branch Management — branch-filterable, correctly. "All Branches"
+// (or no branch context) reads the account's own tenant-wide
+// Opening_Balance, completely unchanged from before this feature existed.
+// A SPECIFIC branch instead reads that account's row in
+// tbl_account_branch_opening_balance (0/Dr if never allocated — see that
+// table's migration comment for why this is the honest default, not a
+// guess), and the entries themselves are filtered to that branch too —
+// so the two now genuinely match instead of mixing a tenant-wide
+// starting point with branch-only movement.
+router.get('/trial-balance', authenticate, requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const to = req.query.to || today();
+  const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
   try {
     const accounts = await db('tbl_chart_of_accounts').where({ Tenant_ID: tenantId, Is_Active: true }).orderBy('Account_Code');
-    const totals = await db('tbl_accounting_entries as e')
+
+    let branchOpeningMap = {};
+    if (branchId) {
+      const branchBalances = await db('tbl_account_branch_opening_balance').where({ Tenant_ID: tenantId, Branch_ID: branchId });
+      branchOpeningMap = Object.fromEntries(branchBalances.map((b) => [b.Account_ID, b]));
+    }
+
+    let entriesQb = db('tbl_accounting_entries as e')
       .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
-      .where({ 'e.Tenant_ID': tenantId }).where('j.Entry_Date', '<=', to)
+      .where({ 'e.Tenant_ID': tenantId }).where('j.Entry_Date', '<=', to);
+    if (branchId) entriesQb = entriesQb.where('j.Branch_ID', branchId);
+    const totals = await entriesQb
       .groupBy('e.Account_ID', 'e.Entry_Type')
       .select('e.Account_ID', 'e.Entry_Type').sum('e.Amount as total');
     const byAccount = {};
@@ -186,8 +282,17 @@ router.get('/trial-balance', authenticate, async (req, res) => {
     let totalDr = 0, totalCr = 0;
     const rows = accounts.map((a) => {
       const t = byAccount[a.Account_ID] || { dr: 0, cr: 0 };
-      const openingDr = a.Opening_Balance_Type === 'Dr' ? parseFloat(a.Opening_Balance) : 0;
-      const openingCr = a.Opening_Balance_Type === 'Cr' ? parseFloat(a.Opening_Balance) : 0;
+      let openingBalance, openingType;
+      if (branchId) {
+        const b = branchOpeningMap[a.Account_ID];
+        openingBalance = b ? parseFloat(b.Opening_Balance) : 0;
+        openingType = b ? b.Opening_Balance_Type : 'Dr';
+      } else {
+        openingBalance = parseFloat(a.Opening_Balance || 0);
+        openingType = a.Opening_Balance_Type;
+      }
+      const openingDr = openingType === 'Dr' ? openingBalance : 0;
+      const openingCr = openingType === 'Cr' ? openingBalance : 0;
       const netDr = Math.round(((openingDr + t.dr) - (openingCr + t.cr)) * 100) / 100;
       const drBalance = netDr > 0 ? netDr : 0;
       const crBalance = netDr < 0 ? -netDr : 0;
@@ -196,7 +301,7 @@ router.get('/trial-balance', authenticate, async (req, res) => {
     }).filter((r) => r.Dr_Balance !== 0 || r.Cr_Balance !== 0);
 
     return sendSuccess(res, {
-      asOf: to, rows,
+      asOf: to, branchId, rows,
       totalDr: Math.round(totalDr * 100) / 100, totalCr: Math.round(totalCr * 100) / 100,
       isBalanced: Math.abs(totalDr - totalCr) < 0.01,
     });
@@ -204,9 +309,10 @@ router.get('/trial-balance', authenticate, async (req, res) => {
 });
 
 // ── GET /api/accounting/day-book ────────────────────────────────────────────────
-// Branch-filterable — unlike trial-balance/cash-book/bank-book below, this
-// is a pure date-scoped voucher listing with no opening-balance/running-
-// balance math to get wrong by narrowing which journals are included.
+// Branch-filterable — a pure date-scoped voucher listing with no opening-
+// balance/running-balance math to get wrong by narrowing which journals
+// are included (unlike trial-balance/cash-book/bank-book, which need the
+// branch-specific-opening-balance machinery above to be filtered correctly).
 router.get('/day-book', authenticate, requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const date = req.query.date || today();
@@ -223,14 +329,25 @@ router.get('/day-book', authenticate, requireValidBranch, async (req, res) => {
 });
 
 // ── Shared helper: ledger-style view for one or more accounts by sub-group ─────
-// Feeds Cash Book / Bank Book below — same deliberate non-branch-filtering
-// as trial-balance above, and for the identical reason: Opening_Balance
-// here is per-account, tenant-wide only, so narrowing the entries by
-// branch without a real branch-specific opening balance would produce a
-// running Balance column that's simply wrong, not just incomplete.
-async function bookFor(tenantId, subGroup, from, to, extraWhere = {}) {
+// Feeds Cash Book / Bank Book below. branchId is null for "All Branches"
+// / no branch context — in that case behavior is byte-for-byte the same
+// as before this feature: tenant-wide Opening_Balance, entries not
+// narrowed by branch. When branchId IS a specific branch, opening balance
+// comes from tbl_account_branch_opening_balance (0/Dr if never
+// allocated — same honest default as trial-balance) and entries are
+// narrowed to that branch's journals, so the running Balance column is
+// actually correct for that branch instead of mixing a tenant-wide
+// starting point with branch-only movement.
+async function bookFor(tenantId, subGroup, from, to, extraWhere = {}, branchId = null) {
   let accountsQb = db('tbl_chart_of_accounts').where({ Tenant_ID: tenantId, Account_Sub_Group: subGroup, ...extraWhere });
   const accounts = await accountsQb;
+
+  let branchOpeningMap = {};
+  if (branchId) {
+    const branchBalances = await db('tbl_account_branch_opening_balance').where({ Tenant_ID: tenantId, Branch_ID: branchId });
+    branchOpeningMap = Object.fromEntries(branchBalances.map((b) => [b.Account_ID, b]));
+  }
+
   const results = [];
   for (const account of accounts) {
     let qb = db('tbl_accounting_entries as e')
@@ -240,8 +357,19 @@ async function bookFor(tenantId, subGroup, from, to, extraWhere = {}) {
       .orderBy('j.Entry_Date');
     if (from) qb = qb.where('j.Entry_Date', '>=', from);
     if (to) qb = qb.where('j.Entry_Date', '<=', to);
+    if (branchId) qb = qb.where('j.Branch_ID', branchId);
     const entries = await qb;
-    let balance = account.Opening_Balance_Type === 'Dr' ? parseFloat(account.Opening_Balance) : -parseFloat(account.Opening_Balance);
+
+    let openingBalance, openingType;
+    if (branchId) {
+      const b = branchOpeningMap[account.Account_ID];
+      openingBalance = b ? parseFloat(b.Opening_Balance) : 0;
+      openingType = b ? b.Opening_Balance_Type : 'Dr';
+    } else {
+      openingBalance = parseFloat(account.Opening_Balance || 0);
+      openingType = account.Opening_Balance_Type;
+    }
+    let balance = openingType === 'Dr' ? openingBalance : -openingBalance;
     const withBalance = entries.map((e) => {
       balance += (e.Entry_Type === 'Dr' ? 1 : -1) * parseFloat(e.Amount);
       return { ...e, Balance: Math.round(balance * 100) / 100 };
@@ -252,9 +380,10 @@ async function bookFor(tenantId, subGroup, from, to, extraWhere = {}) {
 }
 
 // ── GET /api/accounting/cash-book ───────────────────────────────────────────────
-router.get('/cash-book', authenticate, async (req, res) => {
+router.get('/cash-book', authenticate, requireValidBranch, async (req, res) => {
   try {
-    const books = await bookFor(req.user.tenantId, 'Cash', req.query.from, req.query.to);
+    const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
+    const books = await bookFor(req.user.tenantId, 'Cash', req.query.from, req.query.to, {}, branchId);
     return sendSuccess(res, books[0] || { entries: [], closingBalance: 0 });
   } catch (err) { return sendError(res, 500, 'Failed to fetch cash book.'); }
 });
@@ -262,10 +391,11 @@ router.get('/cash-book', authenticate, async (req, res) => {
 // ── GET /api/accounting/bank-book ───────────────────────────────────────────────
 // One book per real bank ledger (Is_Bank_Account=true) — this is the
 // concrete "each bank account gets its own book" requirement.
-router.get('/bank-book', authenticate, async (req, res) => {
+router.get('/bank-book', authenticate, requireValidBranch, async (req, res) => {
   try {
-    const books = await bookFor(req.user.tenantId, 'Bank', req.query.from, req.query.to, { Is_Bank_Account: true });
-    const unassigned = await bookFor(req.user.tenantId, 'Bank', req.query.from, req.query.to, { Is_Bank_Account: false });
+    const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
+    const books = await bookFor(req.user.tenantId, 'Bank', req.query.from, req.query.to, { Is_Bank_Account: true }, branchId);
+    const unassigned = await bookFor(req.user.tenantId, 'Bank', req.query.from, req.query.to, { Is_Bank_Account: false }, branchId);
     return sendSuccess(res, [...books, ...unassigned]);
   } catch (err) { return sendError(res, 500, 'Failed to fetch bank book.'); }
 });

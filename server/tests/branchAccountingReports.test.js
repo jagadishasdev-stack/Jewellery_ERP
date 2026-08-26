@@ -4,10 +4,10 @@
  * sale's own journal entry carries it, GET /api/accounting/day-book (a
  * pure date-scoped voucher listing, safe to filter) is branch-aware, and
  * GST summary / customer outstanding (sales-based, no opening-balance
- * math) are too. Deliberately does NOT test trial-balance/cash-book/
- * bank-book for branch filtering — those were deliberately left
- * unfiltered (see accounting.js's own comments) because their per-account
- * Opening_Balance is tenant-wide only.
+ * math) are too. Trial Balance/Cash Book/Bank Book are ALSO branch-aware
+ * now, but via a separate mechanism (tbl_account_branch_opening_balance)
+ * since their per-account Opening_Balance is tenant-wide only — see
+ * branchOpeningBalances.test.js, which covers those three specifically.
  */
 const request = require('supertest');
 const { app } = require('../src/index');

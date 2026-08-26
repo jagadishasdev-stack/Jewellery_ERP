@@ -162,6 +162,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/accounting/chart-of-accounts', label: '📒 Chart of Accounts' },
         { key: '/accounting/ledger', label: '📖 Ledger' },
         { key: '/accounting/trial-balance', label: '⚖️ Trial Balance' },
+        { key: '/accounting/branch-opening-balances', label: '🏢 Branch Opening Balances' },
         { key: '/accounting/day-book', label: '📅 Day Book' },
         { key: '/accounting/vouchers', label: '✍️ Voucher Entry' },
       ],
