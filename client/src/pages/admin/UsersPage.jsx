@@ -4,7 +4,7 @@
  * Actions: Add · Edit · Reset Password · Change Role · Lock · Unlock · Deactivate · Reactivate
  * Custom per-user permissions override
  */
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Table, Button, Card, Typography, Tag, Modal, Form, Input, Select,
   Switch, message, Avatar, Space, Popconfirm, Tooltip, Badge,
@@ -15,10 +15,10 @@ import {
   LockOutlined, UnlockOutlined, SafetyOutlined, KeyOutlined,
   EyeOutlined, UserSwitchOutlined, CheckCircleOutlined,
   PhoneOutlined, MailOutlined, BranchesOutlined, ClockCircleOutlined,
-  NumberOutlined,
+  NumberOutlined, ApartmentOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { tenantApi } from '../../api/modules';
+import { tenantApi, branchesApi } from '../../api/modules';
 import { useAuthStore } from '../../store/authStore';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -58,6 +58,9 @@ export default function UsersPage() {
   const [permUser,        setPermUser]         = useState(null);
   const [detailUser,      setDetailUser]       = useState(null);
   const [customPerms,     setCustomPerms]      = useState({});
+  const [branchUser,      setBranchUser]       = useState(null);
+  const [selectedBranchIds, setSelectedBranchIds] = useState([]);
+  const [allBranchAccessDraft, setAllBranchAccessDraft] = useState(false);
 
   const [createForm]    = Form.useForm();
   const [editForm]      = Form.useForm();
@@ -137,6 +140,50 @@ export default function UsersPage() {
     onError: (err) => message.error(err.response?.data?.message || 'Failed.'),
   });
 
+  // ── Multi-Branch Management — branch access (utils/branchAccess.js) ─────
+  const { data: branchAccessData, isLoading: branchAccessLoading } = useQuery({
+    queryKey: ['branch-access', branchUser?.User_ID],
+    queryFn: () => branchesApi.getUserAccess(branchUser.User_ID).then(r => r.data.data),
+    enabled: !!branchUser,
+  });
+
+  const openBranchAccess = (u) => setBranchUser(u);
+
+  const allAccessMutation = useMutation({
+    mutationFn: ({ id, allBranchAccess }) => branchesApi.setAllBranchAccess(id, allBranchAccess),
+    onSuccess: () => qc.invalidateQueries(['branch-access', branchUser?.User_ID]),
+    onError: (err) => message.error(err.response?.data?.message || 'Failed.'),
+  });
+
+  // Diffs the selected branch list against what's actually granted and
+  // fires exactly the grant/revoke calls needed — the API grants/revokes
+  // one branch at a time, this just loops the diff rather than needing a
+  // separate bulk endpoint for what's normally a handful of branches.
+  const saveBranchGrantsMutation = useMutation({
+    mutationFn: async () => {
+      const currentGrants = branchAccessData?.grants || [];
+      const currentIds = currentGrants.map(g => g.Branch_ID);
+      const toGrant = selectedBranchIds.filter(id => !currentIds.includes(id));
+      const toRevoke = currentGrants.filter(g => !selectedBranchIds.includes(g.Branch_ID));
+      await Promise.all([
+        ...toGrant.map(id => branchesApi.grant(branchUser.User_ID, id)),
+        ...toRevoke.map(g => branchesApi.revoke(g.Access_ID)),
+      ]);
+    },
+    onSuccess: () => {
+      message.success('Branch access updated!');
+      qc.invalidateQueries(['branch-access', branchUser?.User_ID]);
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to update branch access.'),
+  });
+
+  useEffect(() => {
+    if (branchAccessData) {
+      setAllBranchAccessDraft(!!branchAccessData.allBranchAccess);
+      setSelectedBranchIds((branchAccessData.grants || []).map(g => g.Branch_ID));
+    }
+  }, [branchAccessData]);
+
   // ── Helpers ─────────────────────────────────────────────────────────────
   const isLocked = (u) => u.Locked_Until && new Date(u.Locked_Until) > new Date();
   const isSelf = (u) => u.User_ID === currentUser?.userId;
@@ -200,7 +247,7 @@ export default function UsersPage() {
       ),
     },
     {
-      title: 'Actions', fixed: 'right', width: 240,
+      title: 'Actions', fixed: 'right', width: 270,
       render: (_, r) => (
         <Space size={3} wrap>
           {/* View */}
@@ -239,6 +286,13 @@ export default function UsersPage() {
             <Button size="small" icon={<SafetyOutlined />}
               style={{ borderColor: '#722ed1', color: '#722ed1' }}
               onClick={() => { setPermUser(r); setCustomPerms(parsePerms(r.Custom_Permissions)); }} />
+          </Tooltip>
+
+          {/* Branch Access */}
+          <Tooltip title="Branch Access">
+            <Button size="small" icon={<ApartmentOutlined />}
+              style={{ borderColor: '#52c41a', color: '#52c41a' }}
+              onClick={() => openBranchAccess(r)} />
           </Tooltip>
 
           {/* Unlock if locked */}
@@ -385,6 +439,13 @@ export default function UsersPage() {
                   style={{ borderColor: '#722ed1', color: '#722ed1' }}
                   onClick={() => { setPermUser(detailUser); setCustomPerms(parsePerms(detailUser.Custom_Permissions)); setDetailUser(null); }}>
                   Permissions
+                </Button>
+              </Col>
+              <Col xs={12}>
+                <Button block size="small" icon={<ApartmentOutlined />}
+                  style={{ borderColor: '#52c41a', color: '#52c41a' }}
+                  onClick={() => { openBranchAccess(detailUser); setDetailUser(null); }}>
+                  Branch Access
                 </Button>
               </Col>
               {!isSelf(detailUser) && (
@@ -602,6 +663,67 @@ export default function UsersPage() {
             </>
           );
         })()}
+      </Modal>
+
+      {/* ════════ Branch Access Modal (Multi-Branch Management) ══════════ */}
+      <Modal title={`🏢 Branch Access — ${branchUser?.Full_Name}`}
+        open={!!branchUser} onCancel={() => setBranchUser(null)} width={480} destroyOnClose
+        footer={[
+          <Button key="cancel" onClick={() => setBranchUser(null)}>Cancel</Button>,
+          <Button key="save" type="primary" loading={saveBranchGrantsMutation.isPending}
+            disabled={allBranchAccessDraft}
+            style={{ background: '#B8860B', borderColor: '#B8860B' }}
+            onClick={() => saveBranchGrantsMutation.mutate()}>
+            Save Branch Selection
+          </Button>,
+        ]}>
+        {branchAccessLoading ? (
+          <Text type="secondary">Loading…</Text>
+        ) : (
+          <>
+            <Alert
+              type="info" showIcon style={{ marginBottom: 14, fontSize: 11 }}
+              message="Who can access which branch"
+              description="Super Admin always sees every branch. Everyone else needs either 'Sees All Branches' turned on, or specific branches granted below — enforced on every request, not just hidden in the menu."
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #f0f0f0', marginBottom: 12 }}>
+              <div>
+                <Text strong>Sees All Branches</Text>
+                <br />
+                <Text type="secondary" style={{ fontSize: 11 }}>Overrides the specific selection below — always sees every branch, including ones added later.</Text>
+              </div>
+              <Switch
+                checked={allBranchAccessDraft}
+                loading={allAccessMutation.isPending}
+                onChange={(checked) => {
+                  setAllBranchAccessDraft(checked);
+                  allAccessMutation.mutate({ id: branchUser.User_ID, allBranchAccess: checked });
+                }}
+              />
+            </div>
+
+            {!allBranchAccessDraft && (
+              <>
+                <Text strong style={{ fontSize: 12 }}>Specific Branches</Text>
+                <Select
+                  mode="multiple"
+                  style={{ width: '100%', marginTop: 8 }}
+                  placeholder="Select branches this user can access"
+                  value={selectedBranchIds}
+                  onChange={setSelectedBranchIds}
+                >
+                  {(branches || []).map(b => <Option key={b.Branch_ID} value={b.Branch_ID}>{b.Branch_Name}</Option>)}
+                </Select>
+                {branchUser?.Branch_ID && !selectedBranchIds.includes(branchUser.Branch_ID) && (
+                  <Alert
+                    type="warning" showIcon style={{ marginTop: 10, fontSize: 11 }}
+                    message={`Their home branch (${branches?.find(b => b.Branch_ID === branchUser.Branch_ID)?.Branch_Name || branchUser.Branch_ID}) isn't in this list — it's still always included automatically.`}
+                  />
+                )}
+              </>
+            )}
+          </>
+        )}
       </Modal>
 
       <PageTour steps={tourSteps} />
