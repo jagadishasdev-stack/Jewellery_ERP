@@ -40,7 +40,7 @@ function currentFinancialYear() {
 }
 
 // ── GET /api/accounting/chart-of-accounts ──────────────────────────────────────
-router.get('/chart-of-accounts', authenticate, async (req, res) => {
+router.get('/chart-of-accounts', authenticate, requirePermission('accounts'), async (req, res) => {
   try {
     const rows = await db('tbl_chart_of_accounts').where({ Tenant_ID: req.user.tenantId, Is_Active: true }).orderBy('Account_Code');
     return sendSuccess(res, rows);
@@ -117,7 +117,7 @@ router.patch('/chart-of-accounts/:id/deactivate', authenticate, requirePermissio
 
 // ── GET /api/accounting/ledger/:accountId ──────────────────────────────────────
 // Full transaction history for one account, with a running balance.
-router.get('/ledger/:accountId', authenticate, async (req, res) => {
+router.get('/ledger/:accountId', authenticate, requirePermission('accounts'), async (req, res) => {
   const tenantId = req.user.tenantId;
   const { from, to } = req.query;
   try {
@@ -253,7 +253,7 @@ router.get('/branch-opening-balances/reconcile', authenticate, requirePermission
 // guess), and the entries themselves are filtered to that branch too —
 // so the two now genuinely match instead of mixing a tenant-wide
 // starting point with branch-only movement.
-router.get('/trial-balance', authenticate, requireValidBranch, async (req, res) => {
+router.get('/trial-balance', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const to = req.query.to || today();
   const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
@@ -313,7 +313,7 @@ router.get('/trial-balance', authenticate, requireValidBranch, async (req, res) 
 // balance/running-balance math to get wrong by narrowing which journals
 // are included (unlike trial-balance/cash-book/bank-book, which need the
 // branch-specific-opening-balance machinery above to be filtered correctly).
-router.get('/day-book', authenticate, requireValidBranch, async (req, res) => {
+router.get('/day-book', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const date = req.query.date || today();
   try {
@@ -380,7 +380,7 @@ async function bookFor(tenantId, subGroup, from, to, extraWhere = {}, branchId =
 }
 
 // ── GET /api/accounting/cash-book ───────────────────────────────────────────────
-router.get('/cash-book', authenticate, requireValidBranch, async (req, res) => {
+router.get('/cash-book', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   try {
     const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
     const books = await bookFor(req.user.tenantId, 'Cash', req.query.from, req.query.to, {}, branchId);
@@ -391,7 +391,7 @@ router.get('/cash-book', authenticate, requireValidBranch, async (req, res) => {
 // ── GET /api/accounting/bank-book ───────────────────────────────────────────────
 // One book per real bank ledger (Is_Bank_Account=true) — this is the
 // concrete "each bank account gets its own book" requirement.
-router.get('/bank-book', authenticate, requireValidBranch, async (req, res) => {
+router.get('/bank-book', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   try {
     const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
     const books = await bookFor(req.user.tenantId, 'Bank', req.query.from, req.query.to, { Is_Bank_Account: true }, branchId);
@@ -406,7 +406,7 @@ router.get('/bank-book', authenticate, requireValidBranch, async (req, res) => {
 // narrowing the entries by branch has none of the double-counting risk
 // those two have to guard against (see tbl_account_branch_opening_balance's
 // own migration comment). "All Branches"/no branch context is unaffected.
-router.get('/profit-loss', authenticate, requireValidBranch, async (req, res) => {
+router.get('/profit-loss', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const fy = currentFinancialYear();
   const from = req.query.from || fy.from;
@@ -448,7 +448,7 @@ router.get('/profit-loss', authenticate, requireValidBranch, async (req, res) =>
 // the table's migration comment, for the full reasoning). "All Branches"
 // / no branch context is byte-for-byte unchanged — still reads each
 // account's tenant-wide Opening_Balance directly.
-router.get('/balance-sheet', authenticate, requireValidBranch, async (req, res) => {
+router.get('/balance-sheet', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const asOf = req.query.asOf || today();
   const branchId = req.branchId && req.branchId !== 'ALL' ? req.branchId : null;
@@ -530,7 +530,7 @@ router.get('/balance-sheet', authenticate, requireValidBranch, async (req, res) 
 // ── GET /api/accounting/dashboard ───────────────────────────────────────────────
 // The KPI strip from the design doc: today's sales/purchase, receivables,
 // payables, cash, bank, GST payable, stock value, plus a P&L + GST snippet.
-router.get('/dashboard', authenticate, async (req, res) => {
+router.get('/dashboard', authenticate, requirePermission('accounts'), async (req, res) => {
   const tenantId = req.user.tenantId;
   const t = today();
   try {
@@ -680,7 +680,7 @@ router.post('/voucher/journal', authenticate, requirePermission('accounts'), req
 });
 
 // ── GET /api/accounting/vouchers — history of manually-entered vouchers ────────
-router.get('/vouchers', authenticate, requireValidBranch, async (req, res) => {
+router.get('/vouchers', authenticate, requirePermission('accounts'), requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const { from, to, sourceType, page = 1, limit = 30 } = req.query;
   try {
