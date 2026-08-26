@@ -9,32 +9,41 @@ const dayjs = require('dayjs');
 const crypto = require('crypto');
 const { modeVal } = require('../utils/dataModeFilter');
 const { postJournal } = require('../utils/accountingEngine');
+const { requireValidBranch, branchVal, withBranch } = require('../utils/branchAccess');
 
 // ── GET /api/day-close/today ────────────────────────────────────────────────────
-router.get('/today', authenticate, async (req, res) => {
+// Multi-Branch Management §25/26 — tbl_day_close's schema already had a
+// Branch_ID column AND a unique (Tenant_ID, Branch_ID, Close_Date) index
+// from day one; this route just never used it, so every branch was
+// silently sharing one tenant-wide "today" record. Now scoped by the
+// active branch context — a branch-less request (no X-Branch-ID sent)
+// keeps getting the old tenant-wide row, same as before this fix.
+router.get('/today', authenticate, requireValidBranch, async (req, res) => {
   const today = dayjs().format('YYYY-MM-DD');
   const tid = req.user.tenantId;
   const dm  = modeVal(req);
+  const bId = branchVal(req) === 'ALL' ? null : branchVal(req);
   try {
-    let record = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today, Data_Mode: dm }).first().catch(() => null);
-    // Fallback: no Data_Mode column on day_close yet — try without it
-    if (!record) record = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today }).first().catch(() => null);
+    let record = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today, Branch_ID: bId }).first().catch(() => null);
 
     if (!record) {
       // Auto-create today's record with calculated totals for this mode
-      const [sales] = await db('tbl_sales_header')
+      // and branch — a branch-less context still means "the whole
+      // tenant," matching the pre-branch-awareness behavior exactly.
+      let salesQb = db('tbl_sales_header')
         .where('Tenant_ID', tid)
         .where('Data_Mode', dm)
         .whereRaw(`DATE("Sale_Date") = ?`, [today])
-        .whereNot('Payment_Status', 'Cancelled')
-        .select(
+        .whereNot('Payment_Status', 'Cancelled');
+      salesQb = withBranch(salesQb, req);
+      const [sales] = await salesQb.select(
           db.raw('COALESCE(SUM("Net_Payable_Amount"), 0) AS total_sales'),
           db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" = \'Cash\' THEN "Amount_Paid" ELSE 0 END), 0) AS cash_sales'),
           db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" = \'UPI\' THEN "Amount_Paid" ELSE 0 END), 0) AS upi_sales'),
           db.raw('COALESCE(SUM(CASE WHEN "Payment_Mode" IN (\'Card\',\'Debit Card\',\'Credit Card\') THEN "Amount_Paid" ELSE 0 END), 0) AS card_sales')
         );
       [record] = await db('tbl_day_close').insert({
-        Tenant_ID: tid, Close_Date: today, Status: 'Open',
+        Tenant_ID: tid, Branch_ID: bId, Close_Date: today, Status: 'Open',
         Cash_Sales:   sales.cash_sales  || 0,
         UPI_Sales:    sales.upi_sales   || 0,
         Card_Sales:   sales.card_sales  || 0,
@@ -54,19 +63,29 @@ router.get('/today', authenticate, async (req, res) => {
 // says cash should be and what was physically counted (Verified_Cash vs
 // Cash_In_Hand). Without this, the ledger's Cash Account balance would
 // silently drift from real physical cash every single day.
-router.post('/close', authenticate, async (req, res) => {
+router.post('/close', authenticate, requireValidBranch, async (req, res) => {
   const today = dayjs().format('YYYY-MM-DD');
   const tid = req.user.tenantId;
   const dm = modeVal(req);
+  // "Branch users should only be able to close their authorized branch" —
+  // requireValidBranch already confirmed the caller has real access to
+  // whatever branch (or 'ALL') their header claims; this route additionally
+  // refuses to close under 'ALL' at all — closing the books is a specific
+  // branch's (or, branch-less, the whole tenant's) action, never an
+  // ambiguous "close everything" in one call.
+  if (branchVal(req) === 'ALL') {
+    return sendError(res, 400, 'Select a specific branch to close — "All Branches" cannot be closed as one action.');
+  }
+  const bId = branchVal(req);
   try {
-    const existing = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today }).first();
+    const existing = await db('tbl_day_close').where({ Tenant_ID: tid, Close_Date: today, Branch_ID: bId }).first();
     const cashExpenses = parseFloat(req.body.cash_expenses || 0);
     const verifiedCash = parseFloat(req.body.verified_cash || 0);
     const cashInHand = parseFloat(req.body.cash_in_hand ?? existing?.Cash_In_Hand ?? 0);
     const difference = verifiedCash - cashInHand;
 
     const [record] = await db('tbl_day_close')
-      .where({ Tenant_ID: tid, Close_Date: today })
+      .where({ Tenant_ID: tid, Close_Date: today, Branch_ID: bId })
       .update({
         Verified_Cash: verifiedCash,
         Difference: difference,
@@ -76,6 +95,13 @@ router.post('/close', authenticate, async (req, res) => {
         Closed_By: req.user.userId,
         Closed_At: new Date(),
       }).returning('*');
+
+    // Distinct reference per branch — two branches closing the same
+    // calendar day used to generate the identical "DAYCLOSE-<date>"
+    // reference string, which is exactly what shows as the Voucher Number
+    // in the Tally export (routes/tally.js); Close_ID already made the
+    // underlying journal traceable, but the human-facing reference didn't.
+    const refSuffix = bId ? `-${bId}` : '';
 
     // Cash spent during the day — Dr the expense, Cr Cash (only a single
     // lump figure is collected today, no category breakdown, so it posts
@@ -87,7 +113,7 @@ router.post('/close', authenticate, async (req, res) => {
       // for the concrete failure mode this caused: an export/report run
       // immediately after could miss the entry entirely).
       await postJournal({
-        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}`,
+        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}${refSuffix}`,
         narration: `Cash expenses on ${today}`, createdBy: req.user.username, dataMode: dm,
         lines: [
           { account: 'Other Expenses Account', group: 'Expenses', sub: 'Indirect Expense', type: 'Dr', amount: cashExpenses },
@@ -108,7 +134,7 @@ router.post('/close', authenticate, async (req, res) => {
       const isShort = difference < 0;
       // Awaited — see the cash-expenses fix just above for why.
       await postJournal({
-        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}-DIFF`,
+        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}${refSuffix}-DIFF`,
         narration: `Cash ${isShort ? 'shortage' : 'excess'} found at day close ${today}`, createdBy: req.user.username, dataMode: dm,
         lines: isShort ? [
           { account: 'Cash Shortage Account', group: 'Expenses', sub: 'Indirect Expense', type: 'Dr', amount: Math.abs(difference) },
@@ -125,12 +151,11 @@ router.post('/close', authenticate, async (req, res) => {
 });
 
 // ── GET /api/day-close/history ──────────────────────────────────────────────────
-router.get('/history', authenticate, async (req, res) => {
+router.get('/history', authenticate, requireValidBranch, async (req, res) => {
   try {
-    const records = await db('tbl_day_close')
-      .where('Tenant_ID', req.user.tenantId)
-      .orderBy('Close_Date', 'desc')
-      .limit(30);
+    let qb = db('tbl_day_close').where('Tenant_ID', req.user.tenantId);
+    qb = withBranch(qb, req);
+    const records = await qb.orderBy('Close_Date', 'desc').limit(30);
     return sendSuccess(res, records);
   } catch (err) { return sendError(res, 500, 'Failed.'); }
 });
