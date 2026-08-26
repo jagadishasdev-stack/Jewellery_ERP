@@ -16,7 +16,7 @@ import {
   GoldOutlined, CameraOutlined, QrcodeOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
+import { catalogApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { useAuthStore } from '../../store/authStore';
 import PageTour from '../../components/PageTour';
@@ -60,31 +60,31 @@ export default function ProductCatalogPage() {
   // ── Queries ────────────────────────────────────────────────────────────────
   const { data: searchResults, isLoading: searchLoading, refetch: doSearch } = useQuery({
     queryKey: ['catalog-search', searchQ],
-    queryFn: () => api.get('/catalog/search', { params: { q: searchQ, limit: 50 } }).then(r => r.data.data?.items || []),
+    queryFn: () => catalogApi.search({ q: searchQ, limit: 50 }).then(r => r.data.data?.items || []),
     enabled: false,
   });
 
   const { data: exhibitionItems, isLoading: exLoading } = useQuery({
     queryKey: ['catalog-exhibition'],
-    queryFn: () => api.get('/catalog/exhibition').then(r => r.data.data || []),
+    queryFn: () => catalogApi.getExhibition().then(r => r.data.data || []),
     enabled: activeTab === 'exhibition',
   });
 
   const { data: soldItems, isLoading: soldLoading } = useQuery({
     queryKey: ['catalog-sold', soldFilters],
-    queryFn: () => api.get('/catalog/sold-report', { params: soldFilters }).then(r => r.data.data?.items || []),
+    queryFn: () => catalogApi.getSoldReport(soldFilters).then(r => r.data.data?.items || []),
     enabled: activeTab === 'sold',
   });
 
   const { data: designs, isLoading: desLoading } = useQuery({
     queryKey: ['catalog-designs'],
-    queryFn: () => api.get('/catalog/designs').then(r => r.data.data || []),
+    queryFn: () => catalogApi.getDesigns().then(r => r.data.data || []),
     enabled: activeTab === 'designs',
   });
 
   const { data: designItems } = useQuery({
     queryKey: ['catalog-design-items', designFilter],
-    queryFn: () => api.get('/catalog/search', { params: { design: designFilter } }).then(r => r.data.data?.items || []),
+    queryFn: () => catalogApi.search({ design: designFilter }).then(r => r.data.data?.items || []),
     enabled: !!designFilter,
   });
 
@@ -95,19 +95,19 @@ export default function ProductCatalogPage() {
       fd.append('image', file);
       fd.append('article_number', articleNo);
       fd.append('sort_order', '0');
-      return api.post('/catalog/upload-image', fd, { headers: { 'Content-Type': undefined } });
+      return catalogApi.uploadImage(fd);
     },
     onSuccess: () => { message.success('Image uploaded!'); qc.invalidateQueries(['catalog-search']); },
     onError: () => message.error('Upload failed.'),
   });
 
   const orderMutation = useMutation({
-    mutationFn: (data) => api.post('/catalog/orders', data),
+    mutationFn: (data) => catalogApi.createOrder(data),
     onSuccess: () => { message.success('Order created!'); setOrderDrawer(false); setOrderItems([]); orderForm.resetFields(); },
   });
 
   const exhibitionMutation = useMutation({
-    mutationFn: ({ id, display }) => api.put(`/catalog/exhibition/${id}`, { is_display: display }),
+    mutationFn: ({ id, display }) => catalogApi.toggleExhibition(id, display),
     onSuccess: () => { message.success('Updated.'); qc.invalidateQueries(['catalog-exhibition']); },
   });
 

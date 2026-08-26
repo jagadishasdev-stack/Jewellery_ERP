@@ -14,7 +14,7 @@ import {
   CameraOutlined, EyeOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
+import { catalogApi } from '../../api/modules';
 
 const { Text } = Typography;
 const { Dragger } = Upload;
@@ -43,9 +43,7 @@ export default function ImageUploadPanel({
   // ── Fetch images for this ornament (only when not supplied by parent) ───────
   const { data: fetchedImages = [], isLoading } = useQuery({
     queryKey: ['ornament-images', ornamentId, articleNumber],
-    queryFn: () => api.get('/catalog/images', {
-      params: { ornament_id: ornamentId, article_number: articleNumber }
-    }).then(r => r.data.data || []),
+    queryFn: () => catalogApi.getImages({ ornament_id: ornamentId, article_number: articleNumber }).then(r => r.data.data || []),
     enabled: !hasExternalImages && !!(ornamentId || articleNumber),
   });
 
@@ -60,9 +58,7 @@ export default function ImageUploadPanel({
       fd.append('article_number', articleNumber || '');
       fd.append('image_type', selectedType);
       fd.append('sort_order', images.length.toString());
-      return api.post('/catalog/upload-image', fd, {
-        headers: { 'Content-Type': undefined },
-      });
+      return catalogApi.uploadImage(fd);
     },
     onSuccess: () => {
       message.success('Image uploaded!');
@@ -75,9 +71,7 @@ export default function ImageUploadPanel({
 
   // ── Set primary image ────────────────────────────────────────────────────────
   const setPrimaryMutation = useMutation({
-    mutationFn: (imageId) => api.put(`/catalog/images/${imageId}/set-primary`, {
-      ornament_id: ornamentId, article_number: articleNumber,
-    }),
+    mutationFn: (imageId) => catalogApi.setPrimaryImage(imageId, { ornament_id: ornamentId, article_number: articleNumber }),
     onSuccess: () => {
       message.success('Set as primary image!');
       qc.invalidateQueries(['ornament-images', ornamentId, articleNumber]);
@@ -88,7 +82,7 @@ export default function ImageUploadPanel({
 
   // ── Delete image ────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
-    mutationFn: (imageId) => api.delete(`/catalog/images/${imageId}`),
+    mutationFn: (imageId) => catalogApi.deleteImage(imageId),
     onSuccess: () => {
       message.success('Image deleted.');
       qc.invalidateQueries(['ornament-images', ornamentId, articleNumber]);
