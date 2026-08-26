@@ -2,7 +2,7 @@ import { formatCurrency, formatWeight } from './calculations';
 import { printHTML, isQZConnected, openPrintWindow, writeAndPrint } from './printService';
 import { buildDefaultLabelBlocks, buildLabelPrintDocument, resolveQrDataUrls } from './labelRenderer';
 import { PAPER_SIZES, buildInvoicePrintDocument, resolveInvoiceQrDataUrls } from './invoiceRenderer';
-import api from '../api/axios';
+import { invoiceStudioApi } from '../api/modules';
 import dayjs from 'dayjs';
 
 /**
@@ -15,7 +15,7 @@ import dayjs from 'dayjs';
 export const printFromInvoiceStudio = async (docType, data) => {
   let blocks = null, paperKey = 'A4';
   try {
-    const res = await api.get(`/invoice-studio/resolve/${docType}`);
+    const res = await invoiceStudioApi.resolve(docType);
     const row = res.data?.data;
     const parsed = typeof row?.Components === 'string' ? JSON.parse(row.Components) : row?.Components;
     if (parsed?.length) {
@@ -201,7 +201,7 @@ export const printBarcodeLabel = async (ornament, shopName) => {
 
   let widthMm = DEFAULT_LABEL_WIDTH_MM, heightMm = DEFAULT_LABEL_HEIGHT_MM, blocks = null;
   try {
-    const res = await api.get('/invoice-studio/resolve/BARCODE_LABEL');
+    const res = await invoiceStudioApi.resolve('BARCODE_LABEL');
     const raw = res.data?.data?.Components;
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (parsed?.blocks?.length) {

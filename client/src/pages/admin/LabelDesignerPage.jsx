@@ -35,9 +35,8 @@ import {
   PrinterOutlined, InfoCircleOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
 import { useAuthStore } from '../../store/authStore';
-import { tenantApi } from '../../api/modules';
+import { tenantApi, invoiceStudioApi } from '../../api/modules';
 import {
   CSS_PX_PER_MM, mmToPx, pxToMm,
   LABEL_SIZE_PRESETS, LABEL_COMPONENTS, LABEL_TYPE_LABEL,
@@ -150,7 +149,7 @@ export default function LabelDesignerPage() {
   // ── Queries ────────────────────────────────────────────────────────────
   const { data: templates, isLoading: tmplLoading } = useQuery({
     queryKey: ['label-templates', tenantId],
-    queryFn: () => api.get('/invoice-studio/templates', { params: { docType: DOC_TYPE, tenantId: tenantId === null ? 'null' : tenantId } }).then((r) => r.data.data || []),
+    queryFn: () => invoiceStudioApi.getTemplates({ docType: DOC_TYPE, tenantId: tenantId === null ? 'null' : tenantId }).then((r) => r.data.data || []),
   });
 
   // ── Live preview: resolve QR data-urls whenever blocks/data change ──────
@@ -176,8 +175,8 @@ export default function LabelDesignerPage() {
 
   const saveMutation = useMutation({
     mutationFn: (data) => (editingId
-      ? api.put(`/invoice-studio/templates/${editingId}`, data, { params: tenantParams })
-      : api.post('/invoice-studio/templates', data, { params: tenantParams })),
+      ? invoiceStudioApi.updateTemplate(editingId, data, tenantParams)
+      : invoiceStudioApi.createTemplate(data, tenantParams)),
     onSuccess: (res) => {
       const saved = res.data.data;
       if (!editingId) setEditingId(saved.Template_ID);
@@ -189,7 +188,7 @@ export default function LabelDesignerPage() {
   });
 
   const setDefaultMutation = useMutation({
-    mutationFn: (id) => api.put(`/invoice-studio/templates/${id}`, { Is_Default: true, Document_Type: DOC_TYPE }, { params: tenantParams }),
+    mutationFn: (id) => invoiceStudioApi.updateTemplate(id, { Is_Default: true, Document_Type: DOC_TYPE }, tenantParams),
     onSuccess: () => {
       message.success('Set as default label.');
       setIsDefault(true);
@@ -199,7 +198,7 @@ export default function LabelDesignerPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/invoice-studio/templates/${id}`, { params: tenantParams }),
+    mutationFn: (id) => invoiceStudioApi.deleteTemplate(id, tenantParams),
     onSuccess: () => {
       message.success('Label template deleted.');
       qc.invalidateQueries(['label-templates']);
@@ -297,9 +296,7 @@ export default function LabelDesignerPage() {
       formData.append('file', file);
       formData.append('canvasWidthMm', canvasWidthMm);
       formData.append('canvasHeightMm', canvasHeightMm);
-      const res = await api.post('/invoice-studio/ai-analyze-label', formData, {
-        headers: { 'Content-Type': undefined },
-      });
+      const res = await invoiceStudioApi.aiAnalyzeLabel(formData, { headers: { 'Content-Type': undefined } });
       const result = res.data.data;
       if (!result.ai_used || !result.blocks) {
         message.warning(result.message || 'Tag image analysis is not available yet.');

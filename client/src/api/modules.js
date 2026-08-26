@@ -202,6 +202,19 @@ export const transferApi = {
   unhideStock: (data) => api.post('/transfer/unhide', data),
 };
 
+// ─── Invoice Studio (custom invoice/label template designer) ──────────────────
+export const invoiceStudioApi = {
+  getTemplates: (params) => api.get('/invoice-studio/templates', { params }),
+  getVersions: (id, params) => api.get(`/invoice-studio/templates/${id}/versions`, { params }),
+  createTemplate: (data, params) => api.post('/invoice-studio/templates', data, { params }),
+  updateTemplate: (id, data, params) => api.put(`/invoice-studio/templates/${id}`, data, { params }),
+  deleteTemplate: (id, params) => api.delete(`/invoice-studio/templates/${id}`, { params }),
+  duplicateTemplate: (id, params) => api.post(`/invoice-studio/templates/${id}/duplicate`, {}, { params }),
+  aiAnalyzeLabel: (formData, config) => api.post('/invoice-studio/ai-analyze-label', formData, config),
+  aiAnalyze: (formData, config) => api.post('/invoice-studio/ai-analyze', formData, config),
+  resolve: (docType) => api.get(`/invoice-studio/resolve/${docType}`),
+};
+
 // ─── Bin Management (Purchase / Sales Return / Orders / Pure Gold bins) ────────
 export const binApi = {
   getDashboard: () => api.get('/bin/dashboard'),

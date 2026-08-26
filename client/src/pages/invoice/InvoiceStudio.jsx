@@ -28,9 +28,8 @@ import {
   ShareAltOutlined, WarningOutlined, InfoCircleOutlined, BgColorsOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
 import { useAuthStore } from '../../store/authStore';
-import { tenantApi } from '../../api/modules';
+import { tenantApi, invoiceStudioApi } from '../../api/modules';
 import PageTour from '../../components/PageTour';
 
 const { Title, Text, Paragraph } = Typography;
@@ -348,21 +347,21 @@ export default function InvoiceStudio() {
   const canLoadTemplates = !isSuperAdmin || !!managedTenantId;
   const { data: templates, isLoading: tmplLoading } = useQuery({
     queryKey: ['invoice-studio-templates', managedTenantId],
-    queryFn: () => api.get('/invoice-studio/templates', { params: tenantParam }).then(r => r.data.data || []),
+    queryFn: () => invoiceStudioApi.getTemplates(tenantParam).then(r => r.data.data || []),
     enabled: canLoadTemplates,
   });
 
   const { data: versions } = useQuery({
     queryKey: ['template-versions', editingId, managedTenantId],
-    queryFn: () => api.get(`/invoice-studio/templates/${editingId}/versions`, { params: tenantParam }).then(r => r.data.data || []),
+    queryFn: () => invoiceStudioApi.getVersions(editingId, tenantParam).then(r => r.data.data || []),
     enabled: !!editingId && showHistory,
   });
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   const saveMutation = useMutation({
     mutationFn: (data) => editingId
-      ? api.put(`/invoice-studio/templates/${editingId}`, data, { params: tenantParam })
-      : api.post('/invoice-studio/templates', data, { params: tenantParam }),
+      ? invoiceStudioApi.updateTemplate(editingId, data, tenantParam)
+      : invoiceStudioApi.createTemplate(data, tenantParam),
     onSuccess: (res) => {
       const saved = res.data.data;
       if (!editingId) setEditingId(saved.Template_ID);
@@ -374,12 +373,12 @@ export default function InvoiceStudio() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => api.delete(`/invoice-studio/templates/${id}`, { params: tenantParam }),
+    mutationFn: (id) => invoiceStudioApi.deleteTemplate(id, tenantParam),
     onSuccess: () => { message.success('Template deleted.'); qc.invalidateQueries(['invoice-studio-templates']); },
   });
 
   const duplicateMutation = useMutation({
-    mutationFn: (id) => api.post(`/invoice-studio/templates/${id}/duplicate`, {}, { params: tenantParam }),
+    mutationFn: (id) => invoiceStudioApi.duplicateTemplate(id, tenantParam),
     onSuccess: () => { message.success('Template duplicated!'); qc.invalidateQueries(['invoice-studio-templates']); },
   });
 
@@ -468,7 +467,7 @@ export default function InvoiceStudio() {
       formData.append('invoiceType', selectedType || 'SALES_BILL');
 
       setAiProgress(20); setAiStatus('Analyzing layout with Google Vision...');
-      const res = await api.post('/invoice-studio/ai-analyze', formData, {
+      const res = await invoiceStudioApi.aiAnalyze(formData, {
         headers: { 'Content-Type': undefined },
         onUploadProgress: (e) => setAiProgress(10 + Math.round((e.loaded / e.total) * 20)),
       });
@@ -528,7 +527,7 @@ export default function InvoiceStudio() {
   };
 
   const setAsDefault = useMutation({
-    mutationFn: (id) => api.put(`/invoice-studio/templates/${id}`, { Is_Default: true }, { params: tenantParam }),
+    mutationFn: (id) => invoiceStudioApi.updateTemplate(id, { Is_Default: true }, tenantParam),
     onSuccess: () => { message.success('✅ Set as default template!'); qc.invalidateQueries(['invoice-studio-templates']); },
   });
 
