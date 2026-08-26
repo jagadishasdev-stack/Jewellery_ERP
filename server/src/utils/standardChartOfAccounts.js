@@ -20,6 +20,7 @@ const STANDARD_ACCOUNTS = [
   { code: '1011', name: 'Advance to Karigar Account', group: 'Assets', sub: 'Receivable' },
   { code: '1012', name: 'Furniture & Fixtures Account', group: 'Assets', sub: 'Fixed Asset' },
   { code: '1013', name: 'Computer & Equipment Account', group: 'Assets', sub: 'Fixed Asset' },
+  { code: '1014', name: 'Platinum Stock Account', group: 'Assets', sub: 'Inventory' },
   { code: '1099', name: 'Bank Account (Unassigned — pre-dates per-bank ledgers)', group: 'Assets', sub: 'Bank' },
   // Liabilities
   { code: '2001', name: 'Supplier Payable Account', group: 'Liabilities', sub: 'Payable' },

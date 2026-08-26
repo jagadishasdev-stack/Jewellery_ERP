@@ -9,6 +9,7 @@ const { modeVal } = require('../utils/dataModeFilter');
 const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
+const { resolveStockLedger } = require('../utils/stockLedgerMap');
 const dayjs = require('dayjs');
 
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -39,7 +40,7 @@ const generateSaleVoucherId = async (tenantId, containsHiddenStock = false) => {
 // used to hand-roll journal/entry inserts directly; now it just builds the
 // line list and lets postJournal() handle real accounts, the balance
 // check, bank-balance sync, and Tally auto-queuing.
-async function postSaleAccountingEntries({ tenantId, saleId, invoiceNumber, payments, subtotal, cgstAmount, sgstAmount, igstAmount, roundOff = 0, operator, dataMode = 3, branchId }) {
+async function postSaleAccountingEntries({ tenantId, saleId, invoiceNumber, payments, subtotal, cgstAmount, sgstAmount, igstAmount, roundOff = 0, operator, dataMode = 3, branchId, cogsByMetal = {} }) {
   const salesValue = parseFloat(subtotal || 0);
   const lines = [];
 
@@ -78,6 +79,24 @@ async function postSaleAccountingEntries({ tenantId, saleId, invoiceNumber, paym
       account: 'Round Off Account', group: roundOff > 0 ? 'Income' : 'Expenses', sub: roundOff > 0 ? 'Indirect Income' : 'Indirect Expense',
       type: roundOff > 0 ? 'Cr' : 'Dr', amount: roundOffAmt, narration: `Round off | ${invoiceNumber}`,
     });
+  }
+
+  // Cost of Goods Sold — was never posted anywhere at all (found via
+  // audit): purchase.js Dr's a stock account on every purchase and
+  // nothing ever credited it, so the inventory ledger only ever grew,
+  // and the P&L's "profit" never accounted for what the sold goods
+  // actually cost. Self-balancing pair added on top of the
+  // revenue/payment lines above — Dr COGS for the sum of what was sold,
+  // Cr each metal's own stock account for its share, at the ornament's
+  // own Purchase_Cost (what was actually paid for it), never the sale price.
+  const cogsTotal = round2(Object.values(cogsByMetal).reduce((s, amt) => s + (amt || 0), 0));
+  if (cogsTotal >= 0.01) {
+    lines.push({ account: 'Cost of Goods Sold Account', group: 'Expenses', sub: 'Direct Expense', type: 'Dr', amount: cogsTotal, narration: `COGS | ${invoiceNumber}` });
+    for (const [metalType, amount] of Object.entries(cogsByMetal)) {
+      if (amount < 0.01) continue;
+      const ledger = resolveStockLedger(metalType);
+      lines.push({ account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Cr', amount: round2(amount), narration: `COGS | ${invoiceNumber}` });
+    }
   }
 
   const { journalNumber } = await postJournal({
@@ -567,6 +586,18 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     if (giftVoucherRow && voucherAmountRequested > 0) ledgerPayments.push({ Payment_Mode: 'Gift Voucher', Amount: voucherAmountRequested });
     if (balance > 0) ledgerPayments.push({ Payment_Mode: 'Customer Receivable', Amount: balance });
 
+    // Cost of Goods Sold, per metal type — from each sold ornament's own
+    // Purchase_Cost (what was actually paid for it at purchase time), not
+    // the sale price. ownedById was already row-locked and fetched above.
+    const cogsByMetal = {};
+    for (const id of requestedOrnamentIds) {
+      const ornament = ownedById.get(String(id));
+      const cost = parseFloat(ornament.Purchase_Cost || 0);
+      if (cost <= 0) continue;
+      const metal = ornament.Metal_Type || 'Gold';
+      cogsByMetal[metal] = round2((cogsByMetal[metal] || 0) + cost);
+    }
+
     // Awaited (not fire-and-forget) — this used to return the sale response
     // BEFORE the journal insert was guaranteed committed, a real race that
     // showed up concretely as: a Tally export run immediately after a sale
@@ -586,6 +617,7 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
       // The sale's own already-stamped Branch_ID — guaranteed to match
       // what was actually recorded, rather than re-resolving separately.
       branchId: sale.Branch_ID,
+      cogsByMetal,
     }).catch(e => console.warn('Accounting post failed (non-fatal):', e.message));
 
     // ── WhatsApp notification (non-blocking) ──────────────────────────────────

@@ -8,9 +8,12 @@ const { nextNumber } = require('../utils/numberFormat');
 const { auditLog } = require('../utils/auditLogger');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
+const { resolveStockLedger } = require('../utils/stockLedgerMap');
 const dayjs = require('dayjs');
 const { modeVal } = require('../utils/dataModeFilter');
 const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
+
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 // ── Post double-entry accounting journal for a purchase ────────────────────────
 // Purchase is always booked on full accrual — Dr Inventory + Input GST,
@@ -20,10 +23,31 @@ const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../u
 // Amount_Paid is also given, a SEPARATE payment journal reduces the payable
 // right away — two distinct vouchers (Purchase Invoice, then Payment),
 // exactly the pattern the design doc calls for, not one blended entry.
-async function postPurchaseAccountingEntries({ tenantId, purchaseId, purchaseNumber, subtotal, gstAmount, cgstAmount, sgstAmount, igstAmount, amountPaid, paymentMode, bankAccountId, operator, dataMode = 3 }) {
-  const accrualLines = [
-    { account: 'Gold Stock Account', group: 'Assets', sub: 'Inventory', type: 'Dr', amount: subtotal, narration: `Purchase | ${purchaseNumber}` },
-  ];
+//
+// stockByMetal — {metalType: amount} — used to be a single hardcoded Dr to
+// 'Gold Stock Account' regardless of what was actually bought, so a
+// silver/platinum/diamond purchase inflated the gold ledger instead of
+// its own account even though 1007/1008/1014 exist for exactly this
+// (found via audit). One Dr line per metal type actually present in the
+// invoice now, via the same resolver sales.js's COGS posting uses.
+async function postPurchaseAccountingEntries({ tenantId, purchaseId, purchaseNumber, subtotal, stockByMetal = {}, gstAmount, cgstAmount, sgstAmount, igstAmount, amountPaid, paymentMode, bankAccountId, operator, dataMode = 3 }) {
+  const buckets = { ...stockByMetal };
+  const bucketedTotal = round2(Object.values(buckets).reduce((s, amt) => s + (amt || 0), 0));
+  // Guard against the header's Subtotal_Amount disagreeing with the sum of
+  // line items (a manual override, or rounding) — the accrual Dr side
+  // must sum to EXACTLY `subtotal` or postJournal()'s balance check drops
+  // the whole journal. Any difference is folded into the first metal type
+  // present (or Gold, if there were no line items at all) rather than
+  // silently lost.
+  const remainder = round2(subtotal - bucketedTotal);
+  if (Math.abs(remainder) >= 0.01) {
+    const key = Object.keys(buckets)[0] || 'Gold';
+    buckets[key] = round2((buckets[key] || 0) + remainder);
+  }
+  const accrualLines = Object.entries(buckets).filter(([, amt]) => Math.abs(amt) >= 0.01).map(([metalType, amount]) => {
+    const ledger = resolveStockLedger(metalType);
+    return { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Dr', amount: round2(amount), narration: `Purchase | ${purchaseNumber}` };
+  });
   if (cgstAmount > 0) accrualLines.push({ account: 'Input CGST Account', group: 'Assets', sub: 'Tax Credit', type: 'Dr', amount: cgstAmount, narration: `Input CGST | ${purchaseNumber}` });
   if (sgstAmount > 0) accrualLines.push({ account: 'Input SGST Account', group: 'Assets', sub: 'Tax Credit', type: 'Dr', amount: sgstAmount, narration: `Input SGST | ${purchaseNumber}` });
   if (igstAmount > 0) accrualLines.push({ account: 'Input IGST Account', group: 'Assets', sub: 'Tax Credit', type: 'Dr', amount: igstAmount, narration: `Input IGST | ${purchaseNumber}` });
@@ -209,9 +233,25 @@ router.post('/create', authenticate, requireValidBranch, requirePermission('inve
       ? parseFloat(header.Subtotal_Amount)
       : totalAmount - gstAmount;
 
-    postPurchaseAccountingEntries({
+    // Same Metal_Type per line item as the ornament insert above uses
+    // (defaults to 'Gold' when omitted, matching that column's own NOT
+    // NULL default) — so the accrual posted below Dr's each metal's own
+    // stock account instead of dumping every purchase into Gold's.
+    const stockByMetal = {};
+    for (const item of items) {
+      const metal = item.Metal_Type || 'Gold';
+      stockByMetal[metal] = round2((stockByMetal[metal] || 0) + parseFloat(item.Purchase_Rate || 0));
+    }
+
+    // Awaited (not fire-and-forget) — every sibling module in this
+    // codebase was already fixed for exactly this failure mode (a
+    // response returning before the journal insert is guaranteed
+    // committed races a report run immediately after); this route was
+    // the one left behind (found via audit). Still non-fatal to the
+    // purchase itself on failure — it already committed.
+    await postPurchaseAccountingEntries({
       tenantId, purchaseId: purchase.Purchase_ID, purchaseNumber,
-      subtotal, gstAmount, cgstAmount, sgstAmount, igstAmount,
+      subtotal, stockByMetal, gstAmount, cgstAmount, sgstAmount, igstAmount,
       amountPaid: header.Amount_Paid, paymentMode: header.Payment_Mode, bankAccountId: header.Bank_Account_ID,
       operator: req.user.username, dataMode: modeVal(req),
     }).catch((e) => console.warn('Purchase accounting post failed (non-fatal):', e.message));
