@@ -7,6 +7,7 @@ const { auditLog } = require('../utils/auditLogger');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const dayjs = require('dayjs');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 
 // ── Staff list (for attendance/salary/payroll pickers) ────────────────────────
 // No existing route exposed the tenant's staff for a UI dropdown — every
@@ -147,8 +148,12 @@ router.get('/sales-incentive', authenticate, async (req, res) => {
 });
 
 // ── Payroll ─────────────────────────────────────────────────────────────────────
-router.get('/payroll/runs', authenticate, async (req, res) => {
-  try { return sendSuccess(res, await db('tbl_payroll_run').where('Tenant_ID', req.user.tenantId).orderBy('Pay_Year', 'desc').orderBy('Pay_Month', 'desc')); }
+router.get('/payroll/runs', authenticate, requireValidBranch, async (req, res) => {
+  try {
+    let qb = db('tbl_payroll_run').where('Tenant_ID', req.user.tenantId);
+    qb = withBranch(qb, req);
+    return sendSuccess(res, await qb.orderBy('Pay_Year', 'desc').orderBy('Pay_Month', 'desc'));
+  }
   catch (err) { return sendError(res, 500, 'Failed to fetch payroll runs.'); }
 });
 
@@ -167,24 +172,33 @@ router.get('/payroll/runs/:id', authenticate, async (req, res) => {
 // active staff member with a salary structure: attendance-based gross,
 // PF/ESI deductions from the structure's percentages, plus any pending
 // sales incentives, in one draft run.
-router.post('/payroll/runs', authenticate, [body('Pay_Month').isInt({ min: 1, max: 12 }), body('Pay_Year').isInt({ min: 2020 })], async (req, res) => {
+router.post('/payroll/runs', authenticate, requireValidBranch, [body('Pay_Month').isInt({ min: 1, max: 12 }), body('Pay_Year').isInt({ min: 2020 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
-  const { Pay_Month, Pay_Year, Branch_ID } = req.body;
+  const { Pay_Month, Pay_Year } = req.body;
+  // Multi-Branch Management — the active branch context wins over an
+  // explicit body field, same as every other module (see utils/branchAccess.js).
+  const branchId = resolveBranchForInsert(req, req.body.Branch_ID);
   try {
-    const existing = await db('tbl_payroll_run').where({ Tenant_ID: tenantId, Branch_ID: Branch_ID || null, Pay_Month, Pay_Year }).first();
+    const existing = await db('tbl_payroll_run').where({ Tenant_ID: tenantId, Branch_ID: branchId, Pay_Month, Pay_Year }).first();
     if (existing) return sendError(res, 409, `Payroll for ${Pay_Month}/${Pay_Year} already exists (Run_ID ${existing.Run_ID}).`);
 
     const [run] = await db('tbl_payroll_run').insert({
-      Tenant_ID: tenantId, Branch_ID: Branch_ID || null, Pay_Month, Pay_Year, Status: 'Draft', Generated_By: req.user.username,
+      Tenant_ID: tenantId, Branch_ID: branchId, Pay_Month, Pay_Year, Status: 'Draft', Generated_By: req.user.username,
     }).returning('*');
 
     const monthStart = dayjs(`${Pay_Year}-${String(Pay_Month).padStart(2, '0')}-01`);
     const monthEnd = monthStart.endOf('month');
     const daysInMonth = monthEnd.date();
 
-    const staff = await db('tbl_user_master').where('Tenant_ID', tenantId).where('Is_Active', true);
+    // A branch-scoped run must only pay THAT branch's own staff (their
+    // home Branch_ID) — this used to always process every active
+    // employee tenant-wide regardless of the run's own Branch_ID, so a
+    // "HSR payroll" run would have silently also paid Kanakapura's staff.
+    let staffQb = db('tbl_user_master').where('Tenant_ID', tenantId).where('Is_Active', true);
+    if (branchId) staffQb = staffQb.where('Branch_ID', branchId);
+    const staff = await staffQb;
     const details = [];
     for (const emp of staff) {
       const structure = await db('tbl_salary_structure').where({ User_ID: emp.User_ID, Is_Active: true }).orderBy('Effective_From', 'desc').first();
