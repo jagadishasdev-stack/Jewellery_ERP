@@ -121,7 +121,11 @@ router.post('/return', authenticate, requirePermission('karigar_management'), [
     const tenantId = req.user.tenantId;
     const returnNumber = await generateReturnNumber(tenantId);
 
-    const issue = await db('tbl_issue_to_karigar').where({ Issue_ID: req.body.Issue_ID }).first();
+    // Tenant_ID was missing from this lookup entirely — any authenticated
+    // user of ANY tenant could previously return gold against another
+    // tenant's issue record just by guessing/incrementing Issue_ID. Found
+    // and fixed alongside adding branch inheritance below.
+    const issue = await db('tbl_issue_to_karigar').where({ Issue_ID: req.body.Issue_ID, Tenant_ID: tenantId }).first();
     if (!issue) return sendError(res, 404, 'Issue record not found.');
 
     const returnedWeight = parseFloat(req.body.Gross_Weight_Returned);
@@ -133,6 +137,11 @@ router.post('/return', authenticate, requirePermission('karigar_management'), [
     const [returnRecord] = await db('tbl_return_from_karigar').insert({
       ...req.body,
       Tenant_ID: tenantId,
+      // Multi-Branch Management — inherits the PARENT issue's branch
+      // rather than the caller's active context: gold returns to whatever
+      // branch it was actually issued from, not wherever the person
+      // processing the return happens to be working today.
+      Branch_ID: issue.Branch_ID,
       Return_Number: returnNumber,
       Wastage_Percentage_Applied: wastagePercent,
       Total_Value_Returned: totalValueReturned,
@@ -159,20 +168,22 @@ router.post('/return', authenticate, requirePermission('karigar_management'), [
 });
 
 // ─── GET /api/karigar/settlement ──────────────────────────────────────────────
-router.get('/settlement', authenticate, async (req, res) => {
+router.get('/settlement', authenticate, requireValidBranch, async (req, res) => {
   const { karigarId, fromDate, toDate } = req.query;
   if (!karigarId || !fromDate || !toDate) {
     return sendError(res, 400, 'karigarId, fromDate, toDate are required.');
   }
 
   try {
-    const settlement = await db('tbl_issue_to_karigar as i')
+    let settlementQb = db('tbl_issue_to_karigar as i')
       .join('tbl_return_from_karigar as r', 'i.Issue_ID', 'r.Issue_ID')
       .join('tbl_vendor_master as k', 'i.Karigar_ID', 'k.Vendor_ID')
       .where('i.Tenant_ID', req.user.tenantId)
       .where('i.Data_Mode', modeVal(req))
       .where('i.Karigar_ID', karigarId)
-      .whereBetween('r.Return_Date', [fromDate, toDate])
+      .whereBetween('r.Return_Date', [fromDate, toDate]);
+    settlementQb = withBranch(settlementQb, req, 'i.Branch_ID');
+    const settlement = await settlementQb
       .select(
         'k.Vendor_Name as Karigar_Name',
         'k.Vendor_Code as Karigar_Code',

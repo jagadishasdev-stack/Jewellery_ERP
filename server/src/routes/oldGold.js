@@ -13,13 +13,14 @@ const { authenticate } = require('../middleware/auth');
 const { generateOldGoldAdjustmentNumber } = require('../utils/invoiceNumber');
 const { modeVal } = require('../utils/dataModeFilter');
 const { auditLog } = require('../utils/auditLogger');
+const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 
 // ── POST /api/old-gold/exchange ────────────────────────────────────────────────
 // Creates a real Old Gold Exchange voucher ahead of finalizing a POS bill.
 // Uses the exact same formula as client/src/utils/calculations.js's
 // calculateOldGoldExchange, computed server-side so the stored voucher is
 // authoritative regardless of what the client displayed.
-router.post('/exchange', authenticate, [
+router.post('/exchange', authenticate, requireValidBranch, [
   body('Old_Gold_Weight').isFloat({ min: 0.001 }).withMessage('Gross weight required'),
   body('Purity_Percentage').isFloat({ min: 1, max: 100 }).withMessage('Purity % required'),
   body('Gold_Rate_At_Exchange').isFloat({ min: 1 }).withMessage('Exchange rate required'),
@@ -48,6 +49,8 @@ router.post('/exchange', authenticate, [
 
     const [exchange] = await db('tbl_old_gold_exchange').insert({
       Tenant_ID: tenantId,
+      // Multi-Branch Management — see utils/branchAccess.js.
+      Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
       Data_Mode: modeVal(req),
       Voucher_Number: voucherNumber,
       Customer_ID: Customer_ID || null,
