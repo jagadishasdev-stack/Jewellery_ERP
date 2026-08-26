@@ -17,6 +17,7 @@ import { useF2Lookup } from '../../hooks/useF2Lookup';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export default function PurchasePage() {
   const [createModal, setCreateModal] = useState(false);
@@ -132,6 +133,25 @@ export default function PurchasePage() {
   const addItem = () => setItems(prev => [...prev, { id: Date.now() }]);
   const removeItem = (id) => setItems(prev => prev.filter(i => i.id !== id));
 
+  // GST was never captured anywhere in this form — Subtotal_Amount was
+  // always set equal to Total_Amount (0 tax), even though purchase.js's
+  // accounting posting has fully supported Input CGST/SGST/IGST since
+  // the COGS batch. The backend just never received a GST_Amount to act
+  // on. computeTotals() is called from a Form.Item shouldUpdate render
+  // prop below, so the on-screen total stays live on every keystroke.
+  const computeTotals = () => {
+    const subtotal = items.reduce((s, item, idx) => {
+      const gross = parseFloat(form.getFieldValue(`gross_${idx}`) || 0);
+      const stone = parseFloat(form.getFieldValue(`stone_${idx}`) || 0);
+      const gRate = parseFloat(form.getFieldValue(`gold_rate_${idx}`) || goldRate || 0);
+      const making = parseFloat(form.getFieldValue(`making_${idx}`) || 0);
+      return s + (gross - stone) * gRate + making;
+    }, 0);
+    const gstPercent = parseFloat(form.getFieldValue('GST_Percentage')) || 0;
+    const gstAmount = round2(subtotal * gstPercent / 100);
+    return { subtotal: round2(subtotal), gstAmount, total: round2(subtotal + gstAmount) };
+  };
+
   const onFinish = (values) => {
     const lineItems = items.map((_, idx) => {
       const gross = parseFloat(values[`gross_${idx}`] || 0);
@@ -156,7 +176,8 @@ export default function PurchasePage() {
       };
     });
 
-    const totalAmount = lineItems.reduce((s, i) => s + i.Purchase_Rate, 0);
+    const subtotal = lineItems.reduce((s, i) => s + i.Purchase_Rate, 0);
+    const gstAmount = round2(subtotal * (parseFloat(values.GST_Percentage) || 0) / 100);
 
     createMutation.mutate({
       Supplier_ID: values.Supplier_ID || null,
@@ -164,8 +185,9 @@ export default function PurchasePage() {
       Purchase_Type: values.Purchase_Type || 'Stock',
       Purchase_Date: values.Purchase_Date?.toISOString() || new Date().toISOString(),
       Supplier_Invoice_No: values.Supplier_Invoice_No,
-      Total_Amount: totalAmount,
-      Subtotal_Amount: totalAmount,
+      Subtotal_Amount: round2(subtotal),
+      GST_Amount: gstAmount,
+      Total_Amount: round2(subtotal + gstAmount),
       Payment_Status: 'Pending',
       Notes: values.Notes,
       items: lineItems,
@@ -306,6 +328,35 @@ export default function PurchasePage() {
           <Button block icon={<PlusOutlined />} onClick={addItem} style={{ marginBottom: 16 }}>
             Add Another Item
           </Button>
+
+          <Row gutter={16}>
+            <Col xs={8}>
+              <Form.Item name="GST_Percentage" label="GST % (Input Tax Credit)" initialValue={3}>
+                <Select>
+                  <Option value={0}>0% (unregistered / exempt)</Option>
+                  <Option value={0.25}>0.25% (rough diamonds)</Option>
+                  <Option value={3}>3% (gold/silver jewellery — standard)</Option>
+                  <Option value={5}>5%</Option>
+                  <Option value={12}>12%</Option>
+                  <Option value={18}>18%</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={16}>
+              <Form.Item shouldUpdate noStyle>
+                {() => {
+                  const { subtotal, gstAmount, total } = computeTotals();
+                  return (
+                    <div style={{ display: 'flex', gap: 24, alignItems: 'center', height: '100%', paddingTop: 30, justifyContent: 'flex-end' }}>
+                      <Text type="secondary">Subtotal: <Text strong>{formatCurrency(subtotal)}</Text></Text>
+                      <Text type="secondary">GST: <Text strong>{formatCurrency(gstAmount)}</Text></Text>
+                      <Text>Total: <Text strong style={{ color: '#B8860B', fontSize: 16 }}>{formatCurrency(total)}</Text></Text>
+                    </div>
+                  );
+                }}
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Form.Item name="Notes" label="Notes">
             <Input.TextArea rows={2} />

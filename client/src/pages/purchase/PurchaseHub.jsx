@@ -149,6 +149,23 @@ export default function PurchaseHub() {
   });
 
   // ── Submit purchase bill (Gold/Silver/Diamond/Vendor) ─────────────────────
+  // GST was never captured here either — Subtotal_Amount always equalled
+  // Total_Amount, even though purchase.js has fully supported Input
+  // CGST/SGST/IGST posting since the COGS batch (see PurchasePage.jsx for
+  // the same fix and reasoning).
+  const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const computePurchaseTotals = () => {
+    const subtotal = purchaseItems.reduce((s, item, idx) => {
+      const gross = parseFloat(form.getFieldValue(`gross_${idx}`) || 0);
+      const stone = parseFloat(form.getFieldValue(`stone_${idx}`) || 0);
+      const rate = parseFloat(form.getFieldValue(`rate_${idx}`) || goldRate || 0);
+      const making = parseFloat(form.getFieldValue(`making_${idx}`) || 0);
+      return s + (gross - stone) * rate + making;
+    }, 0);
+    const gstPercent = parseFloat(form.getFieldValue('GST_Percentage')) || 0;
+    const gstAmount = round2(subtotal * gstPercent / 100);
+    return { subtotal: round2(subtotal), gstAmount, total: round2(subtotal + gstAmount) };
+  };
   const onSubmitPurchase = (values) => {
     const lineItems = purchaseItems.map((_, idx) => {
       const gross = parseFloat(values[`gross_${idx}`] || 0);
@@ -166,14 +183,15 @@ export default function PurchaseHub() {
         Purchase_Rate: lineVal, Total_Line_Value: lineVal, Create_Inventory: true,
       };
     });
-    const totalAmount = lineItems.reduce((s, i) => s + i.Total_Line_Value, 0);
+    const subtotal = lineItems.reduce((s, i) => s + i.Total_Line_Value, 0);
+    const gstAmount = round2(subtotal * (parseFloat(values.GST_Percentage) || 0) / 100);
     const purchaseTypeMap = { gold: 'Gold', silver: 'Silver', diamond: 'Diamond', vendor: 'Stock' };
     createMutation.mutate({
       Supplier_ID: values.Supplier_ID || null,
       Purchase_Type: purchaseTypeMap[activeModal] || 'Stock',
       Purchase_Date: values.Purchase_Date?.toISOString() || new Date().toISOString(),
       Supplier_Invoice_No: values.Supplier_Invoice_No,
-      Total_Amount: totalAmount, Subtotal_Amount: totalAmount,
+      Subtotal_Amount: round2(subtotal), GST_Amount: gstAmount, Total_Amount: round2(subtotal + gstAmount),
       Payment_Mode: values.Payment_Mode || 'Cash',
       Payment_Status: 'Pending', Notes: values.Notes, items: lineItems,
     });
@@ -415,6 +433,34 @@ export default function PurchaseHub() {
           </Row>
           <Divider style={{ margin: '10px 0' }}>Items Received</Divider>
           <PurchaseItemRows />
+          <Row gutter={14}>
+            <Col xs={10}>
+              <Form.Item name="GST_Percentage" label="GST % (Input Tax Credit)" initialValue={3}>
+                <Select>
+                  <Option value={0}>0% (unregistered / exempt)</Option>
+                  <Option value={0.25}>0.25% (rough diamonds)</Option>
+                  <Option value={3}>3% (gold/silver jewellery — standard)</Option>
+                  <Option value={5}>5%</Option>
+                  <Option value={12}>12%</Option>
+                  <Option value={18}>18%</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={14}>
+              <Form.Item shouldUpdate noStyle>
+                {() => {
+                  const { subtotal, gstAmount, total } = computePurchaseTotals();
+                  return (
+                    <div style={{ display: 'flex', gap: 20, alignItems: 'center', height: '100%', paddingTop: 30, justifyContent: 'flex-end' }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Subtotal: <Text strong>{formatCurrency(subtotal)}</Text></Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>GST: <Text strong>{formatCurrency(gstAmount)}</Text></Text>
+                      <Text style={{ fontSize: 12 }}>Total: <Text strong style={{ color: '#B8860B', fontSize: 15 }}>{formatCurrency(total)}</Text></Text>
+                    </div>
+                  );
+                }}
+              </Form.Item>
+            </Col>
+          </Row>
           <Form.Item name="Notes" label="Notes"><Input.TextArea rows={2} /></Form.Item>
           <Button type="primary" htmlType="submit" block size="large" loading={createMutation.isPending}
             style={{ background: '#B8860B', borderColor: '#B8860B', fontWeight: 700 }}>
