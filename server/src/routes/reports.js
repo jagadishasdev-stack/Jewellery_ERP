@@ -4,6 +4,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
 const { modeVal, applyStockVisibility, excludeHiddenStockSales } = require('../utils/dataModeFilter');
 const { computeClosingReport } = require('../services/closingReportService');
+const { getAllowedBranches } = require('../utils/branchAccess');
 const { generateClosingReportPDF } = require('../services/pdfService');
 const dayjs = require('dayjs');
 
@@ -1147,6 +1148,131 @@ router.get('/design-performance', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Design performance report error:', err.message);
     return sendError(res, 500, 'Failed to generate design performance report.');
+  }
+});
+
+// ─── GET /api/reports/branch-performance ──────────────────────────────────────
+// Multi-Branch Management spec §9-11/32-33/38 — the "All Branches"
+// dashboard: per-branch comparison + ranking, plus a consolidated total
+// (same reconciliation-table pattern as stock-classification-summary).
+// Only meaningful for someone who can actually see more than one branch
+// — gated the same way the branch selector itself is (getAllowedBranches),
+// not a separate permission, since "can you see All Branches" already IS
+// exactly this question.
+router.get('/branch-performance', authenticate, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const access = await getAllowedBranches(req);
+    if (!access.allBranches && access.branchIds.length <= 1) {
+      return sendError(res, 403, 'Branch performance comparison requires access to more than one branch.');
+    }
+    const dm = modeVal(req);
+    const today = dayjs().format('YYYY-MM-DD');
+    const monthStart = dayjs().startOf('month').format('YYYY-MM-DD');
+    const branchFilter = (qb, col) => access.allBranches ? qb : qb.whereIn(col, access.branchIds);
+
+    const branches = await branchFilter(
+      db('tbl_branch_master').where({ Tenant_ID: tenantId, Is_Active: true }), 'Branch_ID'
+    ).select('Branch_ID', 'Branch_Name', 'Is_Head_Office');
+
+    // Sales — today and month-to-date, per branch, in one pass (COUNT/SUM
+    // with a CASE for "today" avoids two separate scans of the same rows).
+    const salesRows = await branchFilter(
+      db('tbl_sales_header')
+        .where({ Tenant_ID: tenantId, Data_Mode: dm })
+        .where('Sale_Date', '>=', monthStart)
+        .whereNot('Payment_Status', 'Cancelled')
+        .whereNotNull('Branch_ID'),
+      'Branch_ID'
+    )
+      .groupBy('Branch_ID')
+      .select(
+        'Branch_ID',
+        db.raw(`SUM(CASE WHEN DATE("Sale_Date") = ? THEN "Net_Payable_Amount" ELSE 0 END) as today_sales`, [today]),
+        db.raw(`COUNT(CASE WHEN DATE("Sale_Date") = ? THEN 1 END) as today_bills`, [today]),
+        db.raw('SUM("Net_Payable_Amount") as month_sales'),
+        db.raw('SUM("Balance_Amount") as outstanding'),
+      );
+    const salesMap = Object.fromEntries(salesRows.map(r => [r.Branch_ID, r]));
+
+    // Stock — pieces/weight/value still in stock, per branch.
+    const stockRows = await branchFilter(
+      db('tbl_ornament_master').where({ Tenant_ID: tenantId, Is_Active: true, Is_Sold: false }),
+      'Branch_ID'
+    )
+      .groupBy('Branch_ID')
+      .select(
+        'Branch_ID',
+        db.raw('COUNT(*) as pieces'),
+        db.raw('SUM("Gross_Weight") as weight'),
+        db.raw('SUM("Total_Price") as value'),
+        db.raw(`SUM(CASE WHEN "Metal_Type"='Gold' THEN "Gross_Weight" ELSE 0 END) as gold_weight`),
+        db.raw(`SUM(CASE WHEN "Metal_Type"='Silver' THEN "Gross_Weight" ELSE 0 END) as silver_weight`),
+        db.raw('SUM(CASE WHEN "Is_On_Approval" THEN 1 ELSE 0 END) as approval_pieces'),
+      );
+    const stockMap = Object.fromEntries(stockRows.map(r => [r.Branch_ID, r]));
+
+    // Sold pieces this month, per branch — separate from the stock query
+    // above (that one is Is_Sold=false, this is a sales-details count).
+    const soldRows = await branchFilter(
+      db('tbl_sales_details as sd')
+        .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
+        .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
+        .where('sh.Sale_Date', '>=', monthStart)
+        .whereNot('sh.Payment_Status', 'Cancelled')
+        .whereNotNull('sh.Branch_ID'),
+      'sh.Branch_ID'
+    ).groupBy('sh.Branch_ID').select('sh.Branch_ID', db.raw('COUNT(*) as sold_pieces'));
+    const soldMap = Object.fromEntries(soldRows.map(r => [r.Branch_ID, parseInt(r.sold_pieces)]));
+
+    // Customers whose primary branch is this one (§18 — an attribute, not
+    // an isolation boundary, so this is "customers based here," not "every
+    // customer this branch has ever served").
+    const customerRows = await branchFilter(
+      db('tbl_customer_master').where({ Tenant_ID: tenantId, Is_Active: true, Data_Mode: dm }).whereNotNull('Branch_ID'),
+      'Branch_ID'
+    ).groupBy('Branch_ID').select('Branch_ID', db.raw('COUNT(*) as customers'));
+    const customerMap = Object.fromEntries(customerRows.map(r => [r.Branch_ID, parseInt(r.customers)]));
+
+    const rows = branches.map(b => {
+      const s = salesMap[b.Branch_ID] || {};
+      const st = stockMap[b.Branch_ID] || {};
+      return {
+        Branch_ID: b.Branch_ID, Branch_Name: b.Branch_Name, Is_Head_Office: b.Is_Head_Office,
+        today_sales: parseFloat(s.today_sales || 0), today_bills: parseInt(s.today_bills || 0),
+        month_sales: parseFloat(s.month_sales || 0), outstanding: parseFloat(s.outstanding || 0),
+        stock_pieces: parseInt(st.pieces || 0), stock_weight: parseFloat(st.weight || 0), stock_value: parseFloat(st.value || 0),
+        gold_weight: parseFloat(st.gold_weight || 0), silver_weight: parseFloat(st.silver_weight || 0),
+        approval_pieces: parseInt(st.approval_pieces || 0),
+        sold_pieces_month: soldMap[b.Branch_ID] || 0,
+        customers: customerMap[b.Branch_ID] || 0,
+      };
+    });
+
+    const combined = rows.reduce((acc, r) => ({
+      today_sales: acc.today_sales + r.today_sales, month_sales: acc.month_sales + r.month_sales,
+      outstanding: acc.outstanding + r.outstanding, stock_pieces: acc.stock_pieces + r.stock_pieces,
+      stock_weight: acc.stock_weight + r.stock_weight, stock_value: acc.stock_value + r.stock_value,
+      gold_weight: acc.gold_weight + r.gold_weight, silver_weight: acc.silver_weight + r.silver_weight,
+      approval_pieces: acc.approval_pieces + r.approval_pieces, sold_pieces_month: acc.sold_pieces_month + r.sold_pieces_month,
+      customers: acc.customers + r.customers,
+    }), { today_sales: 0, month_sales: 0, outstanding: 0, stock_pieces: 0, stock_weight: 0, stock_value: 0, gold_weight: 0, silver_weight: 0, approval_pieces: 0, sold_pieces_month: 0, customers: 0 });
+
+    // Ranking (§11) — dynamic on whatever range was actually requested
+    // (today vs month), not hardcoded to one or the other.
+    const rankedByToday = [...rows].sort((a, b) => b.today_sales - a.today_sales).map(r => ({ Branch_Name: r.Branch_Name, value: r.today_sales }));
+    const rankedByMonth = [...rows].sort((a, b) => b.month_sales - a.month_sales).map(r => ({ Branch_Name: r.Branch_Name, value: r.month_sales }));
+    const rankedByStock = [...rows].sort((a, b) => b.stock_value - a.stock_value).map(r => ({ Branch_Name: r.Branch_Name, value: r.stock_value }));
+
+    return sendSuccess(res, {
+      branches: rows, combined,
+      ranking: { byTodaySales: rankedByToday, byMonthSales: rankedByMonth, byStockValue: rankedByStock },
+      highest: rows.length ? rankedByToday[0]?.Branch_Name : null,
+      lowest: rows.length ? rankedByToday[rankedByToday.length - 1]?.Branch_Name : null,
+    });
+  } catch (err) {
+    console.error('Branch performance report error:', err.message);
+    return sendError(res, 500, 'Failed to generate branch performance report.');
   }
 });
 

@@ -35,6 +35,7 @@ import SalesHistoryPage from './pages/reports/SalesHistoryPage';
 import SalesBillHistoryPage from './pages/reports/SalesBillHistoryPage';
 import PurchaseReportPage from './pages/reports/PurchaseReportPage';
 import KarigarReportPage from './pages/reports/KarigarReportPage';
+import BranchPerformancePage from './pages/reports/BranchPerformancePage';
 import DayClosePage from './pages/reports/DayClosePage';
 import InvoiceTemplatePage from './pages/invoice/InvoiceTemplatePage';
 import InvoiceStudio from './pages/invoice/InvoiceStudio';
@@ -172,6 +173,7 @@ function App() {
         <Route path="/reports/sales-bill-history" element={<SalesBillHistoryPage />} />
         <Route path="/reports/purchase" element={<PurchaseReportPage />} />
         <Route path="/reports/karigar" element={<KarigarReportPage />} />
+        <Route path="/reports/branch-performance" element={<BranchPerformancePage />} />
         <Route path="/reports/day-close" element={<DayClosePage />} />
         <Route path="/invoice/template" element={<InvoiceTemplatePage />} />
         <Route path="/invoice/studio" element={<InvoiceStudio />} />

@@ -264,6 +264,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         ...(isEnabled('savings_scheme') ? [{ key: '/reports/scheme-reports', label: '🪙 Scheme Reports' }] : []),
         ...(isEnabled('approval_module') ? [{ key: '/reports/approval', label: '🔄 Approval Reports' }] : []),
         { key: '/reports/management-reports', label: '🎯 Management Reports' },
+        { key: '/reports/branch-performance', label: '🏢 Branch Performance' },
         { key: '/reports/closing-report', label: '📊 Closing Report' },
         { key: 'reports-div2', type: 'divider' },
         { key: '/reports/sales', label: '📜 Legacy Sales' },

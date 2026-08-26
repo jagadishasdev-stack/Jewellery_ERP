@@ -142,6 +142,7 @@ export const reportsApi = {
   closingReportPdf: (params) => api.get('/reports/closing-report/pdf', { params, responseType: 'blob' }),
   karigarPerformance: () => api.get('/reports/karigar-performance'),
   designPerformance: () => api.get('/reports/design-performance'),
+  branchPerformance: () => api.get('/reports/branch-performance'),
 };
 
 // ─── Floors & Counters ────────────────────────────────────────────────────────
