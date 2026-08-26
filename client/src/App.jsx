@@ -197,7 +197,7 @@ function App() {
         <Route path="/floors" element={<FloorsPage />} />
         <Route path="/floors/hidden-stock" element={<ProtectedRoute permission="tenant_management"><HiddenStockPage /></ProtectedRoute>} />
         <Route path="/inventory/special-stock" element={<ProtectedRoute permission="tenant_management"><SpecialStockPage /></ProtectedRoute>} />
-        <Route path="/transfer" element={<TransferPage />} />
+        <Route path="/transfer" element={<ProtectedRoute permission="inventory"><TransferPage /></ProtectedRoute>} />
         <Route path="/purchase" element={<PurchasePage />} />
         <Route path="/purchase/hub" element={<PurchaseHub />} />
         <Route path="/reports" element={<ReportsHub />} />

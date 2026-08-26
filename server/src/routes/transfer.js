@@ -6,7 +6,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { modeVal } = require('../utils/dataModeFilter');
 const { generateTransferNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
-const { getAllowedBranches } = require('../utils/branchAccess');
+const { getAllowedBranches, requireValidBranch, branchVal } = require('../utils/branchAccess');
 
 // Multi-Branch Management (spec §14/26/28) — a Branch-type transfer must
 // be authorized on BOTH ends independently: the sender needs access to
@@ -44,17 +44,31 @@ const resolveOrnamentIds = async (trx, tenantId, level, ids, hiddenState) => {
 };
 
 // ── GET /api/transfer  ────────────────────────────────────────────────────────
-router.get('/', authenticate, async (req, res) => {
+// requireValidBranch/withBranch — this had no branch scoping at all
+// (found via audit), so a user restricted to one branch could see every
+// OTHER branch's transfer history too. A transfer touches the active
+// branch on either end (it's either sending stock out or receiving it
+// in), so it matches on From_Branch_ID OR To_Branch_ID.
+router.get('/', authenticate, requireValidBranch, async (req, res) => {
   const { status, page = 1, limit = 30 } = req.query;
   try {
+    const applyBranchFilter = (qb, fromCol, toCol) => {
+      const b = branchVal(req);
+      if (!b || b === 'ALL') return qb;
+      return qb.where((w) => w.where(fromCol, b).orWhere(toCol, b));
+    };
+
     let qb = db('tbl_stock_transfer as tr')
       .leftJoin('tbl_branch_master as fb', 'tr.From_Branch_ID', 'fb.Branch_ID')
       .leftJoin('tbl_branch_master as tb', 'tr.To_Branch_ID', 'tb.Branch_ID')
       .where('tr.Tenant_ID', req.user.tenantId)
       .where('tr.Data_Mode', modeVal(req))
       .select('tr.*', 'fb.Branch_Name as From_Branch_Name', 'tb.Branch_Name as To_Branch_Name');
+    qb = applyBranchFilter(qb, 'tr.From_Branch_ID', 'tr.To_Branch_ID');
     if (status) qb = qb.where('tr.Status', status);
-    const countQb = db('tbl_stock_transfer').where('Tenant_ID', req.user.tenantId).where('Data_Mode', modeVal(req));
+
+    let countQb = db('tbl_stock_transfer').where('Tenant_ID', req.user.tenantId).where('Data_Mode', modeVal(req));
+    countQb = applyBranchFilter(countQb, 'From_Branch_ID', 'To_Branch_ID');
     if (status) countQb.where('Status', status);
     const [{ count }] = await countQb.count('Transfer_ID as count');
     const data = await qb.orderBy('tr.Transfer_Date', 'desc')
@@ -64,7 +78,13 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // ── POST /api/transfer/create  ────────────────────────────────────────────────
-router.post('/create', authenticate, [
+// requirePermission('inventory') — this had NO permission check at all
+// (found via audit), so any logged-in user could move stock between
+// branches. Real separation of duties still needs a manager on the
+// RECEIVING end too (see /approve below) — a user with access to both
+// branches could still create AND approve their own transfer, since
+// nothing here requires a different person for that half.
+router.post('/create', authenticate, requirePermission('inventory'), [
   body('Transfer_Type').isIn(['Floor','Branch','Counter','Tray']),
   body('items').isArray({ min: 1 }).withMessage('At least one item required'),
 ], async (req, res) => {
@@ -106,6 +126,18 @@ router.post('/create', authenticate, [
       Status: 'Pending',
     }));
     await trx('tbl_stock_transfer_items').insert(items);
+
+    // Reserve the stock — between create and approve/reject, an item in
+    // transit stayed Is_Stock_Available (sellable at the POS the whole
+    // time), and approving afterwards moved a sold item's Branch_ID to
+    // the destination (found via audit). Same flag approval.js already
+    // correctly uses for goods-on-approval — this was the one place that
+    // moved real stock without it.
+    const ornamentIds = items.map((i) => i.Ornament_ID).filter(Boolean);
+    if (ornamentIds.length > 0) {
+      await trx('tbl_ornament_master').whereIn('Ornament_ID', ornamentIds).update({ Is_Stock_Available: false });
+    }
+
     await trx.commit();
     return sendSuccess(res, transfer, 'Transfer initiated.', 201);
   } catch (err) {
@@ -116,7 +148,7 @@ router.post('/create', authenticate, [
 });
 
 // ── POST /api/transfer/:id/approve  ──────────────────────────────────────────
-router.post('/:id/approve', authenticate, async (req, res) => {
+router.post('/:id/approve', authenticate, requirePermission('inventory'), async (req, res) => {
   const trx = await db.transaction();
   try {
     // Tenant_ID was missing here entirely — Transfer_ID is a plain global
@@ -142,6 +174,7 @@ router.post('/:id/approve', authenticate, async (req, res) => {
     if (ornamentIds.length > 0) {
       const updatePayload = {
         Branch_ID: transfer.To_Branch_ID || db.raw('"Branch_ID"'),
+        Is_Stock_Available: true, // released from transit — reserved at /create above
         Last_Updated_By: req.user.username,
         Last_Updated_Date: new Date(),
       };
@@ -163,6 +196,14 @@ router.post('/:id/approve', authenticate, async (req, res) => {
     });
 
     await trx.commit();
+
+    await auditLog({
+      tenantId: req.user.tenantId, userId: req.user.userId, tableName: 'tbl_stock_transfer',
+      recordId: transfer.Transfer_ID, actionType: 'UPDATE',
+      description: `Transfer ${transfer.Transfer_Number} approved by ${req.user.username} — ${ornamentIds.length} item(s) moved`,
+      req,
+    });
+
     return sendSuccess(res, null, `Transfer ${transfer.Transfer_Number} approved. ${ornamentIds.length} items moved.`);
   } catch (err) {
     await trx.rollback();
@@ -172,7 +213,7 @@ router.post('/:id/approve', authenticate, async (req, res) => {
 });
 
 // ── POST /api/transfer/:id/reject  ───────────────────────────────────────────
-router.post('/:id/reject', authenticate, async (req, res) => {
+router.post('/:id/reject', authenticate, requirePermission('inventory'), async (req, res) => {
   try {
     // Same fixes as /approve just above: real Tenant_ID scoping (this
     // used to update blindly by ID alone, no existence check, no tenant
@@ -187,6 +228,23 @@ router.post('/:id/reject', authenticate, async (req, res) => {
 
     await db('tbl_stock_transfer').where({ Transfer_ID: req.params.id }).update({ Status: 'Rejected', Approved_By: req.user.username });
     await db('tbl_stock_transfer_items').where({ Transfer_ID: req.params.id }).update({ Status: 'Rejected' });
+
+    // Release the reservation from /create above — a rejected transfer
+    // must not leave the stock permanently un-sellable at its own
+    // (unchanged) branch.
+    const items = await db('tbl_stock_transfer_items').where({ Transfer_ID: req.params.id });
+    const ornamentIds = items.map((i) => i.Ornament_ID).filter(Boolean);
+    if (ornamentIds.length > 0) {
+      await db('tbl_ornament_master').whereIn('Ornament_ID', ornamentIds).update({ Is_Stock_Available: true });
+    }
+
+    await auditLog({
+      tenantId: req.user.tenantId, userId: req.user.userId, tableName: 'tbl_stock_transfer',
+      recordId: transfer.Transfer_ID, actionType: 'UPDATE',
+      description: `Transfer ${transfer.Transfer_Number} rejected by ${req.user.username}`,
+      req,
+    });
+
     return sendSuccess(res, null, 'Transfer rejected.');
   } catch (err) { return sendError(res, 500, 'Failed to reject transfer.'); }
 });
