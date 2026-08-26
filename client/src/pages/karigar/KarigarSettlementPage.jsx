@@ -69,9 +69,14 @@ export default function KarigarSettlementPage() {
   const handleSettle = () => {
     if (!settlementData) return;
     const values = form.getFieldsValue();
+    const [from, to] = values.dateRange;
+    // amount is no longer sent — the server recomputes it itself from the
+    // same unsettled/Completed issues this preview shows, so what's PAID
+    // can never drift from what's DISPLAYED (or be edited in devtools).
     settleMutation.mutate({
       karigarId: values.karigarId,
-      amount: settlementData.totals.netWages,
+      fromDate: from.format('YYYY-MM-DD'),
+      toDate: to.format('YYYY-MM-DD'),
       paymentMode: 'Bank Transfer',
     });
   };
@@ -81,13 +86,21 @@ export default function KarigarSettlementPage() {
     { title: 'Issue #', dataIndex: 'Issue_Number' },
     { title: 'Gold Issued (g)', dataIndex: 'Gold_Weight_Issued', render: (v) => formatWeight(v) },
     { title: 'Returned (g)', dataIndex: 'Gross_Weight_Returned', render: (v) => formatWeight(v) },
-    { title: 'Wastage (g)', dataIndex: 'Wastage_Weight', render: (v) => <Tag color="orange">{formatWeight(v)}</Tag> },
     {
-      title: 'Deduction',
-      render: (_, r) => {
-        const deduction = parseFloat(r.Wastage_Weight || 0) * parseFloat(r.Karigar_Wages_Rate || 0);
-        return <Text type="danger">{formatCurrency(deduction)}</Text>;
-      },
+      title: 'Wastage (g)', dataIndex: 'Wastage_Weight',
+      render: (v, r) => (
+        <Tag color="orange">
+          {formatWeight(v)}{parseFloat(r.Deductible_Wastage_Weight || 0) < parseFloat(v || 0) ? ` (${formatWeight(r.Deductible_Wastage_Weight)} over allowance)` : ''}
+        </Tag>
+      ),
+    },
+    {
+      // Deduction is the value of wastage EXCEEDING the allowed % (priced
+      // at gold rate — wastage is grams of metal, not labor time), always
+      // the server's own figure now, never recomputed client-side at the
+      // wrong (wages) rate.
+      title: 'Deduction', dataIndex: 'Wastage_Deduction',
+      render: (v) => <Text type="danger">{formatCurrency(v)}</Text>,
     },
   ];
 

@@ -161,7 +161,7 @@ function App() {
         <Route path="/karigar" element={<KarigarListPage />} />
         <Route path="/karigar/issue" element={<ProtectedRoute permission="karigar_management"><KarigarIssuePage /></ProtectedRoute>} />
         <Route path="/karigar/return" element={<ProtectedRoute permission="karigar_management"><KarigarReturnPage /></ProtectedRoute>} />
-        <Route path="/karigar/settlement" element={<KarigarSettlementPage />} />
+        <Route path="/karigar/settlement" element={<ProtectedRoute permission="karigar_management"><KarigarSettlementPage /></ProtectedRoute>} />
         <Route path="/approval" element={<ApprovalPendingListPage />} />
         <Route path="/approval/completed" element={<ApprovalCompletedListPage />} />
         <Route path="/approval/parties" element={<ApprovalPartyPage />} />

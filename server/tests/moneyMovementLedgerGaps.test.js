@@ -54,22 +54,38 @@ async function waitForJournalLines(reference, timeoutMs = 3000) {
 }
 
 test('karigar settlement posts Dr Making Charges Paid to Karigar / Cr Cash', async () => {
+  // /settle no longer takes an arbitrary client-supplied amount — it only
+  // pays for real, reconciled (Completed), unsettled issues in the given
+  // date range, recomputing the amount itself (see karigarWastageSettlement.test.js
+  // for the full wastage-math/idempotency coverage). Build one real
+  // issue+return here so this test can still confirm the actual Dr/Cr
+  // ledger lines a real settlement posts.
   const vendor = await request(app).post('/api/karigar/vendor').set(auth()).send({
     Vendor_Name: 'Ledger Test Karigar', Vendor_Type: 'Karigar', Mobile_1: '9911100001',
   });
+  const karigarId = vendor.body.data.Vendor_ID;
+  const issue = await request(app).post('/api/karigar/issue').set(auth()).send({
+    Karigar_ID: karigarId, Gold_Weight_Issued: 10, Gold_Rate_At_Issue: 6000, Karigar_Wages_Rate: 500, Issue_Date: '2026-08-24',
+  });
+  await request(app).post('/api/karigar/return').set(auth()).send({
+    Issue_ID: issue.body.data.Issue_ID, Gross_Weight_Returned: 10, Net_Gold_Weight: 10, Wastage_Weight: 0, Return_Date: '2026-08-24',
+  });
+  // 10g returned * 500 wages rate = 5000, no wastage deduction.
+
   const res = await request(app).post('/api/karigar/settle').set(auth()).send({
-    karigarId: vendor.body.data.Vendor_ID, amount: 5000, paymentMode: 'Cash',
+    karigarId, fromDate: '2026-08-24', toDate: '2026-08-24', paymentMode: 'Cash',
   });
   expect(res.status).toBe(200);
+  expect(res.body.data.amount).toBe(5000);
 
-  const vendorRow = await db('tbl_vendor_master').where({ Vendor_ID: vendor.body.data.Vendor_ID }).first();
+  const vendorRow = await db('tbl_vendor_master').where({ Vendor_ID: karigarId }).first();
   expect(parseFloat(vendorRow.Current_Balance)).toBe(-5000); // unchanged existing behavior
 
   // Reference is "KARIGAR-SETTLE-<id>-<timestamp>" — find it by prefix.
   let journal;
   const start = Date.now();
   while (Date.now() - start < 3000 && !journal) {
-    journal = await db('tbl_accounting_journal').where('Reference', 'like', `KARIGAR-SETTLE-${vendor.body.data.Vendor_ID}-%`).first();
+    journal = await db('tbl_accounting_journal').where('Reference', 'like', `KARIGAR-SETTLE-${karigarId}-%`).first();
     if (!journal) await new Promise((r) => setTimeout(r, 50));
   }
   const lines = await db('tbl_accounting_entries').where({ Journal_ID: journal.Journal_ID });

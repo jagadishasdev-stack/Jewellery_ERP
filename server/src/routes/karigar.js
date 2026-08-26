@@ -10,6 +10,8 @@ const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../u
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
 // ─── GET /api/karigar/list ────────────────────────────────────────────────────
 router.get('/list', authenticate, async (req, res) => {
   try {
@@ -57,6 +59,20 @@ router.post('/issue', authenticate, requirePermission('karigar_management'), req
     }).returning('*');
 
     await auditLog({ tenantId, userId: req.user.userId, tableName: 'tbl_issue_to_karigar', recordId: issue.Issue_ID, actionType: 'INSERT', newData: issue, req });
+
+    // Gold physically leaving the premises had zero inventory or ledger
+    // impact at all (found via audit) — Trial Balance showed gold still
+    // in the shop while it sat at a goldsmith's bench. Dr a real "Gold
+    // with Karigar" asset (money hasn't left the business, it's just
+    // moved form), Cr Gold Stock. Reversed at return time below.
+    await postJournal({
+      tenantId, sourceType: 'JOURNAL', sourceId: issue.Issue_ID, reference: `KARIGAR-ISSUE-${issueNumber}`, branchId: issue.Branch_ID,
+      narration: `Gold issued to karigar — ${issueNumber}`, createdBy: req.user.username, dataMode: modeVal(req),
+      lines: [
+        { account: 'Gold with Karigar Account', group: 'Assets', sub: 'Inventory', type: 'Dr', amount: totalValue, narration: `Issued | ${issueNumber}` },
+        { account: 'Gold Stock Account', group: 'Assets', sub: 'Inventory', type: 'Cr', amount: totalValue, narration: `Issued | ${issueNumber}` },
+      ],
+    }).catch((e) => console.error('[Karigar] Issue ledger post failed (issue still recorded fine):', e.message));
 
     return sendSuccess(res, issue, 'Gold issued to karigar successfully.', 201);
   } catch (err) {
@@ -127,12 +143,24 @@ router.post('/return', authenticate, requirePermission('karigar_management'), [
     // and fixed alongside adding branch inheritance below.
     const issue = await db('tbl_issue_to_karigar').where({ Issue_ID: req.body.Issue_ID, Tenant_ID: tenantId }).first();
     if (!issue) return sendError(res, 404, 'Issue record not found.');
+    if (issue.Status === 'Completed') return sendError(res, 400, 'This issue is already fully reconciled — nothing left to return.');
 
     const returnedWeight = parseFloat(req.body.Gross_Weight_Returned);
     const wastageWeight = parseFloat(req.body.Wastage_Weight || 0);
     const wastagePercent = issue.Gold_Weight_Issued > 0 ? (wastageWeight / issue.Gold_Weight_Issued) * 100 : 0;
     const goldRateAtReturn = parseFloat(req.body.Gold_Rate_At_Return || issue.Gold_Rate_At_Issue);
     const totalValueReturned = returnedWeight * goldRateAtReturn;
+
+    // Real gold-weight balance check — nothing previously stopped a return
+    // (or a typo, e.g. 50.000 for 5.000) from booking more gold as
+    // returned+wasted than was ever issued in the first place, silently
+    // inflating both the reconciliation and (before this fix) the wages
+    // computed from it.
+    const alreadyAccounted = parseFloat(issue.Returned_Weight || 0) + parseFloat(issue.Wastage_Used || 0);
+    const remaining = parseFloat(issue.Gold_Weight_Issued) - alreadyAccounted;
+    if (returnedWeight + wastageWeight > remaining + 0.001) {
+      return sendError(res, 400, `Return + wastage (${(returnedWeight + wastageWeight).toFixed(3)}g) exceeds what's still outstanding on this issue (${remaining.toFixed(3)}g).`);
+    }
 
     const [returnRecord] = await db('tbl_return_from_karigar').insert({
       ...req.body,
@@ -148,17 +176,46 @@ router.post('/return', authenticate, requirePermission('karigar_management'), [
       Created_By: req.user.username,
     }).returning('*');
 
-    // Update issue status
-    const newReturnedWeight = parseFloat(issue.Returned_Weight || 0) + returnedWeight;
-    const newStatus = newReturnedWeight >= issue.Gold_Weight_Issued ? 'Completed' : 'Partial';
+    // Update issue status — reconciles against returned + wastage, not
+    // returned alone. Legitimate wastage means returned weight is ALWAYS
+    // less than issued, so the old `returned >= issued` check meant every
+    // karigar job with any wastage at all could never reach Completed.
+    const newReturnedWeight = round2(parseFloat(issue.Returned_Weight || 0) + returnedWeight);
+    const newWastageUsed = round2(parseFloat(issue.Wastage_Used || 0) + wastageWeight);
+    const newStatus = (newReturnedWeight + newWastageUsed) >= parseFloat(issue.Gold_Weight_Issued) - 0.001 ? 'Completed' : 'Partial';
+    // Whatever's left unaccounted once this issue is fully reconciled —
+    // Missing_Weight/Missing_Value existed on the schema and were rendered
+    // on the Karigar Report, but no route ever wrote them; gold a karigar
+    // simply never returned was permanently invisible.
+    const missingWeight = newStatus === 'Completed' ? Math.max(0, round2(parseFloat(issue.Gold_Weight_Issued) - newReturnedWeight - newWastageUsed)) : 0;
 
     await db('tbl_issue_to_karigar').where({ Issue_ID: req.body.Issue_ID }).update({
       Returned_Weight: newReturnedWeight,
-      Wastage_Used: parseFloat(issue.Wastage_Used || 0) + wastageWeight,
+      Wastage_Used: newWastageUsed,
+      Missing_Weight: missingWeight,
+      Missing_Value: round2(missingWeight * goldRateAtReturn),
       Return_Date: req.body.Return_Date,
       Status: newStatus,
       Modified_Date: new Date(),
     });
+
+    // Gold physically coming back had zero ledger impact, mirroring the
+    // issue-side gap above — Cr "Gold with Karigar" for the value that's
+    // no longer with them (returned + wastage), Dr Gold Stock for what
+    // physically came back, Dr Wastage Expense for the rupee value of
+    // metal that didn't (a real cost of doing business with karigars, not
+    // something either sitting in stock or still owed).
+    const wastageValue = round2(wastageWeight * goldRateAtReturn);
+    const journalLines = [
+      { account: 'Gold with Karigar Account', group: 'Assets', sub: 'Inventory', type: 'Cr', amount: round2(totalValueReturned + wastageValue), narration: `Returned | ${returnNumber}` },
+    ];
+    if (totalValueReturned >= 0.01) journalLines.push({ account: 'Gold Stock Account', group: 'Assets', sub: 'Inventory', type: 'Dr', amount: round2(totalValueReturned), narration: `Returned | ${returnNumber}` });
+    if (wastageValue >= 0.01) journalLines.push({ account: 'Karigar Wastage Expense Account', group: 'Expenses', sub: 'Direct Expense', type: 'Dr', amount: wastageValue, narration: `Wastage | ${returnNumber}` });
+    await postJournal({
+      tenantId, sourceType: 'JOURNAL', sourceId: returnRecord.Return_ID, reference: `KARIGAR-RETURN-${returnNumber}`, branchId: issue.Branch_ID,
+      narration: `Gold returned from karigar — ${returnNumber}`, createdBy: req.user.username, dataMode: modeVal(req),
+      lines: journalLines,
+    }).catch((e) => console.error('[Karigar] Return ledger post failed (return still recorded fine):', e.message));
 
     return sendSuccess(res, returnRecord, 'Return recorded successfully.', 201);
   } catch (err) {
@@ -168,50 +225,86 @@ router.post('/return', authenticate, requirePermission('karigar_management'), [
 });
 
 // ─── GET /api/karigar/settlement ──────────────────────────────────────────────
+// Shared by the GET preview below and POST /settle itself, so what's
+// PAID is always computed by the exact same logic as what was SHOWN —
+// POST /settle never trusts a client-supplied amount.
+//
+// Wastage used to be deducted from wages at the WAGES rate (₹/g of
+// making charge) instead of the GOLD rate — wastage is grams of metal
+// lost, so charging it at the labor rate under-recovered by roughly two
+// orders of magnitude. Wastage_Allowed_Percent was also captured and
+// shown on screen ("wastage over the allowance is deducted") but never
+// actually enforced — 100% of wastage was deducted, allowance or not.
+// Only settleable=true rows (unsettled, reconciled Completed issues) are
+// eligible — Partial issues aren't settled piecemeal, and an already-
+// Is_Settled issue never appears again.
+async function computeKarigarSettlement(req, karigarId, fromDate, toDate) {
+  let qb = db('tbl_issue_to_karigar as i')
+    .join('tbl_return_from_karigar as r', 'i.Issue_ID', 'r.Issue_ID')
+    .join('tbl_vendor_master as k', 'i.Karigar_ID', 'k.Vendor_ID')
+    .where('i.Tenant_ID', req.user.tenantId)
+    .where('i.Data_Mode', modeVal(req))
+    .where('i.Karigar_ID', karigarId)
+    .where('i.Is_Settled', false)
+    .where('i.Status', 'Completed')
+    .whereBetween('r.Return_Date', [fromDate, toDate]);
+  qb = withBranch(qb, req, 'i.Branch_ID');
+  const rows = await qb
+    .select(
+      'k.Vendor_Name as Karigar_Name', 'k.Vendor_Code as Karigar_Code',
+      'i.Issue_ID', 'i.Issue_Date', 'i.Issue_Number', 'i.Gold_Weight_Issued',
+      'i.Wastage_Allowed_Percent', 'i.Karigar_Wages_Rate',
+      'r.Gross_Weight_Returned', 'r.Wastage_Weight', 'r.Gold_Rate_At_Return', 'r.Return_Date'
+    )
+    .orderBy('i.Issue_Date');
+
+  // One issue can have multiple return rows (partial returns building up
+  // to Completed) — group by Issue_ID so wages/wastage-allowance are
+  // computed once per issue, against its TOTAL wastage, not double-counted
+  // per return row.
+  const byIssue = new Map();
+  for (const row of rows) {
+    const existing = byIssue.get(row.Issue_ID) || { ...row, Gross_Weight_Returned: 0, Wastage_Weight: 0 };
+    existing.Gross_Weight_Returned = round2(existing.Gross_Weight_Returned + parseFloat(row.Gross_Weight_Returned || 0));
+    existing.Wastage_Weight = round2(existing.Wastage_Weight + parseFloat(row.Wastage_Weight || 0));
+    existing.Gold_Rate_At_Return = row.Gold_Rate_At_Return; // last return's rate
+    byIssue.set(row.Issue_ID, existing);
+  }
+
+  const items = [];
+  const totals = { totalIssued: 0, totalReturned: 0, totalWastage: 0, grossWages: 0, wastageDeduction: 0, netWages: 0 };
+  for (const row of byIssue.values()) {
+    const issuedWeight = parseFloat(row.Gold_Weight_Issued || 0);
+    const returnedWeight = parseFloat(row.Gross_Weight_Returned || 0);
+    const wastageWeight = parseFloat(row.Wastage_Weight || 0);
+    const allowedWeight = issuedWeight * (parseFloat(row.Wastage_Allowed_Percent || 0) / 100);
+    const deductibleWastageWeight = Math.max(0, round2(wastageWeight - allowedWeight));
+    const goldRate = parseFloat(row.Gold_Rate_At_Return || 0);
+    const wagesRate = parseFloat(row.Karigar_Wages_Rate || 0);
+
+    const grossWages = round2(returnedWeight * wagesRate);
+    const wastageDeduction = round2(deductibleWastageWeight * goldRate);
+    const netWages = round2(grossWages - wastageDeduction);
+
+    items.push({ ...row, Gross_Weight_Returned: returnedWeight, Wastage_Weight: wastageWeight, Deductible_Wastage_Weight: deductibleWastageWeight, Gross_Wages: grossWages, Wastage_Deduction: wastageDeduction, Net_Wages: netWages });
+    totals.totalIssued = round2(totals.totalIssued + issuedWeight);
+    totals.totalReturned = round2(totals.totalReturned + returnedWeight);
+    totals.totalWastage = round2(totals.totalWastage + wastageWeight);
+    totals.grossWages = round2(totals.grossWages + grossWages);
+    totals.wastageDeduction = round2(totals.wastageDeduction + wastageDeduction);
+    totals.netWages = round2(totals.netWages + netWages);
+  }
+  return { items, totals };
+}
+
 router.get('/settlement', authenticate, requireValidBranch, async (req, res) => {
   const { karigarId, fromDate, toDate } = req.query;
   if (!karigarId || !fromDate || !toDate) {
     return sendError(res, 400, 'karigarId, fromDate, toDate are required.');
   }
-
   try {
-    let settlementQb = db('tbl_issue_to_karigar as i')
-      .join('tbl_return_from_karigar as r', 'i.Issue_ID', 'r.Issue_ID')
-      .join('tbl_vendor_master as k', 'i.Karigar_ID', 'k.Vendor_ID')
-      .where('i.Tenant_ID', req.user.tenantId)
-      .where('i.Data_Mode', modeVal(req))
-      .where('i.Karigar_ID', karigarId)
-      .whereBetween('r.Return_Date', [fromDate, toDate]);
-    settlementQb = withBranch(settlementQb, req, 'i.Branch_ID');
-    const settlement = await settlementQb
-      .select(
-        'k.Vendor_Name as Karigar_Name',
-        'k.Vendor_Code as Karigar_Code',
-        'i.Issue_Date',
-        'i.Issue_Number',
-        'i.Gold_Weight_Issued',
-        'i.Gold_Rate_At_Issue',
-        'i.Karigar_Wages_Rate',
-        'r.Gross_Weight_Returned',
-        'r.Wastage_Weight',
-        'r.Return_Date'
-      )
-      .orderBy('i.Issue_Date');
-
-    // Calculate totals
-    const totals = settlement.reduce((acc, row) => {
-      acc.totalIssued += parseFloat(row.Gold_Weight_Issued || 0);
-      acc.totalReturned += parseFloat(row.Gross_Weight_Returned || 0);
-      acc.totalWastage += parseFloat(row.Wastage_Weight || 0);
-      const grossWages = parseFloat(row.Gross_Weight_Returned || 0) * parseFloat(row.Karigar_Wages_Rate || 0);
-      const wastageDeduction = parseFloat(row.Wastage_Weight || 0) * parseFloat(row.Karigar_Wages_Rate || 0);
-      acc.grossWages += grossWages;
-      acc.wastageDeduction += wastageDeduction;
-      acc.netWages += (grossWages - wastageDeduction);
-      return acc;
-    }, { totalIssued: 0, totalReturned: 0, totalWastage: 0, grossWages: 0, wastageDeduction: 0, netWages: 0 });
-
-    return sendSuccess(res, { items: settlement, totals });
+    const { items, totals } = await computeKarigarSettlement(req, karigarId, fromDate, toDate);
+    return sendSuccess(res, { items, totals });
   } catch (err) {
     console.error('Settlement error:', err);
     return sendError(res, 500, 'Failed to calculate settlement.');
@@ -219,18 +312,38 @@ router.get('/settlement', authenticate, requireValidBranch, async (req, res) => 
 });
 
 // ─── POST /api/karigar/settle ─────────────────────────────────────────────────
+// Used to take a client-supplied `amount` on trust, with no record of
+// WHICH issues were being paid for — clicking "Mark as Paid" twice
+// double-paid and double-posted to the ledger; re-running last month's
+// date range next month re-settled the same wages, since nothing was
+// ever marked settled. Now: the amount is always recomputed server-side
+// from computeKarigarSettlement (the exact same query the preview above
+// uses), and every issue included is stamped Is_Settled so it can never
+// be settled again by any future date-range query.
 router.post('/settle', authenticate, requirePermission('karigar_management'), async (req, res) => {
-  const { karigarId, amount, paymentMode, bankAccountId, remarks } = req.body;
-  if (!karigarId || !amount) return sendError(res, 400, 'Karigar ID and amount required.');
+  const { karigarId, fromDate, toDate, paymentMode, bankAccountId, remarks } = req.body;
+  if (!karigarId || !fromDate || !toDate) return sendError(res, 400, 'karigarId, fromDate, toDate are required.');
   const tenantId = req.user.tenantId;
 
   try {
     const karigar = await db('tbl_vendor_master').where({ Vendor_ID: karigarId, Tenant_ID: tenantId }).first();
     if (!karigar) return sendError(res, 404, 'Karigar not found.');
 
+    const { items, totals } = await computeKarigarSettlement(req, karigarId, fromDate, toDate);
+    if (!items.length || totals.netWages <= 0) {
+      return sendError(res, 400, 'Nothing to settle — no unsettled, fully-returned issues in this date range.');
+    }
+    const amount = totals.netWages;
+
     await db('tbl_vendor_master')
       .where({ Vendor_ID: karigarId, Tenant_ID: tenantId })
-      .update({ Current_Balance: db.raw(`"Current_Balance" - ?`, [parseFloat(amount)]) });
+      .update({ Current_Balance: db.raw(`"Current_Balance" - ?`, [amount]) });
+
+    const settledAt = new Date();
+    for (const item of items) {
+      await db('tbl_issue_to_karigar').where({ Issue_ID: item.Issue_ID })
+        .update({ Is_Settled: true, Settled_Date: settledAt, Final_Wages_Paid: item.Net_Wages });
+    }
 
     // This used to ONLY move the karigar's own running balance — a real
     // wage payment (cash/bank actually leaving the business) that never
@@ -243,15 +356,16 @@ router.post('/settle', authenticate, requirePermission('karigar_management'), as
     // for the concrete failure mode this caused).
     await postJournal({
       tenantId, sourceType: 'JOURNAL', reference: `KARIGAR-SETTLE-${karigarId}-${Date.now()}`,
-      narration: `Karigar wages settled — ${karigar.Vendor_Name}${remarks ? ' | ' + remarks : ''}`, createdBy: req.user.username,
+      narration: `Karigar wages settled — ${karigar.Vendor_Name} (${items.length} issue${items.length !== 1 ? 's' : ''})${remarks ? ' | ' + remarks : ''}`, createdBy: req.user.username,
       lines: [
-        { account: 'Making Charges Paid to Karigar Account', group: 'Expenses', sub: 'Direct Expense', type: 'Dr', amount: parseFloat(amount) },
-        { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Cr', amount: parseFloat(amount) },
+        { account: 'Making Charges Paid to Karigar Account', group: 'Expenses', sub: 'Direct Expense', type: 'Dr', amount },
+        { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Cr', amount },
       ],
     }).catch((e) => console.error('[Karigar] Settlement ledger post failed (settlement still recorded fine):', e.message));
 
-    return sendSuccess(res, null, 'Settlement processed successfully.');
+    return sendSuccess(res, { amount, issuesSettled: items.length }, 'Settlement processed successfully.');
   } catch (err) {
+    console.error('Settle error:', err);
     return sendError(res, 500, 'Settlement failed.');
   }
 });

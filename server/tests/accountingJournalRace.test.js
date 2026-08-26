@@ -78,13 +78,23 @@ test('POST /api/repair posts its advance journal before the response returns', a
 });
 
 test('POST /api/karigar/settle posts its wage journal before the response returns', async () => {
+  // /settle now only pays for a real, reconciled (Completed), unsettled
+  // issue — not an arbitrary client-supplied amount — so this needs a
+  // real issue+return first (see karigarWastageSettlement.test.js for
+  // the full wastage-math/idempotency coverage of that route itself).
   const karigar = await request(app).post('/api/karigar/vendor').set(auth()).send({
     Vendor_Name: 'QA Journal Race Karigar', Vendor_Type: 'Karigar', Mobile_1: '9000000098',
   });
   const karigarId = karigar.body.data.Vendor_ID;
+  const issue = await request(app).post('/api/karigar/issue').set(auth()).send({
+    Karigar_ID: karigarId, Gold_Weight_Issued: 5, Gold_Rate_At_Issue: 6000, Karigar_Wages_Rate: 400, Issue_Date: '2026-08-24',
+  });
+  await request(app).post('/api/karigar/return').set(auth()).send({
+    Issue_ID: issue.body.data.Issue_ID, Gross_Weight_Returned: 5, Net_Gold_Weight: 5, Wastage_Weight: 0, Return_Date: '2026-08-24',
+  });
 
   const res = await request(app).post('/api/karigar/settle').set(auth()).send({
-    karigarId, amount: 2000, paymentMode: 'Cash',
+    karigarId, fromDate: '2026-08-24', toDate: '2026-08-24', paymentMode: 'Cash',
   });
   expect(res.status).toBe(200);
 
