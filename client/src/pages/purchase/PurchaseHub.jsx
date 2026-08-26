@@ -16,7 +16,6 @@ import {
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchaseApi, karigarApi, masterApi, dayCloseApi, savingsApi, customersApi, customerAdvanceApi } from '../../api/modules';
-import api from '../../api/axios';
 import { formatCurrency } from '../../utils/calculations';
 import { useGoldRate } from '../../hooks/useGoldRate';
 import PageTour from '../../components/PageTour';

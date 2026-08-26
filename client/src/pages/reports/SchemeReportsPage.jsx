@@ -8,8 +8,7 @@ import {
 } from 'antd';
 import { DownloadOutlined, GoldOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { savingsApi } from '../../api/modules';
-import api from '../../api/axios';
+import { savingsApi, reportsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -51,17 +50,17 @@ export default function SchemeReportsPage() {
   });
   const { data: adjustmentData } = useQuery({
     queryKey: ['scheme-adj-report', fromDate, toDate],
-    queryFn: () => api.get('/reports/scheme-adjustments', { params: { fromDate, toDate } }).then(r => r.data.data || []),
+    queryFn: () => reportsApi.schemeAdjustments({ fromDate, toDate }).then(r => r.data.data || []),
     enabled: activeTab === 'adjustment',
   });
   const { data: oldGoldData } = useQuery({
     queryKey: ['old-gold-adj-report', fromDate, toDate],
-    queryFn: () => api.get('/reports/old-gold-adjustments', { params: { fromDate, toDate } }).then(r => r.data.data || { items: [], totalValue: 0 }),
+    queryFn: () => reportsApi.oldGoldAdjustments({ fromDate, toDate }).then(r => r.data.data || { items: [], totalValue: 0 }),
     enabled: activeTab === 'oldgold',
   });
   const { data: combinedData } = useQuery({
     queryKey: ['combined-adj-report', fromDate, toDate],
-    queryFn: () => api.get('/reports/combined-adjustments', { params: { fromDate, toDate } }).then(r => r.data.data || { items: [], totals: {} }),
+    queryFn: () => reportsApi.combinedAdjustments({ fromDate, toDate }).then(r => r.data.data || { items: [], totals: {} }),
     enabled: activeTab === 'combined',
   });
 

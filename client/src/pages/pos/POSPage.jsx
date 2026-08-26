@@ -26,7 +26,6 @@ import {
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ornamentsApi, customersApi, salesApi, savingsApi, dayCloseApi, oldGoldApi, tenantApi, bankChequeApi } from '../../api/modules';
-import api from '../../api/axios';
 import { useCartStore } from '../../store/cartStore';
 import { useCounterStore } from '../../store/counterStore';
 import { useAuthStore } from '../../store/authStore';

@@ -14,7 +14,6 @@ import {
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tenantApi } from '../../api/modules';
-import api from '../../api/axios';
 import PageTour from '../../components/PageTour';
 
 const { Title, Text } = Typography;
@@ -118,13 +117,13 @@ export default function DisplaySettingsPage() {
   const loadKey = activeTab === 'role' ? `role_${selectedRole}` : `user_${selectedUser}`;
   const { data: savedSettings } = useQuery({
     queryKey: ['display-settings', loadKey],
-    queryFn: () => api.get('/tenant/display-settings', { params: { type: activeTab, id: activeTab === 'role' ? selectedRole : selectedUser } }).then(r => r.data.data),
+    queryFn: () => tenantApi.getDisplayPrefs({ type: activeTab, id: activeTab === 'role' ? selectedRole : selectedUser }).then(r => r.data.data),
     enabled: !!(activeTab === 'role' ? selectedRole : selectedUser),
     onSuccess: (d) => { setMatrix(d?.matrix || fullAccess()); setDirty(false); },
   });
 
   const saveMutation = useMutation({
-    mutationFn: (data) => api.post('/tenant/display-settings', data),
+    mutationFn: (data) => tenantApi.saveDisplayPrefs(data),
     onSuccess: () => { message.success('Display settings saved!'); setDirty(false); qc.invalidateQueries(['display-settings', loadKey]); },
     onError: () => message.error('Failed to save settings.'),
   });

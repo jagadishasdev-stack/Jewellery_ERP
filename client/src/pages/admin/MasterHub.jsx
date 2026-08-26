@@ -24,7 +24,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   masterApi, masterExtApi, karigarApi, tenantApi, floorsApi,
 } from '../../api/modules';
-import api from '../../api/axios';
 import PageTour from '../../components/PageTour';
 
 const { Title, Text } = Typography;

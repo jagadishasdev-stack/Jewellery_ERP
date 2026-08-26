@@ -202,6 +202,12 @@ export const transferApi = {
   unhideStock: (data) => api.post('/transfer/unhide', data),
 };
 
+// ─── Printer Config (QZ Tray role → printer name mapping) ─────────────────────
+export const printerConfigApi = {
+  get: (params) => api.get('/printer-config', { params }),
+  save: (data) => api.put('/printer-config', data),
+};
+
 // ─── Invoice Studio (custom invoice/label template designer) ──────────────────
 export const invoiceStudioApi = {
   getTemplates: (params) => api.get('/invoice-studio/templates', { params }),
@@ -295,6 +301,8 @@ export const tenantApi = {
   updateBranch: (id, data) => api.put(`/tenant/branches/${id}`, data),
   getStats: () => api.get('/tenant/stats'),
   getSettings: () => api.get('/tenant/settings'),
+  getDisplayPrefs: (params) => api.get('/tenant/display-settings', { params }),
+  saveDisplayPrefs: (data) => api.post('/tenant/display-settings', data),
   updateSettings: (data) => api.put('/tenant/settings', data),
   getAllTenants: () => api.get('/tenant/all'),
   createTenant: (data) => api.post('/tenant/create', data),
@@ -466,12 +474,12 @@ export const catalogApi = {
   updateOrderStatus: (id, status, reason) => api.put(`/catalog/orders/${id}/status`, { status, reason }),
 };
 
-// ─── Mobile Auth (Image App + Savings App login) ───────────────────────────────
-export const mobileAuthApi = {
-  validateLicense: (licenseKey) => api.post('/mobile/validate-license', { licenseKey }),
-  login:           (data) => api.post('/mobile/login', data),
-  getTenantInfo:   (tenantId) => api.get(`/mobile/tenant-info/${tenantId}`),
-};
+// Mobile Auth (validate-license / login / tenant-info under /api/mobile) was
+// deleted from here — real, live, mounted backend routes, but Image_App and
+// savings_app are separate frontend codebases with their own HTTP clients;
+// they don't import this file, so this wrapper had zero callers in this
+// project. If a future web-client page needs these, re-add from
+// server/src/routes/mobileAuth.js.
 
 // ─── Module Management ────────────────────────────────────────────────────────
 // tenantId param on getAll/getTenantContext/toggle/provision is optional and
@@ -488,17 +496,15 @@ export const modulesApi = {
   setTier:        (tenantId, planName, billingCycle) => api.put(`/modules/tier/${tenantId}`, { Plan_Name: planName, Billing_Cycle: billingCycle }),
 };
 
-// ─── Payments (Razorpay + PhonePe — migrated from savings_app) ────────────────
-export const paymentsApi = {
-  // Razorpay
-  razorpayCreateOrder: (data) => api.post('/payments/razorpay/create-order', data),
-  razorpayVerify:      (data) => api.post('/payments/razorpay/verify', data),
-  // PhonePe
-  phonepeInitiate:     (data) => api.post('/payments/phonepe/initiate', data),
-  phonepeVerify:       (data) => api.post('/payments/phonepe/verify', data),
-  // History
-  getHistory:          (params) => api.get('/payments/history', { params }),
-};
+// Payments (Razorpay/PhonePe under /api/payments) was deleted from here —
+// its backend (server/src/routes/payments.js) is dead legacy code
+// deliberately left unmounted (see index.js's comment there: client-supplied
+// key_secret, and a verify path that bypasses recordSchemeCollection()
+// entirely). Every call through this wrapper would 404. The real, hardened
+// payment path (savingsAppCoreRoutes' razorpayV2Router at /api/core and
+// /api/razorpay/v2) is consumed by savings_app directly — that's a separate
+// codebase with its own HTTP client, not this file, so it has no wrapper
+// here either.
 
 // ─── Excel Bulk Import (admin-only) ─────────────────────────────────────────────
 const importFile = (endpoint, file) => {

@@ -4,8 +4,7 @@ import {
 } from 'antd';
 import { PrinterOutlined, CheckCircleFilled, CloseCircleFilled, ReloadOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
-import { tenantApi } from '../../api/modules';
+import { tenantApi, printerConfigApi } from '../../api/modules';
 import { connectQZ, listPrinters, invalidatePrinterCache } from '../../utils/printService';
 import PageTour from '../../components/PageTour';
 
@@ -44,7 +43,7 @@ export default function PrinterSettingsPage() {
 
   const { data: config, isLoading, refetch } = useQuery({
     queryKey: ['printer-config', branchId],
-    queryFn: () => api.get('/printer-config', { params: branchId ? { branchId } : {} }).then(r => r.data.data),
+    queryFn: () => printerConfigApi.get(branchId ? { branchId } : {}).then(r => r.data.data),
   });
 
   const checkQZ = useCallback(async () => {
@@ -60,7 +59,7 @@ export default function PrinterSettingsPage() {
   const assignPrinter = async (role, printerName) => {
     setSaving(prev => ({ ...prev, [role]: true }));
     try {
-      await api.put('/printer-config', { role, printerName, branchId: branchId || undefined });
+      await printerConfigApi.save({ role, printerName, branchId: branchId || undefined });
       message.success('Printer assigned.');
       invalidatePrinterCache();
       qc.invalidateQueries(['printer-config']);

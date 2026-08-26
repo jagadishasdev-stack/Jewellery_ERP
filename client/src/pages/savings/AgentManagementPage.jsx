@@ -17,18 +17,11 @@ import {
   CheckCircleOutlined, ExclamationCircleOutlined, TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
 import dayjs from 'dayjs';
-import { agentsApi } from '../../api/modules';
+import { agentsApi, tenantApi } from '../../api/modules';
 import PageTour from '../../components/PageTour';
 
 const { Title, Text } = Typography;
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || '/api' });
-api.interceptors.request.use(cfg => {
-  const raw = localStorage.getItem('jewellery-erp-auth');
-  if (raw) { try { cfg.headers.Authorization = `Bearer ${JSON.parse(raw).state.token}`; } catch {} }
-  return cfg;
-});
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 const useAgents = (params) =>
@@ -40,7 +33,7 @@ const useAgents = (params) =>
 const useBranches = () =>
   useQuery({
     queryKey: ['branches'],
-    queryFn: () => api.get('/tenant/branches').then(r => r.data.data),
+    queryFn: () => tenantApi.getBranches().then(r => r.data.data),
   });
 
 const useAgentReport = (agentId, params) =>

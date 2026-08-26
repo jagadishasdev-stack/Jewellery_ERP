@@ -15,7 +15,7 @@
  * this today.
  */
 import qz from 'qz-tray';
-import api from '../api/axios';
+import { printerConfigApi } from '../api/modules';
 
 let connectPromise = null;
 let printerCache = null; // { thermal_label, thermal_receipt, regular } -> printer name
@@ -59,7 +59,7 @@ export const listPrinters = async () => {
 const fetchConfiguredPrinters = async (branchId) => {
   if (printerCache) return printerCache;
   try {
-    const res = await api.get('/printer-config', { params: branchId ? { branchId } : {} });
+    const res = await printerConfigApi.get(branchId ? { branchId } : {});
     const byRole = res.data?.data || {};
     printerCache = {
       thermal_label: byRole.thermal_label?.Printer_Name || null,
