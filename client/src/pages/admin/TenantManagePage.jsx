@@ -507,6 +507,7 @@ export default function TenantManagePage() {
       License_Expiry_Date: tenant.License_Expiry_Date ? dayjs(tenant.License_Expiry_Date) : null,
       Notes: tenant.Notes,
       Short_Number_Format: tenant.Short_Number_Format,
+      Include_Branch_In_Numbering: tenant.Include_Branch_In_Numbering,
       License_Mode: tenant.License_Mode || 'TENANT_WIDE',
     });
   };
@@ -869,6 +870,10 @@ export default function TenantManagePage() {
           <Form.Item name="Short_Number_Format" label="Document Numbers" valuePropName="checked"
             tooltip="OFF (default): INV-COMPANYCODE-20260819-0001. ON: shorter INV-0001 style — drops the tenant code and date on every invoice, purchase, article/barcode, transfer and other auto-generated number.">
             <Switch checkedChildren="Short" unCheckedChildren="Full" />
+          </Form.Item>
+          <Form.Item name="Include_Branch_In_Numbering" label="Branch Code in Invoice Numbers" valuePropName="checked"
+            tooltip="OFF (default): unchanged. ON: inserts the branch code, e.g. INV-COMPANYCODE-HSR-20260819-0001 (or INV-HSR-0001 in Short mode) — only for sales made while a specific branch is selected; a sale made in All Branches mode still numbers the normal way. Existing invoice numbers are never renumbered.">
+            <Switch checkedChildren="On" unCheckedChildren="Off" />
           </Form.Item>
           <Form.Item name="License_Mode" label="Image App Licensing"
             tooltip="Tenant-wide (default): one shared license key activates the Image App on any device. Per-Device: each physical device must be individually requested and approved under Admin → Image App Devices before it can activate.">

@@ -13,9 +13,9 @@ const tenantCode = (tenantId) => tenantId.replace('_', '');
  * numbers), so a hidden-stock bill is visually and numerically distinct
  * and easy to isolate in reports without a join back to ornament data.
  */
-const generateInvoiceNumber = async (tenantId, containsHiddenStock = false) => nextNumber({
+const generateInvoiceNumber = async (tenantId, containsHiddenStock = false, branchId) => nextNumber({
   tenantId, table: 'tbl_sales_header', column: 'Invoice_Number',
-  prefix: containsHiddenStock ? 'HINV' : 'INV', tenantCode: tenantCode(tenantId), padWidth: 4,
+  prefix: containsHiddenStock ? 'HINV' : 'INV', tenantCode: tenantCode(tenantId), padWidth: 4, branchId,
 });
 
 /**

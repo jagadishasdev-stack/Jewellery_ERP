@@ -29,6 +29,19 @@
  * Switching the toggle starts a fresh sequence under the new pattern (the
  * old pattern's rows simply stop matching) rather than continuing the old
  * numbering — documented here rather than silently surprising anyone.
+ *
+ * Multi-Branch Management §19 — a second, independent toggle
+ * (tbl_tenant_master.Include_Branch_In_Numbering) inserts the branch's own
+ * Branch_Code as an extra segment: Full format becomes
+ * PREFIX-TENANTCODE-BRANCHCODE-YYYYMMDD-SEQ, Short becomes
+ * PREFIX-BRANCHCODE-SEQ. Same non-breaking-by-default precedent as
+ * Short_Number_Format — off until a tenant opts in, and because
+ * Sequence_Key is this exact pattern string, each branch automatically
+ * gets its own independent counter with no other schema change needed.
+ * Only takes effect when the caller actually passes a branchId AND the
+ * toggle is on — a caller with no branch context (nothing migrated to
+ * branch-awareness yet, or a genuinely tenant-wide document) numbers
+ * exactly as it always has.
  */
 const db = require('../db/knex');
 const dayjs = require('dayjs');
@@ -36,6 +49,14 @@ const dayjs = require('dayjs');
 const isShortFormat = async (tenantId) => {
   const t = await db('tbl_tenant_master').where('Tenant_ID', tenantId).first('Short_Number_Format');
   return !!(t && t.Short_Number_Format);
+};
+
+const branchSegmentFor = async (tenantId, branchId) => {
+  if (!branchId) return '';
+  const tenant = await db('tbl_tenant_master').where('Tenant_ID', tenantId).first('Include_Branch_In_Numbering');
+  if (!tenant?.Include_Branch_In_Numbering) return '';
+  const branch = await db('tbl_branch_master').where({ Tenant_ID: tenantId, Branch_ID: branchId }).first('Branch_Code');
+  return branch?.Branch_Code ? `${branch.Branch_Code}-` : '';
 };
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -52,13 +73,17 @@ const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  *   output; pass '' explicitly for a generator whose FULL format never
  *   included a tenant-code segment at all, e.g. bin vouchers)
  * @param {number} [padWidth=4] - how many digits the sequence pads to
+ * @param {string} [branchId] - active branch context, if any (see
+ *   branchSegmentFor above) — only adds a segment when the tenant has
+ *   also opted into Include_Branch_In_Numbering
  */
-const nextNumber = async ({ tenantId, table, column, prefix, tenantCode, padWidth = 4 }) => {
+const nextNumber = async ({ tenantId, table, column, prefix, tenantCode, padWidth = 4, branchId }) => {
   const short = await isShortFormat(tenantId);
   const tenantSegment = tenantCode === '' ? '' : `${tenantCode ?? tenantId}-`;
+  const branchSegment = await branchSegmentFor(tenantId, branchId);
   const pattern = short
-    ? `${prefix}-`
-    : `${prefix}-${tenantSegment}${dayjs().format('YYYYMMDD')}-`;
+    ? `${prefix}-${branchSegment}`
+    : `${prefix}-${tenantSegment}${branchSegment}${dayjs().format('YYYYMMDD')}-`;
 
   // Atomic — see tbl_document_number_counter's own migration comment for
   // why this replaced a read-then-write SELECT MAX + increment. Fast path:

@@ -190,7 +190,7 @@ router.put('/tenant/:id/store-type', authenticate, requireSuperAdmin, async (req
 router.put('/tenant/:id/settings', authenticate, requireSuperAdmin, async (req, res) => {
   const allowed = ['Company_Name','City','State','GST_No','Phone','Email','Website',
     'Max_Users','Max_Branches','Is_Active','Notes','Business_Type',
-    'Address_Line1','Address_Line2','Pincode','Short_Number_Format','License_Expiry_Date',
+    'Address_Line1','Address_Line2','Pincode','Short_Number_Format','Include_Branch_In_Numbering','License_Expiry_Date',
     'License_Mode'];
   if (req.body.License_Mode !== undefined && !['TENANT_WIDE', 'PER_DEVICE'].includes(req.body.License_Mode)) {
     return sendError(res, 400, "License_Mode must be 'TENANT_WIDE' or 'PER_DEVICE'.");

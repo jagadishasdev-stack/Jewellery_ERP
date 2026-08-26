@@ -154,7 +154,10 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     // longer impossible for such a sale to have Data_Mode=3.
     const containsHiddenStock = requestedOrnamentIds.some((id) => ownedById.get(String(id)).Is_Hidden);
 
-    const invoiceNumber = await generateInvoiceNumber(tenantId, containsHiddenStock);
+    // Multi-Branch Management §19 — only actually inserts a branch segment
+    // if this tenant opted into Include_Branch_In_Numbering (see
+    // utils/numberFormat.js); otherwise numbers exactly as before.
+    const invoiceNumber = await generateInvoiceNumber(tenantId, containsHiddenStock, resolveBranchForInsert(req, req.body.Branch_ID));
     const voucherId     = await generateSaleVoucherId(tenantId, containsHiddenStock);
 
     // Calculate totals from line items
