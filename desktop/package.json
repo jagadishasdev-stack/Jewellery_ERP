@@ -18,7 +18,7 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "in.kumudu.jewelleryerp",
+    "appId": "com.jewelleryerp.desktop",
     "productName": "Jewellery ERP",
     "directories": {
       "output": "release"

@@ -53,9 +53,8 @@ google-services.json
 GoogleService-Info.plist
 
 # Image_App and savings_app/{frontend,backend} are each their own separate,
-# already-git-tracked projects with their OWN remotes (Amitkumudu/ImageApp,
-# KumuduDeveloper/SAVING-APP-FRONTEND, KumuduDeveloper/SAVING-BACKEND) —
-# deliberately excluded here rather than folded into this repo, so their
-# existing git history stays exactly where it already lives.
+# already-git-tracked projects with their own remotes — deliberately
+# excluded here rather than folded into this repo, so their existing git
+# history stays exactly where it already lives.
 /Image_App/
 /savings_app/

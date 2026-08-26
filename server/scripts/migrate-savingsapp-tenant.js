@@ -1,10 +1,14 @@
 /**
- * One-time ETL: import store(s) from the separate savings-app MySQL
- * database (kumudu_jms — stores/branch/scheme/groups/members/
- * member_ledger, currently powering the live New-Saving-App-Frontend +
- * savingappbackend system) into Jewellery ERP's own Postgres schema, so
- * the savings app can eventually run entirely on Jewellery ERP's database
- * instead of a separate MySQL one.
+ * One-time ETL: import store(s) from a separate legacy savings-app MySQL
+ * database (stores/branch/scheme/groups/members/member_ledger schema,
+ * from whatever system previously powered the savings app) into
+ * Jewellery ERP's own Postgres schema, so the savings app can eventually
+ * run entirely on Jewellery ERP's database instead of a separate MySQL one.
+ *
+ * Source connection is deliberately NOT hardcoded (see LEGACY_SAVINGSAPP_DB_*
+ * env vars below) — this script must never default to connecting to any
+ * particular external server; it only runs against whatever legacy
+ * database the operator explicitly points it at via env vars.
  *
  * Run manually, ONE store (Tenant_ID you choose):
  *   node scripts/migrate-savingsapp-tenant.js 827 TULASI_CHIK
@@ -60,14 +64,20 @@ const ALL_MODE = args[0] === '--all';
 // ---------------------------------------------------------------------------
 // Connections
 // ---------------------------------------------------------------------------
+// No fallback values on purpose — this must never silently connect to any
+// particular server. Every one of these has to be supplied explicitly by
+// whoever runs the migration, pointed at their own legacy database.
+for (const v of ['LEGACY_SAVINGSAPP_DB_HOST', 'LEGACY_SAVINGSAPP_DB_USER', 'LEGACY_SAVINGSAPP_DB_PASSWORD', 'LEGACY_SAVINGSAPP_DB_NAME']) {
+  if (!process.env[v]) { console.error(`Missing required env var ${v} — set it to your own legacy savings-app database before running this migration.`); process.exit(1); }
+}
 const source = knexLib({
   client: 'mysql2',
   connection: {
-    host: '148.72.208.43',
-    port: 3306,
-    user: 'kumudu_rajesh',
-    password: process.env.SAVINGSAPP_DB_PASSWORD,
-    database: 'kumudu_jms',
+    host: process.env.LEGACY_SAVINGSAPP_DB_HOST,
+    port: parseInt(process.env.LEGACY_SAVINGSAPP_DB_PORT) || 3306,
+    user: process.env.LEGACY_SAVINGSAPP_DB_USER,
+    password: process.env.LEGACY_SAVINGSAPP_DB_PASSWORD,
+    database: process.env.LEGACY_SAVINGSAPP_DB_NAME,
   },
   pool: { min: 1, max: 5 },
 });
