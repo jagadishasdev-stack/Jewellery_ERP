@@ -4,15 +4,15 @@
 import React, { useState, useRef } from 'react';
 import {
   Row, Col, Card, Typography, DatePicker, Button, Space, Tag, Tabs,
-  Table, Statistic, Progress, Alert, Divider,
+  Table, Statistic, Progress, Alert, Divider, Modal, Form, InputNumber, message,
 } from 'antd';
 import {
   DashboardOutlined, BranchesOutlined, UserOutlined,
-  RiseOutlined, TrophyOutlined, BarChartOutlined,
+  RiseOutlined, TrophyOutlined, BarChartOutlined, EditOutlined,
 } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../../api/axios';
-import { reportsApi } from '../../api/modules';
+import { reportsApi, tenantApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -38,6 +38,9 @@ const TargetBar = ({ achieved, target, label }) => {
 export default function ManagementReportsPage() {
   const [dateRange, setDateRange] = useState([dayjs().startOf('month'), dayjs()]);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [targetsModalOpen, setTargetsModalOpen] = useState(false);
+  const [targetsForm] = Form.useForm();
+  const qc = useQueryClient();
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const dateRangeRef = useRef(null);
@@ -45,7 +48,7 @@ export default function ManagementReportsPage() {
   const tourSteps = [
     { title: '1. Choose Period', description: 'Pick the period for these MIS reports — presets for This Month, Last Month and This Year are one click away.', target: () => dateRangeRef.current },
     { title: '2. The 4 MIS Views', description: 'Dashboard Analytics: KPI cards plus Target vs Achievement at a glance — check this first thing each morning. Branch Analytics: compare revenue across branches. Employee Analytics: compare counter/operator performance. Sales Targets: track progress toward the monthly sales and collection targets set by the owner.', target: () => tabsRef.current },
-    { title: '3. Setting Targets', description: 'Monthly sales and collection targets shown here are configured by the owner in Admin → Settings → Sales Targets.' },
+    { title: '3. Setting Targets', description: 'Monthly sales and collection targets — click "Edit Targets" on the Sales Targets tab to set your own.' },
   ];
 
   const fromDate = dateRange[0].format('YYYY-MM-DD');
@@ -69,13 +72,29 @@ export default function ManagementReportsPage() {
     queryFn: () => api.get('/reports/branch-wise-sales', { params: { fromDate, toDate } }).then(r => r.data.data || []),
     enabled: activeTab === 'branch',
   });
+  // Was hardcoded ("Mock targets for now — in production these come from
+  // a settings table") with a UI message claiming they were configurable
+  // in an Admin → Settings page that never existed. Real, per-tenant,
+  // editable via the button next to the Sales Targets tab below.
+  const { data: tenantSettings } = useQuery({
+    queryKey: ['tenant-settings-targets'],
+    queryFn: () => tenantApi.getSettings().then((r) => r.data.data),
+  });
+  const saveTargetsMutation = useMutation({
+    mutationFn: (data) => tenantApi.updateSettings(data),
+    onSuccess: () => {
+      message.success('Targets updated.');
+      qc.invalidateQueries({ queryKey: ['tenant-settings-targets'] });
+      setTargetsModalOpen(false);
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to update targets.'),
+  });
 
   const s = salesSummary?.summary || {};
   const inv = inventory?.overall || {};
 
-  // Mock targets for now — in production these come from a settings table
-  const monthTarget = 1000000; // ₹10L target
-  const collectionTarget = 800000;
+  const monthTarget = parseFloat(tenantSettings?.Monthly_Sales_Target || 0);
+  const collectionTarget = parseFloat(tenantSettings?.Monthly_Collection_Target || 0);
   const achieved = parseFloat(s.total_revenue || 0);
   const collected = parseFloat(s.total_collected || 0);
 
@@ -136,11 +155,16 @@ export default function ManagementReportsPage() {
           <Row gutter={[14, 14]}>
             {/* Target Achievement */}
             <Col xs={24} md={10}>
-              <Card title={<span><TrophyOutlined /> Target vs Achievement</span>} style={{ borderRadius: 8 }}>
-                <TargetBar label="Sales Revenue" achieved={achieved} target={monthTarget} />
-                <TargetBar label="Cash Collection" achieved={collected} target={collectionTarget} />
-                <Divider style={{ margin: '10px 0' }} />
-                <Alert message="Targets are configurable in Admin → Settings → Sales Targets" type="info" showIcon style={{ fontSize: 11 }} />
+              <Card title={<span><TrophyOutlined /> Target vs Achievement</span>} style={{ borderRadius: 8 }}
+                extra={<Button size="small" icon={<EditOutlined />} onClick={() => { targetsForm.setFieldsValue({ Monthly_Sales_Target: monthTarget || undefined, Monthly_Collection_Target: collectionTarget || undefined }); setTargetsModalOpen(true); }}>Edit Targets</Button>}>
+                {monthTarget > 0 || collectionTarget > 0 ? (
+                  <>
+                    <TargetBar label="Sales Revenue" achieved={achieved} target={monthTarget} />
+                    <TargetBar label="Cash Collection" achieved={collected} target={collectionTarget} />
+                  </>
+                ) : (
+                  <Alert message="No targets set yet — click Edit Targets to set your monthly sales and collection goals." type="info" showIcon style={{ fontSize: 11 }} />
+                )}
               </Card>
             </Col>
 
@@ -221,7 +245,8 @@ export default function ManagementReportsPage() {
       children: (
         <Row gutter={[16, 16]}>
           <Col xs={24} md={12}>
-            <Card title={<span><TrophyOutlined /> Monthly Sales Target</span>} style={{ borderRadius: 8 }}>
+            <Card title={<span><TrophyOutlined /> Monthly Sales Target</span>} style={{ borderRadius: 8 }}
+              extra={<Button size="small" icon={<EditOutlined />} onClick={() => { targetsForm.setFieldsValue({ Monthly_Sales_Target: monthTarget || undefined, Monthly_Collection_Target: collectionTarget || undefined }); setTargetsModalOpen(true); }}>Edit Targets</Button>}>
               <TargetBar label="Total Sales Revenue" achieved={parseFloat(s.total_revenue || 0)} target={monthTarget} />
               <TargetBar label="Cash Collection" achieved={parseFloat(s.total_collected || 0)} target={collectionTarget} />
               <TargetBar label="GST Target" achieved={parseFloat(s.total_gst || 0)} target={monthTarget * 0.03} />
@@ -273,6 +298,21 @@ export default function ManagementReportsPage() {
       <div ref={tabsRef}>
       <Tabs activeKey={activeTab} onChange={setActiveTab} type="card" items={tabItems} />
       </div>
+
+      <Modal title="Edit Sales Targets" open={targetsModalOpen} onCancel={() => setTargetsModalOpen(false)} footer={null} destroyOnClose>
+        <Form form={targetsForm} layout="vertical" onFinish={(v) => saveTargetsMutation.mutate(v)}>
+          <Form.Item name="Monthly_Sales_Target" label="Monthly Sales Target (₹)" rules={[{ required: true, message: 'Required' }]}>
+            <InputNumber style={{ width: '100%' }} min={0} step={10000} />
+          </Form.Item>
+          <Form.Item name="Monthly_Collection_Target" label="Monthly Collection Target (₹)" rules={[{ required: true, message: 'Required' }]}>
+            <InputNumber style={{ width: '100%' }} min={0} step={10000} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block loading={saveTargetsMutation.isPending}
+            style={{ background: '#B8860B', borderColor: '#B8860B' }}>
+            Save Targets
+          </Button>
+        </Form>
+      </Modal>
 
       <PageTour steps={tourSteps} />
     </div>

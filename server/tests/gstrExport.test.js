@@ -68,7 +68,7 @@ test('an interstate unregistered sale over ₹2.5L lands in B2CL, not B2CS', asy
   const cust = await request(app).post('/api/customers').set(auth()).send({
     Customer_Name: 'QA B2CL Customer', Mobile_1: '9773310002', State: 'Maharashtra', // different from tenant's state -> interstate
   });
-  const sale = await makeSale('QATEST-GSTR-002', 300000, 3, cust.body.data.Customer_ID);
+  const sale = await makeSale('QATEST-GSTR-002', 300000, 3, cust.body.data.Customer_ID, { PAN_Number: 'ABCDE1234F' }); // >= 2L requires a PAN
   expect(sale.Is_Interstate).toBe(true);
 
   const res = await request(app).get('/api/reports/gstr1').set(auth()).query({ fromDate: today, toDate: today });

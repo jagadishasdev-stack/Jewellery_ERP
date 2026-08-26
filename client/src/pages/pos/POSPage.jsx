@@ -152,6 +152,13 @@ export default function POSPage() {
   // Multi-payment splits
   const [paymentSplits, setPaymentSplits] = useState([{ mode: 'Cash', amount: 0, reference: '' }]);
   const [panNumber, setPanNumber] = useState('');
+  // Sale_Type/Invoice_Type were always hardcoded 'Retail'/'Tax Invoice' —
+  // there was no way to bill a Wholesale sale or issue a Cash Memo from
+  // POS at all, even though both values are already real, distinct
+  // fields the backend and reports (gst-summary/gstr1 explicitly filter
+  // on Invoice_Type='Tax Invoice') already understand.
+  const [saleType, setSaleType] = useState('Retail');
+  const [invoiceType, setInvoiceType] = useState('Tax Invoice');
   const [panVerified, setPanVerified] = useState(false);
 
   // Unofficial mode sales are cash-only — collapse any non-cash splits back
@@ -384,6 +391,8 @@ export default function POSPage() {
       setVoucherEntry({ voucherId: null, availableBalance: 0, applyAmount: 0, applied: false });
       setLoyaltyPointsUsed(0);
       setPanNumber('');
+      setSaleType('Retail');
+      setInvoiceType('Tax Invoice');
       setWalkInName('');
       setWalkInMobile('');
       setLastScannedItem(null);
@@ -443,7 +452,7 @@ export default function POSPage() {
       Amount_Paid: adjustments.totalPaid,
       Balance_Amount: adjustments.remaining,
       Payment_Status: adjustments.isSettled ? 'Paid' : 'Partial',
-      Sale_Type: 'Retail', Invoice_Type: 'Tax Invoice',
+      Sale_Type: saleType, Invoice_Type: invoiceType,
     });
   };
 
@@ -928,6 +937,24 @@ export default function POSPage() {
             ))}
           </Select>
         </div>
+
+        {/* Sale Type / Invoice Type */}
+        <Row gutter={12} style={{ marginBottom: 14 }}>
+          <Col xs={12}>
+            <Text style={{ fontSize: 12, color: '#888', display: 'block', marginBottom: 4 }}>Sale Type</Text>
+            <Select size="large" style={{ width: '100%' }} value={saleType} onChange={setSaleType}>
+              <Option value="Retail">Retail</Option>
+              <Option value="Wholesale">Wholesale</Option>
+            </Select>
+          </Col>
+          <Col xs={12}>
+            <Text style={{ fontSize: 12, color: '#888', display: 'block', marginBottom: 4 }}>Invoice Type</Text>
+            <Select size="large" style={{ width: '100%' }} value={invoiceType} onChange={setInvoiceType}>
+              <Option value="Tax Invoice">Tax Invoice</Option>
+              <Option value="Cash Memo">Cash Memo</Option>
+            </Select>
+          </Col>
+        </Row>
 
         {/* PAN Field */}
         {adjustments.isPanRequired && (

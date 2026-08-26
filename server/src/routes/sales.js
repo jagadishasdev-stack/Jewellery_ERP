@@ -315,6 +315,21 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     const balance = finalPayable - amountPaid;
     const paymentStatus = balance <= 0 ? 'Paid' : amountPaid > 0 ? 'Partial' : 'Pending';
 
+    // ── PAN enforcement — was client-only (POSPage.jsx blocks checkout
+    // without a valid PAN above ₹2,00,000), so a direct API call could
+    // bypass the rule entirely; PAN_Verified was also just whatever
+    // boolean the client claimed, never actually checked against the
+    // number. Both fixed here: real format validation, and PAN_Verified
+    // is now computed server-side, never trusted from the request.
+    const PAN_THRESHOLD = 200000;
+    const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+    const panNumber = (req.body.PAN_Number || '').trim().toUpperCase();
+    const panVerified = PAN_REGEX.test(panNumber);
+    if (finalPayable >= PAN_THRESHOLD && !panVerified) {
+      await trx.rollback();
+      return sendError(res, 400, `A valid PAN is required for sales of ₹${PAN_THRESHOLD.toLocaleString('en-IN')} or more (Income Tax Rule 114B).`);
+    }
+
     // ── GST split: CGST+SGST for an intra-state sale, IGST for inter-state ──────
     // Previously always assumed intra-state (cgst = sgst = totalGST / 2,
     // computed only at journal-posting time, never stored). Determined once
@@ -347,8 +362,8 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
       Counter_Name: req.body.Counter_Name || null,
       Operator_Name: (req.body.Operator_Name || '').trim() || req.user.fullName || req.user.username,
       Customer_ID: Customer_ID || null,
-      PAN_Number: req.body.PAN_Number || null,
-      PAN_Verified: req.body.PAN_Verified || false,
+      PAN_Number: panNumber || null,
+      PAN_Verified: panVerified,
       Scheme_Adjustment_Amount: totalSchemeAdjustment,
       Bonus_Adjustment_Amount: totalBonusAdjustment,
       Voucher_Amount: voucherAmount,
