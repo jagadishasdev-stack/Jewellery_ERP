@@ -7,11 +7,11 @@
 import React, { useState, useRef } from 'react';
 import {
   Card, Table, Input, DatePicker, Select, Space, Tag, Button, Typography,
-  Drawer, Descriptions, Divider, message, Row, Col,
+  Drawer, Descriptions, Divider, message, Row, Col, Modal, Form, Radio, Alert,
 } from 'antd';
-import { SearchOutlined, EyeOutlined, PrinterOutlined, FileTextOutlined } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
-import { salesApi } from '../../api/modules';
+import { SearchOutlined, EyeOutlined, PrinterOutlined, FileTextOutlined, StopOutlined, RollbackOutlined } from '@ant-design/icons';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { salesApi, bankChequeApi } from '../../api/modules';
 import { useAuthStore } from '../../store/authStore';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { printThermalReceipt } from '../../utils/thermalReceipt';
@@ -25,12 +25,48 @@ const STATUS_COLOR = { Paid: 'green', Partial: 'orange', Pending: 'red', Cancell
 
 export default function SalesBillHistoryPage() {
   const { user } = useAuthStore();
+  const qc = useQueryClient();
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState('');
   const [page, setPage] = useState(1);
   const [detailId, setDetailId] = useState(null);
   const [reprintingId, setReprintingId] = useState(null);
+  // Neither /sales/:id/cancel nor the new /sales/:id/return had ANY entry
+  // point anywhere in the client — cancel was fully built and working on
+  // the backend but orphaned (found via audit); return didn't exist at
+  // all until now. Both live here since this is the one page every past
+  // sale is actually findable from.
+  const [cancelModal, setCancelModal] = useState(null); // sale row, or null
+  const [returnModal, setReturnModal] = useState(null);
+  const [cancelForm] = Form.useForm();
+  const [returnForm] = Form.useForm();
+
+  const { data: bankAccounts } = useQuery({
+    queryKey: ['bank-accounts-for-returns'],
+    queryFn: () => bankChequeApi.getAccounts().then((r) => r.data.data || []),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: ({ id, ...data }) => salesApi.cancel(id, data),
+    onSuccess: () => {
+      message.success('Sale cancelled.');
+      qc.invalidateQueries({ queryKey: ['sales-history'] });
+      setCancelModal(null); cancelForm.resetFields();
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to cancel.'),
+  });
+
+  const returnMutation = useMutation({
+    mutationFn: ({ id, ...data }) => salesApi.return(id, data),
+    onSuccess: (res) => {
+      message.success(res.data.message || 'Sale returned.');
+      qc.invalidateQueries({ queryKey: ['sales-history'] });
+      setReturnModal(null); returnForm.resetFields();
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to process return.'),
+  });
 
   const params = {
     page, limit: 25,
@@ -85,11 +121,17 @@ export default function SalesBillHistoryPage() {
     { title: 'Counter', dataIndex: 'Counter_Name', width: 110, render: (v) => v || '-' },
     { title: 'Billed By', dataIndex: 'Operator_Name', width: 120, render: (v) => v || '-' },
     {
-      title: 'Actions', width: 100, fixed: 'right',
+      title: 'Actions', width: 140, fixed: 'right',
       render: (_, r) => (
         <Space size={4}>
           <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => setDetailId(r.Sale_ID)} />
           <Button type="text" size="small" icon={<PrinterOutlined />} loading={reprintingId === r.Sale_ID} onClick={() => reprint(r.Sale_ID)} />
+          {['Pending', 'Partial'].includes(r.Payment_Status) && (
+            <Button type="text" size="small" danger icon={<StopOutlined />} title="Cancel" onClick={() => setCancelModal(r)} />
+          )}
+          {r.Payment_Status === 'Paid' && (
+            <Button type="text" size="small" icon={<RollbackOutlined />} title="Return" onClick={() => setReturnModal(r)} />
+          )}
         </Space>
       ),
     },
@@ -184,6 +226,58 @@ export default function SalesBillHistoryPage() {
           </>
         )}
       </Drawer>
+
+      {/* Cancel — for a Pending/Partial sale that never left the counter fully paid. */}
+      <Modal title={`Cancel ${cancelModal?.Invoice_Number}`} open={!!cancelModal}
+        onCancel={() => { setCancelModal(null); cancelForm.resetFields(); }} footer={null} destroyOnClose>
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+          message="Restores stock, reverses any Old Gold/Gift Voucher/Loyalty Points this sale used, and reverses the accounting journal. This cannot be undone." />
+        <Form form={cancelForm} layout="vertical" onFinish={(v) => cancelMutation.mutate({ id: cancelModal.Sale_ID, ...v })}>
+          <Form.Item name="reason" label="Reason" rules={[{ required: true, message: 'A reason is required.' }]}>
+            <Input.TextArea rows={2} placeholder="e.g. Customer changed mind before taking the item" />
+          </Form.Item>
+          <Button type="primary" danger htmlType="submit" block loading={cancelMutation.isPending}>
+            Cancel Sale
+          </Button>
+        </Form>
+      </Modal>
+
+      {/* Return — for a fully-Paid sale. /cancel refuses these outright;
+          this is the return/credit-note flow it points to instead. */}
+      <Modal title={`Return ${returnModal?.Invoice_Number}`} open={!!returnModal}
+        onCancel={() => { setReturnModal(null); returnForm.resetFields(); }} footer={null} destroyOnClose width={480}>
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+          message="Restores stock, reverses any Old Gold/Gift Voucher/Loyalty Points this sale used and the accounting journal (including GST and cost of goods sold), then refunds the amount already collected via whichever channel you pick below. This cannot be undone." />
+        <Form form={returnForm} layout="vertical" initialValues={{ Refund_Mode: 'Cash' }}
+          onFinish={(v) => returnMutation.mutate({ id: returnModal.Sale_ID, ...v })}>
+          <Form.Item name="Refund_Mode" label="Refund Via" rules={[{ required: true }]}>
+            <Radio.Group optionType="button" buttonStyle="solid">
+              <Radio.Button value="Cash">Cash</Radio.Button>
+              <Radio.Button value="Bank">Bank</Radio.Button>
+              <Radio.Button value="Store Credit">Store Credit</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item shouldUpdate noStyle>
+            {() => returnForm.getFieldValue('Refund_Mode') === 'Bank' && (
+              <Form.Item name="Bank_Account_ID" label="Which Bank" rules={[{ required: true, message: 'Pick a bank account.' }]}>
+                <Select options={(bankAccounts || []).map((b) => ({ value: b.Account_ID, label: `${b.Bank_Name} (${b.Account_Number})` }))} />
+              </Form.Item>
+            )}
+          </Form.Item>
+          <Form.Item shouldUpdate noStyle>
+            {() => returnForm.getFieldValue('Refund_Mode') === 'Store Credit' && !returnModal?.Customer_Name && (
+              <Alert type="error" showIcon style={{ marginBottom: 12 }} message="Store Credit needs a customer on record — this looks like a walk-in sale." />
+            )}
+          </Form.Item>
+          <Form.Item name="reason" label="Reason">
+            <Input.TextArea rows={2} placeholder="e.g. Item didn't fit, customer wants a refund" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block loading={returnMutation.isPending}
+            style={{ background: '#B8860B', borderColor: '#B8860B' }}>
+            Process Return
+          </Button>
+        </Form>
+      </Modal>
 
       <PageTour steps={tourSteps} />
     </div>

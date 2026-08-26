@@ -820,6 +820,66 @@ router.post('/:id/receive-payment', authenticate, requirePermission('sales'), re
   }
 });
 
+// ─── Shared reversal side-effects — used by BOTH /cancel and /return ──────────
+// Restores stock, Old Gold Exchange balance, Gift Voucher balance, and the
+// customer's running totals (purchase value/count, loyalty points both
+// directions). Does NOT touch Payment_Status or accounting — callers do
+// that themselves (a return needs a different terminal status/reference
+// and a different, refund-mode-aware journal than a plain cancellation).
+async function reverseSaleSideEffects(trx, sale, req) {
+  const details = await trx('tbl_sales_details').where({ Sale_ID: sale.Sale_ID });
+  const ornamentIds = details.map((d) => d.Ornament_ID).filter(Boolean);
+
+  if (ornamentIds.length > 0) {
+    await trx('tbl_ornament_master').whereIn('Ornament_ID', ornamentIds).update({
+      Is_Sold: false, Is_Stock_Available: true,
+    });
+  }
+
+  if (parseFloat(sale.Old_Gold_Exchange_Amount || 0) > 0) {
+    await trx('tbl_old_gold_exchange').where({ Sale_ID: sale.Sale_ID, Tenant_ID: req.user.tenantId }).update({
+      Sale_ID: null,
+      Used_Amount: db.raw('"Used_Amount" - ?', [parseFloat(sale.Old_Gold_Exchange_Amount)]),
+      Balance_Amount: db.raw('"Balance_Amount" + ?', [parseFloat(sale.Old_Gold_Exchange_Amount)]),
+      Modified_Date: new Date(),
+    });
+  }
+
+  if (parseFloat(sale.Voucher_Amount || 0) > 0) {
+    const giftVoucher = await trx('tbl_gift_vouchers').where({ Used_In_Sale_ID: sale.Sale_ID, Tenant_ID: req.user.tenantId }).first();
+    if (giftVoucher) {
+      await trx('tbl_gift_vouchers').where({ Voucher_ID: giftVoucher.Voucher_ID }).update({
+        Used_Amount: db.raw('"Used_Amount" - ?', [parseFloat(sale.Voucher_Amount)]),
+        Balance_Amount: db.raw('"Balance_Amount" + ?', [parseFloat(sale.Voucher_Amount)]),
+        Status: 'Active',
+        Used_In_Sale_ID: null,
+      });
+    }
+  }
+
+  if (sale.Customer_ID) {
+    await trx('tbl_customer_master').where({ Customer_ID: sale.Customer_ID }).update({
+      Total_Purchase_Value: db.raw('"Total_Purchase_Value" - ?', [parseFloat(sale.Net_Payable_Amount || 0)]),
+      Total_Purchase_Count: db.raw('"Total_Purchase_Count" - 1'),
+      Loyalty_Points: db.raw('"Loyalty_Points" - ? + ?', [parseInt(sale.Loyalty_Points_Earned || 0, 10), parseInt(sale.Loyalty_Points_Used || 0, 10)]),
+    });
+  }
+}
+
+// Ledger accounts that already have their own dedicated restoration above
+// (Old Gold/Scheme/Bonus/Gift Voucher balances, loyalty points) or that
+// aren't a real payment channel (COGS, Customer Receivable) — these always
+// just flip Dr↔Cr on their own original account, on both /cancel and
+// /return, regardless of a return's chosen refund channel. Everything
+// else on the Dr side of the original journal is a genuine "money in"
+// payment line (Cash/UPI/Card/Cheque/a specific bank's own ledger) — see
+// /return below for why that distinction matters there.
+const SELF_RESTORING_LEDGER_ACCOUNTS = new Set([
+  'Cost of Goods Sold Account', 'Old Gold Stock Account', 'Customer Scheme Deposit Account',
+  'Scheme Bonus Provision Account', 'Gift Voucher Account', 'Loyalty Points Redemption Expense Account',
+  'Customer Receivable Account',
+]);
+
 // ─── POST /api/sales/:id/cancel ───────────────────────────────────────────────
 // Cancelling used to ONLY restore stock and flip Payment_Status — it never
 // reversed the sale's accounting journal (GST payable stayed inflated
@@ -842,57 +902,12 @@ router.post('/:id/cancel', authenticate, requirePermission('sales'), async (req,
       return sendError(res, 400, 'This sale used a Savings Scheme balance/bonus adjustment — cancelling it automatically isn\'t supported. Correct the scheme member\'s balance by hand first, then contact support to cancel the sale.');
     }
 
-    const details = await trx('tbl_sales_details').where({ Sale_ID: req.params.id });
-    const ornamentIds = details.map((d) => d.Ornament_ID).filter(Boolean);
-
     await trx('tbl_sales_header').where({ Sale_ID: req.params.id }).update({
       Payment_Status: 'Cancelled',
       Notes: `Cancelled: ${req.body.reason || 'No reason'} by ${req.user.username}`,
     });
 
-    // Restore ornaments
-    if (ornamentIds.length > 0) {
-      await trx('tbl_ornament_master').whereIn('Ornament_ID', ornamentIds).update({
-        Is_Sold: false, Is_Stock_Available: true,
-      });
-    }
-
-    // Restore the Old Gold Exchange voucher this sale consumed, if any.
-    if (parseFloat(sale.Old_Gold_Exchange_Amount || 0) > 0) {
-      await trx('tbl_old_gold_exchange').where({ Sale_ID: sale.Sale_ID, Tenant_ID: req.user.tenantId }).update({
-        Sale_ID: null,
-        Used_Amount: db.raw('"Used_Amount" - ?', [parseFloat(sale.Old_Gold_Exchange_Amount)]),
-        Balance_Amount: db.raw('"Balance_Amount" + ?', [parseFloat(sale.Old_Gold_Exchange_Amount)]),
-        Modified_Date: new Date(),
-      });
-    }
-
-    // Restore the Gift Voucher this sale consumed, if any.
-    if (parseFloat(sale.Voucher_Amount || 0) > 0) {
-      const giftVoucher = await trx('tbl_gift_vouchers').where({ Used_In_Sale_ID: sale.Sale_ID, Tenant_ID: req.user.tenantId }).first();
-      if (giftVoucher) {
-        await trx('tbl_gift_vouchers').where({ Voucher_ID: giftVoucher.Voucher_ID }).update({
-          Used_Amount: db.raw('"Used_Amount" - ?', [parseFloat(sale.Voucher_Amount)]),
-          Balance_Amount: db.raw('"Balance_Amount" + ?', [parseFloat(sale.Voucher_Amount)]),
-          Status: 'Active',
-          Used_In_Sale_ID: null,
-        });
-      }
-    }
-
-    // Undo the customer's running totals this sale contributed.
-    if (sale.Customer_ID) {
-      await trx('tbl_customer_master').where({ Customer_ID: sale.Customer_ID }).update({
-        Total_Purchase_Value: db.raw('"Total_Purchase_Value" - ?', [parseFloat(sale.Net_Payable_Amount || 0)]),
-        Total_Purchase_Count: db.raw('"Total_Purchase_Count" - 1'),
-        // Undo both directions: the points this sale earned are taken
-        // back, and any points redeemed FOR this sale are given back —
-        // previously only the earned side was reversed, so cancelling a
-        // sale that had redeemed points silently kept those points gone
-        // forever even though the "purchase" they paid for no longer exists.
-        Loyalty_Points: db.raw('"Loyalty_Points" - ? + ?', [parseInt(sale.Loyalty_Points_Earned || 0, 10), parseInt(sale.Loyalty_Points_Used || 0, 10)]),
-      });
-    }
+    await reverseSaleSideEffects(trx, sale, req);
 
     await trx.commit();
 
@@ -922,6 +937,134 @@ router.post('/:id/cancel', authenticate, requirePermission('sales'), async (req,
   } catch (err) {
     await trx.rollback();
     return sendError(res, 500, 'Failed to cancel sale.');
+  }
+});
+
+// ─── POST /api/sales/:id/return ────────────────────────────────────────────────
+// /cancel refuses outright on a fully-paid sale ("that needs a proper
+// return/credit-note flow") — this is that flow. Reuses the exact same
+// side-effect reversal as /cancel (stock, Old Gold/Gift Voucher balances,
+// customer totals, loyalty points both directions), but with two real
+// differences a genuinely-paid, already-completed sale needs:
+//   1. The money already collected has to go SOMEWHERE — Refund_Mode picks
+//      Cash, a specific Bank account, or Store Credit. Store Credit issues
+//      a real, immediately-usable tbl_customer_advance row (the same
+//      ledger built for Purchase Hub's Advance Receipt/Adjustment) rather
+//      than inventing a separate "credit note" document type.
+//   2. The reversal journal can't just blindly flip every original line
+//      the way /cancel's does — SELF_RESTORING_LEDGER_ACCOUNTS (COGS,
+//      Old Gold/Scheme/Bonus/Gift Voucher/Loyalty, Customer Receivable)
+//      still flip normally on their own account either way, but the
+//      REAL payment lines (Cash/UPI/Card/Cheque/a specific bank ledger)
+//      get redirected to whichever single channel Refund_Mode picked,
+//      not proportionally reversed across however the sale happened to
+//      be originally split.
+router.post('/:id/return', authenticate, requirePermission('sales'), [
+  body('Refund_Mode').isIn(['Cash', 'Bank', 'Store Credit']).withMessage('Refund_Mode must be Cash, Bank, or Store Credit'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  if (req.body.Refund_Mode === 'Bank' && !req.body.Bank_Account_ID) {
+    return sendError(res, 400, 'Bank_Account_ID is required when Refund_Mode is Bank.');
+  }
+
+  const trx = await db.transaction();
+  try {
+    const sale = await trx('tbl_sales_header').where({ Sale_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!sale) { await trx.rollback(); return sendError(res, 404, 'Sale not found.'); }
+    if (sale.Payment_Status === 'Cancelled') { await trx.rollback(); return sendError(res, 400, 'This sale is already cancelled/returned.'); }
+    if (sale.Payment_Status !== 'Paid') {
+      await trx.rollback();
+      return sendError(res, 400, `This sale is ${sale.Payment_Status}, not fully Paid — use Cancel instead of Return for an unpaid or partially-paid sale.`);
+    }
+    if (parseFloat(sale.Scheme_Adjustment_Amount || 0) > 0 || parseFloat(sale.Bonus_Adjustment_Amount || 0) > 0) {
+      await trx.rollback();
+      return sendError(res, 400, 'This sale used a Savings Scheme balance/bonus adjustment — returning it automatically isn\'t supported. Correct the scheme member\'s balance by hand first, then contact support.');
+    }
+    if (req.body.Refund_Mode === 'Store Credit' && !sale.Customer_ID) {
+      await trx.rollback();
+      return sendError(res, 400, 'Store Credit requires a customer linked to this sale — this was a walk-in sale with no customer on record.');
+    }
+
+    const returnReference = `RETURN-${sale.Invoice_Number}`;
+
+    await trx('tbl_sales_header').where({ Sale_ID: req.params.id }).update({
+      Payment_Status: 'Cancelled', // same terminal status as /cancel — every existing report/query that already excludes 'Cancelled' sales correctly excludes a return too, with no separate status value to thread through dozens of unrelated queries
+      Notes: `Returned: ${req.body.reason || 'No reason'} by ${req.user.username} — refunded via ${req.body.Refund_Mode}`,
+    });
+
+    await reverseSaleSideEffects(trx, sale, req);
+
+    let storeCreditAdvance = null;
+    // The actual refund-journal construction happens after commit (needs
+    // the original journal's real entries) — but the Store Credit
+    // advance row itself is real customer data, created inside the same
+    // transaction as everything else so it can never end up orphaned by
+    // a later journal-posting failure.
+    await trx.commit();
+
+    try {
+      const originalJournal = await db('tbl_accounting_journal')
+        .where({ Tenant_ID: req.user.tenantId, Source_Type: 'SALE', Reference: sale.Invoice_Number }).first();
+      if (originalJournal) {
+        const originalEntries = await db('tbl_accounting_entries').where({ Journal_ID: originalJournal.Journal_ID });
+        const lines = [];
+        let realPaymentTotal = 0;
+
+        for (const e of originalEntries) {
+          const amount = parseFloat(e.Amount);
+          if (e.Entry_Type === 'Cr') {
+            // Sales Account, Output CGST/SGST/IGST, Round Off, the Cr
+            // half of the COGS pair (a metal's stock account) — always
+            // flip back onto the same account, regardless of refund mode.
+            lines.push({ account: e.Ledger_Account, type: 'Dr', amount });
+          } else if (SELF_RESTORING_LEDGER_ACCOUNTS.has(e.Ledger_Account)) {
+            // COGS itself, or a line whose balance is already restored
+            // above (Old Gold/Scheme/Bonus/Gift Voucher/Loyalty/
+            // Receivable) — flip normally, never redirected.
+            lines.push({ account: e.Ledger_Account, type: 'Cr', amount });
+          } else {
+            // A genuine "money in" line (Cash/UPI/Card/Cheque/a specific
+            // bank's own ledger) — redirected to the chosen refund
+            // channel below instead of flipped on its original account.
+            realPaymentTotal += amount;
+          }
+        }
+
+        realPaymentTotal = round2(realPaymentTotal);
+        if (realPaymentTotal > 0) {
+          if (req.body.Refund_Mode === 'Store Credit') {
+            const receiptNumber = `${returnReference}-CR`;
+            const [advance] = await db('tbl_customer_advance').insert({
+              Tenant_ID: req.user.tenantId, Branch_ID: sale.Branch_ID || null, Customer_ID: sale.Customer_ID,
+              Amount: realPaymentTotal, Balance_Amount: realPaymentTotal, Payment_Mode: 'Return Credit',
+              Reference: receiptNumber, Purpose: `Store credit from returned invoice ${sale.Invoice_Number}`,
+              Status: 'Active', Created_By: req.user.username,
+            }).returning('*');
+            storeCreditAdvance = advance;
+            lines.push({ account: 'Customer Advance Account', group: 'Liabilities', sub: 'Advance', type: 'Cr', amount: realPaymentTotal });
+          } else {
+            const payoutLedger = await resolveLedgerForPayment(db, req.user.tenantId, req.body.Refund_Mode === 'Bank' ? 'Bank Transfer' : 'Cash', req.body.Bank_Account_ID);
+            lines.push({ account: payoutLedger.account, group: payoutLedger.group, sub: payoutLedger.sub, type: 'Cr', amount: realPaymentTotal });
+          }
+        }
+
+        await postJournal({
+          tenantId: req.user.tenantId, sourceType: 'SALE', sourceId: sale.Sale_ID, reference: returnReference,
+          narration: `Return of invoice ${sale.Invoice_Number} — refunded via ${req.body.Refund_Mode}${req.body.reason ? ' — ' + req.body.reason : ''}`,
+          createdBy: req.user.username, dataMode: sale.Data_Mode, branchId: sale.Branch_ID,
+          lines,
+        });
+      }
+    } catch (err) {
+      console.error('[Sales] Return reversal journal failed (return still recorded fine):', err.message);
+    }
+
+    return sendSuccess(res, { store_credit: storeCreditAdvance }, `Invoice ${sale.Invoice_Number} returned — refunded via ${req.body.Refund_Mode}.`);
+  } catch (err) {
+    await trx.rollback();
+    console.error('[Sales] Return error:', err.message);
+    return sendError(res, 500, 'Failed to process return.');
   }
 });
 
