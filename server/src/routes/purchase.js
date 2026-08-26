@@ -125,6 +125,17 @@ router.post('/create', authenticate, requireValidBranch, requirePermission('inve
     // disagree with each other. See utils/branchAccess.js.
     const branchId = resolveBranchForInsert(req, header.Branch_ID);
 
+    // Balance_Amount/Payment_Status were never actually computed at
+    // creation — both columns just sat at their raw DB defaults
+    // (Balance_Amount=0, Payment_Status='Pending') regardless of the real
+    // total, so a purchase with no payment yet showed a ZERO balance
+    // instead of owing the full amount. Computed here the same way
+    // sales.js computes its own Payment_Status/Balance_Amount.
+    const purchaseAmountPaid = parseFloat(header.Amount_Paid || 0);
+    const purchaseTotal = parseFloat(header.Total_Amount || 0);
+    const purchaseBalance = Math.max(0, round2(purchaseTotal - purchaseAmountPaid));
+    const purchasePaymentStatus = purchaseBalance <= 0.01 ? 'Paid' : purchaseAmountPaid > 0 ? 'Partial' : 'Pending';
+
     const [purchase] = await trx('tbl_purchase_header').insert({
       ...header,
       Tenant_ID: tenantId,
@@ -132,6 +143,9 @@ router.post('/create', authenticate, requireValidBranch, requirePermission('inve
       Purchase_Number: purchaseNumber,
       Status: 'Draft',
       Data_Mode: modeVal(req),
+      Amount_Paid: purchaseAmountPaid,
+      Balance_Amount: purchaseBalance,
+      Payment_Status: purchasePaymentStatus,
       Created_By: req.user.username,
     }).returning('*');
 
@@ -303,6 +317,69 @@ router.post('/:id/approve', authenticate, requirePermission('inventory'), async 
       .returning('*');
     return sendSuccess(res, updated, 'Purchase approved.');
   } catch (err) { return sendError(res, 500, 'Failed to approve.'); }
+});
+
+// ── POST /api/purchase/:id/pay-supplier  ──────────────────────────────────────
+// There was no way anywhere in this file to ever pay down a purchase's
+// Balance_Amount — Payment_Status was hardcoded 'Pending' client-side and
+// no route updated Amount_Paid/Balance_Amount/Payment_Status, so
+// Supplier Payable Account only ever grew (found via audit; the payment-
+// journal branch in postPurchaseAccountingEntries above was unreachable
+// dead code for exactly this reason — Amount_Paid was never sent except
+// at creation). This is the missing settle route, mirroring sales.js's
+// own receive-payment route exactly.
+router.post('/:id/pay-supplier', authenticate, requirePermission('inventory'), requireValidBranch, [
+  body('Amount').isFloat({ gt: 0 }).withMessage('A positive amount is required'),
+  body('Payment_Mode').notEmpty().withMessage('Payment mode is required'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  const trx = await db.transaction();
+  try {
+    const purchase = await trx('tbl_purchase_header').where({ Purchase_ID: req.params.id, Tenant_ID: req.user.tenantId }).forUpdate().first();
+    if (!purchase) { await trx.rollback(); return sendError(res, 404, 'Purchase not found.'); }
+    if (!['Partial', 'Pending'].includes(purchase.Payment_Status)) {
+      await trx.rollback();
+      return sendError(res, 400, `This purchase is ${purchase.Payment_Status} — there's no outstanding balance to pay.`);
+    }
+
+    const amount = round2(parseFloat(req.body.Amount));
+    const currentBalance = round2(parseFloat(purchase.Balance_Amount || 0));
+    if (amount > currentBalance + 0.01) {
+      await trx.rollback();
+      return sendError(res, 400, `Amount exceeds the outstanding balance of ₹${currentBalance.toFixed(2)}.`);
+    }
+
+    const newBalance = round2(currentBalance - amount);
+    const newAmountPaid = round2(parseFloat(purchase.Amount_Paid || 0) + amount);
+    const newStatus = newBalance <= 0.01 ? 'Paid' : 'Partial';
+
+    const [updated] = await trx('tbl_purchase_header').where({ Purchase_ID: purchase.Purchase_ID })
+      .update({ Amount_Paid: newAmountPaid, Balance_Amount: newBalance, Payment_Status: newStatus })
+      .returning('*');
+
+    if (purchase.Supplier_ID) {
+      await trx('tbl_vendor_master').where({ Vendor_ID: purchase.Supplier_ID })
+        .update({ Current_Balance: db.raw('"Current_Balance" - ?', [amount]) });
+    }
+
+    await trx.commit();
+
+    const ledger = await resolveLedgerForPayment(db, req.user.tenantId, req.body.Payment_Mode, req.body.Bank_Account_ID);
+    await postJournal({
+      tenantId: req.user.tenantId, sourceType: 'PAYMENT', sourceId: purchase.Purchase_ID, reference: `${purchase.Purchase_Number}-PAY-${Date.now()}`,
+      narration: `Payment against ${purchase.Purchase_Number}`, createdBy: req.user.username, dataMode: purchase.Data_Mode, branchId: purchase.Branch_ID,
+      lines: [
+        { account: 'Supplier Payable Account', group: 'Liabilities', sub: 'Payable', type: 'Dr', amount, narration: `Paid against ${purchase.Purchase_Number}` },
+        { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Cr', amount, narration: `Paid against ${purchase.Purchase_Number}` },
+      ],
+    }).catch((e) => console.error('[Purchase] Supplier payment journal failed (payment still recorded fine):', e.message));
+
+    return sendSuccess(res, updated, 'Payment recorded.', 201);
+  } catch (err) {
+    await trx.rollback();
+    return sendError(res, 500, 'Failed to record payment.');
+  }
 });
 
 module.exports = router;

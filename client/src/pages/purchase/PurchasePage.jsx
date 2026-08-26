@@ -4,7 +4,7 @@ import {
   Input, InputNumber, Select, DatePicker, Row, Col, Divider,
   message, Statistic,
 } from 'antd';
-import { PlusOutlined, ShoppingCartOutlined, CheckOutlined } from '@ant-design/icons';
+import { PlusOutlined, ShoppingCartOutlined, CheckOutlined, DollarOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchaseApi, karigarApi, masterApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
@@ -20,8 +20,10 @@ const { Option } = Select;
 
 export default function PurchasePage() {
   const [createModal, setCreateModal] = useState(false);
+  const [payModal, setPayModal] = useState(null); // purchase row being paid, or null
   const [items, setItems] = useState([{ id: 1 }]);
   const [form] = Form.useForm();
+  const [payForm] = Form.useForm();
   const { goldRate } = useGoldRate();
   const qc = useQueryClient();
 
@@ -72,6 +74,20 @@ export default function PurchasePage() {
     onSuccess: () => { message.success('Purchase approved.'); qc.invalidateQueries(['purchases']); },
   });
 
+  // There was no way anywhere in the app to ever pay down a purchase's
+  // balance — Supplier Payable only ever grew. This + the modal below is
+  // the missing UI for the new POST /purchase/:id/pay-supplier route.
+  const paySupplierMutation = useMutation({
+    mutationFn: ({ id, ...data }) => purchaseApi.paySupplier(id, data),
+    onSuccess: () => {
+      message.success('Payment recorded.');
+      qc.invalidateQueries(['purchases']);
+      setPayModal(null);
+      payForm.resetFields();
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to record payment.'),
+  });
+
   const closeCreateModal = () => { setCreateModal(false); form.resetFields(); setItems([{ id: 1 }]); };
 
   const supplierLookup = useF2Lookup();
@@ -88,6 +104,7 @@ export default function PurchasePage() {
     { title: 'Date', dataIndex: 'Purchase_Date', render: v => dayjs(v).format('DD-MMM-YYYY') },
     { title: 'Supplier', dataIndex: 'Supplier_Name_Resolved', render: v => v || '-' },
     { title: 'Total Amount', dataIndex: 'Total_Amount', render: v => <Text strong style={{ color: '#B8860B' }}>{formatCurrency(v)}</Text> },
+    { title: 'Balance Due', dataIndex: 'Balance_Amount', render: v => parseFloat(v) > 0 ? <Text type="danger">{formatCurrency(v)}</Text> : '-' },
     { title: 'Payment', dataIndex: 'Payment_Status', render: v => <Tag color={v === 'Paid' ? 'green' : 'orange'}>{v}</Tag> },
     { title: 'Status', dataIndex: 'Status', render: v => <Tag color={statusColor[v]}>{v}</Tag> },
     {
@@ -100,6 +117,11 @@ export default function PurchasePage() {
               loading={approveMutation.isPending}
               onClick={() => approveMutation.mutate(r.Purchase_ID)}>
               Approve
+            </Button>
+          )}
+          {['Partial', 'Pending'].includes(r.Payment_Status) && (
+            <Button size="small" icon={<DollarOutlined />} onClick={() => setPayModal(r)}>
+              Pay Supplier
             </Button>
           )}
         </Space>
@@ -295,6 +317,34 @@ export default function PurchasePage() {
             Save Purchase Entry & Add to Inventory
           </Button>
         </Form>
+      </Modal>
+
+      <Modal title={`💰 Pay Supplier — ${payModal?.Purchase_Number}`}
+        open={!!payModal} onCancel={() => { setPayModal(null); payForm.resetFields(); }} footer={null} destroyOnClose>
+        {payModal && (
+          <Form form={payForm} layout="vertical"
+            initialValues={{ Amount: parseFloat(payModal.Balance_Amount || 0), Payment_Mode: 'Cash' }}
+            onFinish={(v) => paySupplierMutation.mutate({ id: payModal.Purchase_ID, ...v })}>
+            <Text type="secondary">Outstanding balance: <Text strong style={{ color: '#ff4d4f' }}>{formatCurrency(payModal.Balance_Amount)}</Text></Text>
+            <Form.Item name="Amount" label="Amount Paid (₹)" style={{ marginTop: 12 }}
+              rules={[{ required: true, message: 'Amount is required.' }, {
+                validator: (_, v) => v > parseFloat(payModal.Balance_Amount) + 0.01
+                  ? Promise.reject('Cannot exceed the outstanding balance.') : Promise.resolve(),
+              }]}>
+              <InputNumber style={{ width: '100%' }} min={0.01} max={parseFloat(payModal.Balance_Amount)} precision={2} />
+            </Form.Item>
+            <Form.Item name="Payment_Mode" label="Payment Mode" rules={[{ required: true }]}>
+              <Select options={['Cash', 'UPI', 'Debit Card', 'Credit Card', 'NEFT', 'RTGS', 'IMPS', 'Bank Transfer', 'Cheque'].map(m => ({ value: m, label: m }))} />
+            </Form.Item>
+            <Form.Item name="Payment_Reference" label="Reference (optional)">
+              <Input placeholder="UTR / transaction ID / cheque number" />
+            </Form.Item>
+            <Button type="primary" htmlType="submit" block loading={paySupplierMutation.isPending}
+              style={{ background: '#52c41a', borderColor: '#52c41a', fontWeight: 700 }}>
+              Record Payment
+            </Button>
+          </Form>
+        )}
       </Modal>
 
       <PageTour steps={tourSteps} />

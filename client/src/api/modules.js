@@ -187,6 +187,7 @@ export const purchaseApi = {
   getById: (id) => api.get(`/purchase/${id}`),
   create: (data) => api.post('/purchase/create', data),
   approve: (id) => api.post(`/purchase/${id}/approve`),
+  paySupplier: (id, data) => api.post(`/purchase/${id}/pay-supplier`, data),
 };
 
 // ─── Repair ───────────────────────────────────────────────────────────────────
