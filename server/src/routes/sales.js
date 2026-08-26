@@ -39,7 +39,7 @@ const generateSaleVoucherId = async (tenantId, containsHiddenStock = false) => {
 // used to hand-roll journal/entry inserts directly; now it just builds the
 // line list and lets postJournal() handle real accounts, the balance
 // check, bank-balance sync, and Tally auto-queuing.
-async function postSaleAccountingEntries({ tenantId, saleId, invoiceNumber, payments, subtotal, cgstAmount, sgstAmount, igstAmount, roundOff = 0, operator, dataMode = 3 }) {
+async function postSaleAccountingEntries({ tenantId, saleId, invoiceNumber, payments, subtotal, cgstAmount, sgstAmount, igstAmount, roundOff = 0, operator, dataMode = 3, branchId }) {
   const salesValue = parseFloat(subtotal || 0);
   const lines = [];
 
@@ -81,7 +81,7 @@ async function postSaleAccountingEntries({ tenantId, saleId, invoiceNumber, paym
   }
 
   const { journalNumber } = await postJournal({
-    tenantId, sourceType: 'SALE', sourceId: saleId, reference: invoiceNumber,
+    tenantId, sourceType: 'SALE', sourceId: saleId, reference: invoiceNumber, branchId,
     narration: `Sales invoice ${invoiceNumber}`, lines, createdBy: operator, dataMode,
   });
   return journalNumber;
@@ -538,6 +538,9 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
       cgstAmount, sgstAmount, igstAmount, roundOff,
       operator: req.user.username,
       dataMode: dm,
+      // The sale's own already-stamped Branch_ID — guaranteed to match
+      // what was actually recorded, rather than re-resolving separately.
+      branchId: sale.Branch_ID,
     }).catch(e => console.warn('Accounting post failed (non-fatal):', e.message));
 
     // ── WhatsApp notification (non-blocking) ──────────────────────────────────

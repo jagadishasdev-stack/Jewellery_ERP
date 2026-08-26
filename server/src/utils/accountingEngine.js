@@ -73,7 +73,7 @@ async function getOrCreateAccount(trx, tenantId, name, group = 'Expenses', sub =
  * @param {import('knex').Knex.Transaction} [opts.trx]  reuse an existing transaction if the caller already has one open
  * @returns {Promise<{journalId: number, journalNumber: string}>}
  */
-async function postJournal({ tenantId, sourceType, sourceId, reference, narration, lines, entryDate, dataMode = 3, createdBy, trx }) {
+async function postJournal({ tenantId, sourceType, sourceId, reference, narration, lines, entryDate, dataMode = 3, createdBy, trx, branchId }) {
   if (!Array.isArray(lines) || lines.length < 2) {
     throw new Error('A journal needs at least two lines (one Dr, one Cr).');
   }
@@ -116,6 +116,11 @@ async function postJournal({ tenantId, sourceType, sourceId, reference, narratio
 
   const [journal] = await runner('tbl_accounting_journal').insert({
     Tenant_ID: tenantId,
+    // Multi-Branch Management — optional; every existing caller that
+    // doesn't pass this keeps posting exactly as before (Branch_ID stays
+    // null). See utils/branchAccess.js and this table's own migration
+    // comment (20260829120000_add_branch_to_accounting_journal.js).
+    Branch_ID: branchId || null,
     Data_Mode: dataMode,
     Journal_Number: journalNumber,
     Entry_Date: date,

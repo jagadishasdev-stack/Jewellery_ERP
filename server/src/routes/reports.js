@@ -4,7 +4,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
 const { modeVal, applyStockVisibility, excludeHiddenStockSales } = require('../utils/dataModeFilter');
 const { computeClosingReport } = require('../services/closingReportService');
-const { getAllowedBranches } = require('../utils/branchAccess');
+const { getAllowedBranches, requireValidBranch, withBranch } = require('../utils/branchAccess');
 const { generateClosingReportPDF } = require('../services/pdfService');
 const dayjs = require('dayjs');
 
@@ -224,24 +224,29 @@ router.get('/counter-summary', authenticate, async (req, res) => {
   }
 });
 
-router.get('/gst-summary', authenticate, async (req, res) => {
+// Branch filter here is legitimate, not a suppression risk: branches can
+// carry their own GST_No (tbl_branch_master), so a per-branch GST summary
+// is the correct report for a business with more than one GST
+// registration — nothing is excluded from the real sales register, "All
+// Branches" still shows the complete tenant-wide figure.
+router.get('/gst-summary', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const gstData = await excludeHiddenStockSales(db('tbl_sales_header')
+    const gstData = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('Payment_Status', 'Cancelled').where('Invoice_Type', 'Tax Invoice'), req)
+      .whereNot('Payment_Status', 'Cancelled').where('Invoice_Type', 'Tax Invoice'), req), req)
       .select(db.raw('SUM("Subtotal_Amount") as taxable_value'), db.raw('SUM("GST_Amount") as total_gst'), db.raw('SUM("Net_Payable_Amount") as total_invoice_value'), db.raw('COUNT(*) as invoice_count'))
       .first();
-    const hsnSummary = await excludeHiddenStockSales(db('tbl_sales_details as sd')
+    const hsnSummary = await excludeHiddenStockSales(withBranch(db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .leftJoin('tbl_item_type_master as t', db.raw(`sd."Item_Type_Name" = t."Type_Name"`))
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .groupByRaw(`COALESCE("t"."HSN_Code", '7113'), "sd"."GST_Percentage_Applied"`)
       .select(db.raw(`COALESCE("t"."HSN_Code", '7113') as hsn_code`), 'sd.GST_Percentage_Applied', db.raw('SUM("sd"."Taxable_Value") as taxable_value'), db.raw('SUM("sd"."GST_Amount") as gst_amount'), db.raw('COUNT(*) as items'))
       .catch(() => []);
@@ -528,13 +533,13 @@ router.get('/financial', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/customer-outstanding ────────────────────────────────────
-router.get('/customer-outstanding', authenticate, async (req, res) => {
+router.get('/customer-outstanding', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const data = await excludeHiddenStockSales(db('tbl_sales_header')
+    const data = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
-      .whereIn('Payment_Status', ['Partial', 'Pending']).whereNotNull('Customer_ID'), req)
+      .whereIn('Payment_Status', ['Partial', 'Pending']).whereNotNull('Customer_ID'), req), req)
       .groupByRaw('"Customer_ID", "Customer_Name", "Customer_Mobile"')
       .select('Customer_ID', 'Customer_Name', 'Customer_Mobile', db.raw('SUM("Net_Payable_Amount") as total_purchases'), db.raw('SUM("Amount_Paid") as total_paid'), db.raw('SUM("Balance_Amount") as outstanding'), db.raw('MAX("Sale_Date") as last_purchase_date'))
       .orderBy('outstanding', 'desc');

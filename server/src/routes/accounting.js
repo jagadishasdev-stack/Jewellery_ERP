@@ -16,6 +16,7 @@ const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError } = require('../utils/response');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const { postJournal } = require('../utils/accountingEngine');
+const { requireValidBranch, withBranch } = require('../utils/branchAccess');
 const dayjs = require('dayjs');
 
 // NOT new Date().toISOString().split('T')[0] — that reads UTC, but every
@@ -158,6 +159,14 @@ router.get('/ledger/:accountId', authenticate, async (req, res) => {
 });
 
 // ── GET /api/accounting/trial-balance ──────────────────────────────────────────
+// Multi-Branch Management — deliberately NOT branch-filterable.
+// tbl_chart_of_accounts.Opening_Balance is per-account and tenant-wide
+// only; this schema has no concept of a branch-specific opening balance.
+// Filtering the entries by branch while still adding the full tenant-wide
+// opening balance would produce a report that LOOKS like a real
+// per-branch trial balance but isn't one — worse than not offering the
+// filter at all. A correct version needs branch-specific opening
+// balances added to the schema first, not a superficial query filter.
 router.get('/trial-balance', authenticate, async (req, res) => {
   const tenantId = req.user.tenantId;
   const to = req.query.to || today();
@@ -195,11 +204,16 @@ router.get('/trial-balance', authenticate, async (req, res) => {
 });
 
 // ── GET /api/accounting/day-book ────────────────────────────────────────────────
-router.get('/day-book', authenticate, async (req, res) => {
+// Branch-filterable — unlike trial-balance/cash-book/bank-book below, this
+// is a pure date-scoped voucher listing with no opening-balance/running-
+// balance math to get wrong by narrowing which journals are included.
+router.get('/day-book', authenticate, requireValidBranch, async (req, res) => {
   const tenantId = req.user.tenantId;
   const date = req.query.date || today();
   try {
-    const journals = await db('tbl_accounting_journal').where({ Tenant_ID: tenantId, Entry_Date: date }).orderBy('Journal_ID');
+    let journalsQb = db('tbl_accounting_journal').where({ Tenant_ID: tenantId, Entry_Date: date });
+    journalsQb = withBranch(journalsQb, req);
+    const journals = await journalsQb.orderBy('Journal_ID');
     const entries = await db('tbl_accounting_entries').whereIn('Journal_ID', journals.map((j) => j.Journal_ID));
     const byJournal = {};
     for (const e of entries) { (byJournal[e.Journal_ID] = byJournal[e.Journal_ID] || []).push(e); }
@@ -209,6 +223,11 @@ router.get('/day-book', authenticate, async (req, res) => {
 });
 
 // ── Shared helper: ledger-style view for one or more accounts by sub-group ─────
+// Feeds Cash Book / Bank Book below — same deliberate non-branch-filtering
+// as trial-balance above, and for the identical reason: Opening_Balance
+// here is per-account, tenant-wide only, so narrowing the entries by
+// branch without a real branch-specific opening balance would produce a
+// running Balance column that's simply wrong, not just incomplete.
 async function bookFor(tenantId, subGroup, from, to, extraWhere = {}) {
   let accountsQb = db('tbl_chart_of_accounts').where({ Tenant_ID: tenantId, Account_Sub_Group: subGroup, ...extraWhere });
   const accounts = await accountsQb;

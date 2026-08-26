@@ -113,7 +113,7 @@ router.post('/close', authenticate, requireValidBranch, async (req, res) => {
       // for the concrete failure mode this caused: an export/report run
       // immediately after could miss the entry entirely).
       await postJournal({
-        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}${refSuffix}`,
+        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}${refSuffix}`, branchId: bId,
         narration: `Cash expenses on ${today}`, createdBy: req.user.username, dataMode: dm,
         lines: [
           { account: 'Other Expenses Account', group: 'Expenses', sub: 'Indirect Expense', type: 'Dr', amount: cashExpenses },
@@ -134,7 +134,7 @@ router.post('/close', authenticate, requireValidBranch, async (req, res) => {
       const isShort = difference < 0;
       // Awaited — see the cash-expenses fix just above for why.
       await postJournal({
-        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}${refSuffix}-DIFF`,
+        tenantId: tid, sourceType: 'DAY_CLOSE', sourceId: record?.Close_ID, reference: `DAYCLOSE-${today}${refSuffix}-DIFF`, branchId: bId,
         narration: `Cash ${isShort ? 'shortage' : 'excess'} found at day close ${today}`, createdBy: req.user.username, dataMode: dm,
         lines: isShort ? [
           { account: 'Cash Shortage Account', group: 'Expenses', sub: 'Indirect Expense', type: 'Dr', amount: Math.abs(difference) },
