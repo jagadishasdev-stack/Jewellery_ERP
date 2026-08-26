@@ -174,19 +174,36 @@ export default function BillingHub() {
   };
 
   // ── Order Booking ────────────────────────────────────────────────────────
+  // Was posting to /order, which has never existed on the server — the
+  // advance payment collected here was silently discarded (no DB row, no
+  // ledger entry) and the form's own onFinish didn't even call this
+  // mutation; it went straight to printOrderCard, i.e. record NOTHING,
+  // just print a card. Now saves to the real Order Bin (POST /api/bin/
+  // orders, which itself now posts the advance to the ledger) first, and
+  // only prints once that's actually succeeded.
   const orderMutation = useMutation({
-    mutationFn: (data) => api.post('/order', data),
-    onSuccess: (res) => {
-      message.success(`Order ${res.data.data?.Order_Number} booked!`);
+    mutationFn: (values) => api.post('/bin/orders', {
+      Party_Name: values.customer_name,
+      Party_Mobile: values.mobile,
+      Order_Type: 'Customer',
+      Order_Date: dayjs().format('YYYY-MM-DD'),
+      Item_Description: values.item_description,
+      Estimated_Weight: values.estimated_weight || null,
+      Estimated_Amount: values.estimated_total || 0,
+      Due_Date: values.delivery_date ? values.delivery_date.format('YYYY-MM-DD') : null,
+      Advance_Amount: values.advance_amount || 0,
+      Payment_Mode: values.advance_mode || 'Cash',
+      Remarks: values.notes || null,
+    }),
+    onSuccess: (res, values) => {
+      message.success(`Order ${res.data.data?.Voucher_ID} booked and advance recorded!`);
       qc.invalidateQueries(['orders']);
+      printOrderCard(values);
       setActiveModal(null);
       form.resetFields();
     },
-    onError: () => {
-      // Order route may not exist yet — print locally
-      const values = form.getFieldsValue();
-      printOrderCard(values);
-      setActiveModal(null);
+    onError: (err) => {
+      message.error(err.response?.data?.message || 'Failed to save the order — nothing was recorded, please retry.');
     },
   });
 
@@ -330,7 +347,7 @@ export default function BillingHub() {
       {/* ── Order Booking Modal ────────────────────────────────────────── */}
       <Modal title="📦 Order Booking" open={activeModal === 'order'}
         onCancel={() => { setActiveModal(null); form.resetFields(); }} footer={null} width={560}>
-        <Form form={form} layout="vertical" onFinish={(v) => { form.validateFields().then(printOrderCard); }}>
+        <Form form={form} layout="vertical" onFinish={(v) => orderMutation.mutate(v)}>
           <Row gutter={12}>
             <Col xs={12}><Form.Item name="customer_name" label="Customer Name" rules={[{required:true}]}><Input /></Form.Item></Col>
             <Col xs={12}><Form.Item name="mobile" label="Mobile" rules={[{required:true}]}><Input /></Form.Item></Col>
@@ -354,7 +371,7 @@ export default function BillingHub() {
             </Form.Item></Col>
           </Row>
           <Form.Item name="notes" label="Special Instructions"><Input.TextArea rows={2} /></Form.Item>
-          <Button type="primary" htmlType="submit" block size="large"
+          <Button type="primary" htmlType="submit" block size="large" loading={orderMutation.isPending}
             style={{background:'#fa8c16',borderColor:'#fa8c16',fontWeight:700}}>
             <PrinterOutlined /> Save Order & Print Card
           </Button>

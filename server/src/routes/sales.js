@@ -116,7 +116,7 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     const { items, Customer_ID, Customer_Name, Customer_Mobile, Payment_Mode, Payment_Reference,
             Amount_Paid, Sale_Type = 'Retail', Invoice_Type = 'Tax Invoice', Notes,
             Old_Gold_Exchange_Amount = 0, Old_Gold_Weight = 0, Old_Gold_Exchange_ID = null,
-            Scheme_Adjustments = [], Voucher_Amount: voucherAmountInput = 0 } = req.body;
+            Scheme_Adjustments = [], Voucher_Amount: voucherAmountInput = 0, Voucher_ID: giftVoucherId = null } = req.body;
 
     // ── Validate every item belongs to this tenant and is actually available
     // before touching anything else. Ornament_ID is a global (not per-tenant)
@@ -183,6 +183,29 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
       if (oldGoldAmountApplied > parseFloat(oldGoldExchangeRow.Balance_Amount) + 0.01) {
         await trx.rollback();
         return sendError(res, 400, 'Old gold adjustment exceeds the voucher\'s remaining balance.');
+      }
+    }
+
+    // ── Validate the Gift Voucher (if one was applied at checkout) ─────────
+    // POS used to only send a raw Voucher_Amount discount with no
+    // Voucher_ID at all — the actual voucher's Balance_Amount was never
+    // decremented, so the same voucher code could be redeemed on every
+    // bill forever (found via audit). forUpdate() here for the same reason
+    // as the old-gold/scheme locks above — two concurrent sales referencing
+    // the same voucher must not both succeed against a balance that can
+    // only cover one of them.
+    const voucherAmountRequested = parseFloat(voucherAmountInput || 0);
+    let giftVoucherRow = null;
+    if (giftVoucherId && voucherAmountRequested > 0) {
+      giftVoucherRow = await trx('tbl_gift_vouchers').where({ Voucher_ID: giftVoucherId, Tenant_ID: tenantId }).forUpdate().first();
+      if (!giftVoucherRow) { await trx.rollback(); return sendError(res, 404, 'Gift voucher not found.'); }
+      if (giftVoucherRow.Status !== 'Active') { await trx.rollback(); return sendError(res, 400, `Gift voucher is ${giftVoucherRow.Status}.`); }
+      if (giftVoucherRow.Expiry_Date && new Date(giftVoucherRow.Expiry_Date) < new Date()) {
+        await trx.rollback(); return sendError(res, 400, 'Gift voucher has expired.');
+      }
+      if (voucherAmountRequested > parseFloat(giftVoucherRow.Balance_Amount) + 0.01) {
+        await trx.rollback();
+        return sendError(res, 400, 'Voucher amount exceeds the voucher\'s remaining balance.');
       }
     }
 
@@ -398,6 +421,15 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
       });
     }
 
+    // ── Apply the Gift Voucher, if one was referenced ───────────────────────
+    if (giftVoucherRow) {
+      const newBalance = round2(parseFloat(giftVoucherRow.Balance_Amount) - voucherAmountRequested);
+      await trx('tbl_gift_vouchers').where({ Voucher_ID: giftVoucherRow.Voucher_ID }).update({
+        Balance_Amount: newBalance,
+        Status: newBalance <= 0.01 ? 'Redeemed' : 'Active',
+      });
+    }
+
     // ── Apply every validated Scheme Adjustment ─────────────────────────────
     // Each member keeps their scheme open with a reduced running balance
     // (Amount_Redeemed) — the old all-or-nothing "mark Redeemed" behavior
@@ -520,6 +552,14 @@ router.post('/create', authenticate, requirePermission('sales'), requireValidBra
     if (oldGoldAmountApplied > 0) ledgerPayments.push({ Payment_Mode: 'Old Gold Exchange', Amount: oldGoldAmountApplied });
     if (totalSchemeAdjustment > 0) ledgerPayments.push({ Payment_Mode: 'Scheme Adjustment', Amount: totalSchemeAdjustment });
     if (totalBonusAdjustment > 0) ledgerPayments.push({ Payment_Mode: 'Bonus Adjustment', Amount: totalBonusAdjustment });
+    // A redeemed gift voucher is the same shape as Old Gold/Scheme
+    // Adjustment above — the customer "paid" with a liability the
+    // business already carries (Gift Voucher Account, credited when the
+    // voucher was originally issued), not with new cash. Without this
+    // line the journal's Dr side was short by exactly the voucher amount
+    // and postJournal's own balance check silently dropped the whole
+    // journal for any sale with a voucher applied.
+    if (giftVoucherRow && voucherAmountRequested > 0) ledgerPayments.push({ Payment_Mode: 'Gift Voucher', Amount: voucherAmountRequested });
     if (balance > 0) ledgerPayments.push({ Payment_Mode: 'Customer Receivable', Amount: balance });
 
     // Awaited (not fire-and-forget) — this used to return the sale response

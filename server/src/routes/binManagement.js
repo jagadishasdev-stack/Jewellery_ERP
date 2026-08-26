@@ -12,6 +12,8 @@ const { auditLog } = require('../utils/auditLogger');
 const { modeVal } = require('../utils/dataModeFilter');
 const { inferMetalTypeFromPurityText, METAL_TYPES } = require('../utils/metalTypes');
 const { nextNumber } = require('../utils/numberFormat');
+const { postJournal } = require('../utils/accountingEngine');
+const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const dayjs = require('dayjs');
 
 // ── Voucher ID Generator ────────────────────────────────────────────────────────
@@ -397,6 +399,28 @@ router.post('/orders', authenticate, [
     await registerVoucher(trx, tid, voucherId, 'ORDER', order.Order_ID, 'tbl_bin_orders',
       `${req.body.Order_Type} order — ${req.body.Party_Name}`, req.user.username);
     await trx.commit();
+
+    // An advance collected at booking is real cash/bank money that has to
+    // reach the ledger — this whole file previously had zero postJournal
+    // calls, so every advance collected through any of the four bins was
+    // silently invisible to Trial Balance/Cash Book (found via audit; the
+    // other three bins — Purchase/Sales-Return/Pure-Gold — still need the
+    // same fix as a tracked follow-up). Posted AFTER commit, same pattern
+    // as sales.js/purchase.js, so a ledger hiccup never rolls back an
+    // already-created order.
+    const advance = parseFloat(order.Advance_Amount || 0);
+    if (advance > 0) {
+      const ledger = await resolveLedgerForPayment(db, tid, order.Payment_Mode || 'Cash');
+      await postJournal({
+        tenantId: tid, sourceType: 'BIN_ORDER', sourceId: order.Order_ID, reference: voucherId, branchId: order.Branch_ID,
+        narration: `Advance for ${order.Order_Type} order ${voucherId} — ${order.Party_Name}`, createdBy: req.user.username, dataMode: modeVal(req),
+        lines: [
+          { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Dr', amount: advance, narration: `Order advance | ${voucherId}` },
+          { account: 'Customer Advance Account', group: 'Liabilities', sub: 'Advance', type: 'Cr', amount: advance, narration: `Order advance | ${voucherId}` },
+        ],
+      }).catch((err) => console.error('[BinManagement] Order advance journal failed (order still created fine):', err.message));
+    }
+
     return sendSuccess(res, order, `Order created. Voucher: ${voucherId}`, 201);
   } catch (err) { await trx.rollback(); return sendError(res, 500, 'Failed.'); }
 });

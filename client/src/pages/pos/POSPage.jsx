@@ -402,6 +402,7 @@ export default function POSPage() {
         Member_ID: a.Member_ID, Amount: a.balanceAmount, BonusAmount: a.bonusAmount,
       })),
       Voucher_Amount: adjustments.voucher,
+      Voucher_ID: voucherEntry.applied ? voucherEntry.voucherId : null,
       Old_Gold_Exchange_ID: oldGoldEntry.exchangeId,
       Old_Gold_Exchange_Amount: adjustments.oldGold,
       Old_Gold_Weight: oldGoldEntry.weight,
