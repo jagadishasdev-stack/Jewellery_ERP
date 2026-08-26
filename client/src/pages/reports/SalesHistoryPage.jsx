@@ -8,7 +8,6 @@ import {
   GoldOutlined, TeamOutlined, FileTextOutlined, ShopOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import api from '../../api/axios';
 import { reportsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
@@ -50,25 +49,25 @@ export default function SalesHistoryPage() {
 
   const { data: salesReport, isLoading: salesLoading } = useQuery({
     queryKey: ['sales-summary', fromDate, toDate],
-    queryFn: () => api.get('/reports/sales-summary', { params: { fromDate, toDate } }).then((r) => r.data.data),
+    queryFn: () => reportsApi.salesSummary({ fromDate, toDate }).then((r) => r.data.data),
     enabled: activeTab === 'sales',
   });
 
   const { data: inventoryReport, isLoading: inventoryLoading } = useQuery({
     queryKey: ['inventory-value'],
-    queryFn: () => api.get('/reports/inventory-value').then((r) => r.data.data),
+    queryFn: () => reportsApi.inventoryValue().then((r) => r.data.data),
     enabled: activeTab === 'inventory',
   });
 
   const { data: karigarReport, isLoading: karigarLoading } = useQuery({
     queryKey: ['karigar-summary'],
-    queryFn: () => api.get('/reports/karigar-summary').then((r) => r.data.data),
+    queryFn: () => reportsApi.karigarSummary().then((r) => r.data.data),
     enabled: activeTab === 'karigar',
   });
 
   const { data: gstReport } = useQuery({
     queryKey: ['gst-summary', fromDate, toDate],
-    queryFn: () => api.get('/reports/gst-summary', { params: { fromDate, toDate } }).then((r) => r.data.data),
+    queryFn: () => reportsApi.gstSummary({ fromDate, toDate }).then((r) => r.data.data),
     enabled: activeTab === 'gst',
   });
 

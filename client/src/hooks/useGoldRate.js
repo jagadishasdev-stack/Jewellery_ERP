@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useCartStore } from '../store/cartStore';
-import api from '../api/axios';
+import { goldRateApi } from '../api/modules';
 
 /**
  * useGoldRate — fetches THIS TENANT's gold rate.
@@ -12,7 +12,7 @@ export const useGoldRate = () => {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['gold-rate-tenant'],
-    queryFn: () => api.get('/gold-rate/live').then((r) => r.data.data),
+    queryFn: () => goldRateApi.getLive().then((r) => r.data.data),
     refetchInterval: 5 * 60 * 1000,
     staleTime: 4 * 60 * 1000,
   });

@@ -11,7 +11,7 @@ import {
   ShopOutlined, BranchesOutlined, RollbackOutlined, AppstoreOutlined, GoldOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import api from '../../api/axios';
+import { reportsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -57,27 +57,27 @@ export default function SalesReportsPage() {
 
   const { data: salesData, isLoading } = useQuery({
     queryKey: ['sales-full', fromDate, toDate],
-    queryFn: () => api.get('/reports/sales-summary', { params: { fromDate, toDate } }).then(r => r.data.data),
+    queryFn: () => reportsApi.salesSummary({ fromDate, toDate }).then(r => r.data.data),
   });
   const { data: itemSales } = useQuery({
     queryKey: ['item-sales', fromDate, toDate],
-    queryFn: () => api.get('/reports/item-wise-sales', { params: { fromDate, toDate } }).then(r => r.data.data || []),
+    queryFn: () => reportsApi.itemWiseSales({ fromDate, toDate }).then(r => r.data.data || []),
   });
   const { data: counterData } = useQuery({
     queryKey: ['counter-sales', fromDate, toDate],
-    queryFn: () => api.get('/reports/counter-summary', { params: { fromDate, toDate } }).then(r => r.data.data),
+    queryFn: () => reportsApi.counterSummary({ fromDate, toDate }).then(r => r.data.data),
   });
   const { data: branchData } = useQuery({
     queryKey: ['branch-sales', fromDate, toDate],
-    queryFn: () => api.get('/reports/branch-wise-sales', { params: { fromDate, toDate } }).then(r => r.data.data || []),
+    queryFn: () => reportsApi.branchWiseSales({ fromDate, toDate }).then(r => r.data.data || []),
   });
   const { data: returnsData } = useQuery({
     queryKey: ['sales-returns', fromDate, toDate],
-    queryFn: () => api.get('/reports/sales-returns', { params: { fromDate, toDate } }).then(r => r.data.data || []),
+    queryFn: () => reportsApi.salesReturns({ fromDate, toDate }).then(r => r.data.data || []),
   });
   const { data: metalSales } = useQuery({
     queryKey: ['sales-by-metal', fromDate, toDate],
-    queryFn: () => api.get('/reports/sales-by-metal', { params: { fromDate, toDate } }).then(r => r.data.data),
+    queryFn: () => reportsApi.salesByMetal({ fromDate, toDate }).then(r => r.data.data),
   });
 
   const s = salesData?.summary || {};

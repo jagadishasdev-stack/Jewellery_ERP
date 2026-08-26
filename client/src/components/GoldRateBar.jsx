@@ -10,7 +10,7 @@ import { ReloadOutlined, EditOutlined, RiseOutlined, FallOutlined, MinusOutlined
 import { useMutation } from '@tanstack/react-query';
 import { useGoldRate } from '../hooks/useGoldRate';
 import { useAuthStore } from '../store/authStore';
-import api from '../api/axios';
+import { goldRateApi } from '../api/modules';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;
@@ -127,7 +127,7 @@ export default function GoldRateBar() {
   ];
 
   const updateMutation = useMutation({
-    mutationFn: (data) => api.post('/gold-rate/set', data),
+    mutationFn: (data) => goldRateApi.setRate(data),
     onSuccess: () => {
       message.success('Gold rate updated & broadcasted to all displays!');
       setModalOpen(false);

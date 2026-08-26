@@ -8,8 +8,7 @@ import {
 } from 'antd';
 import { DownloadOutlined, SearchOutlined, TeamOutlined, DollarOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
-import { customersApi, salesApi } from '../../api/modules';
+import { customersApi, salesApi, reportsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -47,13 +46,13 @@ export default function CustomerReportsPage() {
 
   const { data: ledgerData, isLoading: ledgerLoading } = useQuery({
     queryKey: ['customer-ledger', selectedCustomer],
-    queryFn: () => api.get(`/reports/customer-ledger/${selectedCustomer}`).then(r => r.data.data),
+    queryFn: () => reportsApi.customerLedger(selectedCustomer).then(r => r.data.data),
     enabled: !!selectedCustomer,
   });
 
   const { data: outstandingData, isLoading: outLoading } = useQuery({
     queryKey: ['customer-outstanding'],
-    queryFn: () => api.get('/reports/customer-outstanding').then(r => r.data.data || []),
+    queryFn: () => reportsApi.customerOutstanding().then(r => r.data.data || []),
     enabled: activeTab === 'outstanding',
   });
 

@@ -19,7 +19,6 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { tenantApi, salesApi, ornamentsApi, reportsApi, savingsApi } from '../api/modules';
-import api from '../api/axios';
 import { useAuthStore } from '../store/authStore';
 import { useModules } from '../hooks/useModules';
 import { formatCurrency } from '../utils/calculations';
@@ -97,12 +96,12 @@ export default function DashboardPage() {
 
   const { data: monthlySales } = useQuery({
     queryKey: ['monthly-sales', monthStart, today],
-    queryFn: () => api.get('/reports/sales-summary', { params: { fromDate: monthStart, toDate: today } }).then(r => r.data.data),
+    queryFn: () => reportsApi.salesSummary({ fromDate: monthStart, toDate: today }).then(r => r.data.data),
   });
 
   const { data: inventory } = useQuery({
     queryKey: ['inventory-value'],
-    queryFn: () => api.get('/reports/inventory-value').then(r => r.data.data),
+    queryFn: () => reportsApi.inventoryValue().then(r => r.data.data),
     enabled: isEnabled('inventory'),
   });
 
@@ -120,13 +119,13 @@ export default function DashboardPage() {
 
   const { data: karigarData } = useQuery({
     queryKey: ['karigar-summary'],
-    queryFn: () => api.get('/reports/karigar-summary').then(r => r.data.data),
+    queryFn: () => reportsApi.karigarSummary().then(r => r.data.data),
     enabled: isEnabled('goldsmith') || isEnabled('manufacturing'),
   });
 
   const { data: counterToday } = useQuery({
     queryKey: ['counter-today', today],
-    queryFn: () => api.get('/reports/counter-summary', { params: { fromDate: today, toDate: today } }).then(r => r.data.data),
+    queryFn: () => reportsApi.counterSummary({ fromDate: today, toDate: today }).then(r => r.data.data),
     enabled: isEnabled('retail_sales'),
   });
 

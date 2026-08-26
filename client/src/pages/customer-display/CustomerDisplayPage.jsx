@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
-import api from '../../api/axios';
+import { displayApi, goldRateApi } from '../../api/modules';
 
 /**
  * Customer-facing display screen.
@@ -29,7 +29,7 @@ export default function CustomerDisplayPage() {
   // ── Load shop info and gold rate from API ────────────────────────────────────
   useEffect(() => {
     // Fetch display settings for shop name / messages
-    api.get('/display/settings').then(r => {
+    displayApi.getSettings().then(r => {
       const s = r.data.data;
       setShopInfo({
         name: s.Header_Message || 'Welcome',
@@ -40,7 +40,7 @@ export default function CustomerDisplayPage() {
     }).catch(() => {});
 
     // Fetch this tenant's gold rate
-    api.get('/gold-rate/live').then(r => {
+    goldRateApi.getLive().then(r => {
       setGoldRates(r.data.data);
     }).catch(() => {});
   }, []);

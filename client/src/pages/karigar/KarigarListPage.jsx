@@ -5,8 +5,7 @@ import {
 } from 'antd';
 import { PlusOutlined, UserOutlined, EditOutlined, StopOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { karigarApi, purchaseApi } from '../../api/modules';
-import api from '../../api/axios';
+import { karigarApi, purchaseApi, reportsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
@@ -324,7 +323,7 @@ function SupplierOutstandingTab() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['supplier-outstanding'],
-    queryFn: () => api.get('/reports/supplier-outstanding').then((r) => r.data.data || []),
+    queryFn: () => reportsApi.supplierOutstanding().then((r) => r.data.data || []),
   });
 
   const paySupplierMutation = useMutation({

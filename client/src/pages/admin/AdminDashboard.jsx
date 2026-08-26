@@ -16,7 +16,6 @@ import {
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import api from '../../api/axios';
 import { auditApi, reportsApi, savingsApi, tenantApi, salesApi } from '../../api/modules';
 import { useAuthStore } from '../../store/authStore';
 import { formatCurrency } from '../../utils/calculations';
@@ -55,14 +54,14 @@ export default function AdminDashboard() {
 
   // All data fetches
   const { data: auditSummary }  = useQuery({ queryKey: ['adm-audit'], queryFn: () => auditApi.getSummary().then(r => r.data.data), enabled: isAdmin, refetchInterval: 30000 });
-  const { data: salesData }     = useQuery({ queryKey: ['adm-sales', fromDate, toDate], queryFn: () => api.get('/reports/sales-summary', { params: { fromDate, toDate } }).then(r => r.data.data), enabled: isAdmin });
+  const { data: salesData }     = useQuery({ queryKey: ['adm-sales', fromDate, toDate], queryFn: () => reportsApi.salesSummary({ fromDate, toDate }).then(r => r.data.data), enabled: isAdmin });
   const { data: todaySales }    = useQuery({ queryKey: ['adm-today', today], queryFn: () => salesApi.dailyReport(today).then(r => r.data.data), enabled: isAdmin });
-  const { data: inventoryData } = useQuery({ queryKey: ['adm-inv'], queryFn: () => api.get('/reports/inventory-value').then(r => r.data.data), enabled: isAdmin });
+  const { data: inventoryData } = useQuery({ queryKey: ['adm-inv'], queryFn: () => reportsApi.inventoryValue().then(r => r.data.data), enabled: isAdmin });
   const { data: counterData }   = useQuery({ queryKey: ['adm-counter', fromDate, toDate], queryFn: () => reportsApi.counterSummary({ fromDate, toDate }).then(r => r.data.data), enabled: isAdmin });
   const { data: schemeData }    = useQuery({ queryKey: ['adm-scheme'], queryFn: () => savingsApi.getDashboard().then(r => r.data.data), enabled: isAdmin });
   const { data: tenantStats }   = useQuery({ queryKey: ['adm-tenant'], queryFn: () => tenantApi.getStats().then(r => r.data.data), enabled: isAdmin });
   const { data: activityData }  = useQuery({ queryKey: ['adm-activity', fromDate, toDate], queryFn: () => auditApi.getUserActivity({ fromDate, toDate }).then(r => r.data.data || []), enabled: isAdmin });
-  const { data: itemSales }     = useQuery({ queryKey: ['adm-items', fromDate, toDate], queryFn: () => api.get('/reports/item-wise-sales', { params: { fromDate, toDate } }).then(r => r.data.data || []), enabled: isAdmin });
+  const { data: itemSales }     = useQuery({ queryKey: ['adm-items', fromDate, toDate], queryFn: () => reportsApi.itemWiseSales({ fromDate, toDate }).then(r => r.data.data || []), enabled: isAdmin });
 
   if (!isAdmin) {
     return (

@@ -9,7 +9,7 @@ import {
 } from 'antd';
 import { DownloadOutlined, PrinterOutlined, BankOutlined, BookOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import api from '../../api/axios';
+import { reportsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import { message } from 'antd';
 import PageTour from '../../components/PageTour';
@@ -43,7 +43,7 @@ export default function FinancialReportsPage() {
 
   const { data: financialData, isLoading } = useQuery({
     queryKey: ['financial-reports', fromDate, toDate],
-    queryFn: () => api.get('/reports/financial', { params: { fromDate, toDate } }).then(r => r.data.data || {}),
+    queryFn: () => reportsApi.financial({ fromDate, toDate }).then(r => r.data.data || {}),
   });
 
   const cashBook = financialData?.cashBook || [];

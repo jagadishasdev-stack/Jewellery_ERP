@@ -8,8 +8,7 @@ import {
 } from 'antd';
 import { DownloadOutlined, GoldOutlined, WarningOutlined, RiseOutlined, FallOutlined, SwapOutlined, ApartmentOutlined, AppstoreOutlined, InboxOutlined, EyeInvisibleOutlined, ShopOutlined, StarOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import api from '../../api/axios';
-import { reportsApi } from '../../api/modules';
+import { reportsApi, floorsApi, ornamentsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import { message } from 'antd';
 import PageTour from '../../components/PageTour';
@@ -45,34 +44,34 @@ export default function InventoryReportsPage() {
 
   const { data: currentStock, isLoading: stockLoading } = useQuery({
     queryKey: ['inv-current', metalFilter],
-    queryFn: () => api.get('/reports/inventory-value', { params: metalFilter ? { metalType: metalFilter } : {} }).then(r => r.data.data),
+    queryFn: () => reportsApi.inventoryValue(metalFilter ? { metalType: metalFilter } : {}).then(r => r.data.data),
   });
   const { data: movementData } = useQuery({
     queryKey: ['inv-movement'],
-    queryFn: () => api.get('/reports/item-movement').then(r => r.data.data || []),
+    queryFn: () => reportsApi.itemMovement().then(r => r.data.data || []),
   });
   const { data: floorStock, isLoading: floorLoading } = useQuery({
     queryKey: ['inv-floor-stock'],
-    queryFn: () => api.get('/floors/stock', { params: { groupBy: 'floor' } }).then(r => r.data.data),
+    queryFn: () => floorsApi.getLiveStock({ groupBy: 'floor' }).then(r => r.data.data),
   });
   const { data: counterStock, isLoading: counterLoading } = useQuery({
     queryKey: ['inv-counter-stock'],
-    queryFn: () => api.get('/floors/stock', { params: { groupBy: 'counter' } }).then(r => r.data.data),
+    queryFn: () => floorsApi.getLiveStock({ groupBy: 'counter' }).then(r => r.data.data),
   });
   const { data: trayStock, isLoading: trayLoading } = useQuery({
     queryKey: ['inv-tray-stock'],
-    queryFn: () => api.get('/floors/stock', { params: { groupBy: 'tray' } }).then(r => r.data.data),
+    queryFn: () => floorsApi.getLiveStock({ groupBy: 'tray' }).then(r => r.data.data),
   });
   // Hidden stock details never surface in Official mode — only fetch once
   // Unofficial (Ctrl+F5) is active; the server enforces this too (403 otherwise).
   const { data: hiddenStock, isLoading: hiddenLoading } = useQuery({
     queryKey: ['inv-hidden-stock'],
-    queryFn: () => api.get('/floors/hidden-stock').then(r => r.data.data),
+    queryFn: () => floorsApi.getHiddenStock().then(r => r.data.data),
     enabled: isUnofficial,
   });
   const { data: visibilityComparison } = useQuery({
     queryKey: ['inv-visibility-comparison'],
-    queryFn: () => api.get('/floors/reports/visibility-comparison').then(r => r.data.data),
+    queryFn: () => floorsApi.getVisibilityComparison().then(r => r.data.data),
     enabled: isUnofficial,
   });
   // Catalog-hidden stock — a display-only flag (Show_In_Catalog), unrelated
@@ -81,14 +80,14 @@ export default function InventoryReportsPage() {
   // separate accounting book.
   const { data: catalogHiddenReport, isLoading: catalogHiddenLoading } = useQuery({
     queryKey: ['inv-catalog-hidden'],
-    queryFn: () => api.get('/reports/catalog-hidden-stock').then(r => r.data.data),
+    queryFn: () => reportsApi.catalogHiddenStock().then(r => r.data.data),
   });
   // Special Stock Isolation — a display/operational classification, always
   // visible regardless of Official/Unofficial mode (unlike the Hidden
   // Stock tab below, which is a genuinely different, mode-gated feature).
   const { data: stockClassification, isLoading: stockClassificationLoading } = useQuery({
     queryKey: ['inv-stock-classification'],
-    queryFn: () => api.get('/reports/stock-classification-summary').then(r => r.data.data),
+    queryFn: () => ornamentsApi.classificationSummary().then(r => r.data.data),
   });
   // "Which design is good" — real sell-through/velocity per design.
   const { data: designPerf, isLoading: designPerfLoading } = useQuery({

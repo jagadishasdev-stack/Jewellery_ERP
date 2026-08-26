@@ -11,7 +11,6 @@ import {
   RiseOutlined, TrophyOutlined, BarChartOutlined, EditOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import api from '../../api/axios';
 import { reportsApi, tenantApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
@@ -56,11 +55,11 @@ export default function ManagementReportsPage() {
 
   const { data: salesSummary } = useQuery({
     queryKey: ['mgmt-sales', fromDate, toDate],
-    queryFn: () => api.get('/reports/sales-summary', { params: { fromDate, toDate } }).then(r => r.data.data),
+    queryFn: () => reportsApi.salesSummary({ fromDate, toDate }).then(r => r.data.data),
   });
   const { data: inventory } = useQuery({
     queryKey: ['mgmt-inventory'],
-    queryFn: () => api.get('/reports/inventory-value').then(r => r.data.data),
+    queryFn: () => reportsApi.inventoryValue().then(r => r.data.data),
   });
   const { data: counterData } = useQuery({
     queryKey: ['mgmt-counter', fromDate, toDate],
@@ -69,7 +68,7 @@ export default function ManagementReportsPage() {
   });
   const { data: branchData } = useQuery({
     queryKey: ['mgmt-branch', fromDate, toDate],
-    queryFn: () => api.get('/reports/branch-wise-sales', { params: { fromDate, toDate } }).then(r => r.data.data || []),
+    queryFn: () => reportsApi.branchWiseSales({ fromDate, toDate }).then(r => r.data.data || []),
     enabled: activeTab === 'branch',
   });
   // Was hardcoded ("Mock targets for now — in production these come from

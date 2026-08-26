@@ -20,9 +20,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
-  ornamentsApi, masterApi, karigarApi, masterExtApi, catalogApi,
+  ornamentsApi, masterApi, karigarApi, masterExtApi, catalogApi, reportsApi,
 } from '../../api/modules';
-import api from '../../api/axios';
 import { formatCurrency, formatWeight, calculateOrnamentPrice } from '../../utils/calculations';
 import { useGoldRate } from '../../hooks/useGoldRate';
 import { printBarcodeLabel } from '../../utils/thermalReceipt';
@@ -389,7 +388,7 @@ export default function StockManagementPage() {
 
   const { data: inventoryReport } = useQuery({
     queryKey: ['inventory-value'],
-    queryFn: () => api.get('/reports/inventory-value').then(r => r.data.data),
+    queryFn: () => reportsApi.inventoryValue().then(r => r.data.data),
   });
 
   // ── Batch-fetch images for every row on the current page in ONE request,
