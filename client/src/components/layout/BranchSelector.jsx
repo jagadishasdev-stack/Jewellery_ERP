@@ -6,13 +6,16 @@
  */
 import React from 'react';
 import { Select, Tag, Space } from 'antd';
-import { ApartmentOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, BarChartOutlined } from '@ant-design/icons';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useBranch } from '../../contexts/BranchContext';
 
 const { Option } = Select;
 
 export default function BranchSelector() {
   const { selectedBranchId, switchBranch, allBranches, branches, loaded, isAllBranches, currentBranch, ALL_BRANCHES } = useBranch();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   // Nothing to select yet (still loading, or user has no branch access at
   // all — a genuinely branch-less tenant, or access not yet granted).
@@ -45,9 +48,25 @@ export default function BranchSelector() {
         {allBranches && <Option value={ALL_BRANCHES}>🏢 All Branches</Option>}
       </Select>
       {isAllBranches && (
-        <Tag color="purple" style={{ margin: 0, fontWeight: 700, fontSize: 10 }}>
-          CONSOLIDATED
-        </Tag>
+        <>
+          <Tag color="purple" style={{ margin: 0, fontWeight: 700, fontSize: 10 }}>
+            CONSOLIDATED
+          </Tag>
+          {/* Direct route to the consolidated KPIs/charts/comparison view —
+              this IS "select All Branches, see everything on one screen"
+              made discoverable from wherever the selector itself lives,
+              not just buried in the Reports menu. */}
+          {location.pathname !== '/reports/branch-performance' && (
+            <Tag
+              icon={<BarChartOutlined />}
+              color="gold"
+              style={{ margin: 0, cursor: 'pointer', fontSize: 10 }}
+              onClick={() => navigate('/reports/branch-performance')}
+            >
+              View Analytics
+            </Tag>
+          )}
+        </>
       )}
     </Space>
   );

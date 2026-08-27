@@ -12,12 +12,35 @@ import {
   ApartmentOutlined, TrophyOutlined, GoldOutlined, ShoppingOutlined,
   RiseOutlined, FallOutlined,
 } from '@ant-design/icons';
+import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  PieChart, Pie, Cell,
+} from 'recharts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { reportsApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { useBranch } from '../../contexts/BranchContext';
 import { useSocket } from '../../hooks/useSocket';
 import PageTour from '../../components/PageTour';
+
+// A branch's own gold-tone identity color, reused consistently across every
+// chart on this page so "HSR Layout" is always the same slice/bar color.
+const PALETTE = ['#B8860B', '#1890ff', '#52c41a', '#722ed1', '#fa8c16', '#eb2f96', '#13c2c2', '#faad14'];
+const colorFor = (i) => PALETTE[i % PALETTE.length];
+
+const chartTooltipStyle = { borderRadius: 8, border: '1px solid #f0f0f0', boxShadow: '0 2px 8px rgba(0,0,0,.1)', fontSize: 12 };
+
+// formatCurrency() always renders full paise precision ("₹1,50,000.00") —
+// fine for a table cell, too wide for a Y-axis tick label. This is a
+// separate, compact-only formatter for chart axes, not a formatCurrency
+// option (it never took one).
+const compactCurrency = (v) => {
+  const num = parseFloat(v) || 0;
+  if (Math.abs(num) >= 10000000) return `₹${(num / 10000000).toFixed(1)}Cr`;
+  if (Math.abs(num) >= 100000) return `₹${(num / 100000).toFixed(1)}L`;
+  if (Math.abs(num) >= 1000) return `₹${(num / 1000).toFixed(0)}K`;
+  return `₹${num.toFixed(0)}`;
+};
 
 const { Title, Text } = Typography;
 
@@ -53,6 +76,13 @@ export default function BranchPerformancePage() {
 
   const rows = data?.branches || [];
   const combined = data?.combined || {};
+
+  // Short label for chart axes/legends — the full Branch_Name can be long
+  // ("Dhanalakshmi Jewellers - HSR Layout"), which crowds a bar chart's
+  // x-axis; the table above already shows the full name.
+  const shortName = (name) => (name || '').split(/[-–]/).pop().trim() || name;
+  const chartRows = rows.map((r, i) => ({ ...r, shortName: shortName(r.Branch_Name), color: colorFor(i) }));
+  const stockPieData = chartRows.filter((r) => r.stock_value > 0).map((r) => ({ name: r.shortName, value: r.stock_value, color: r.color }));
 
   const columns = [
     {
@@ -119,6 +149,38 @@ export default function BranchPerformancePage() {
             </Card>
           </Col>
         ))}
+      </Row>
+
+      {/* Charts — visual branch-vs-branch comparison, same numbers as the
+          table/rankings below just made instantly scannable at a glance. */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={24} lg={14}>
+          <Card size="small" title="Sales by Branch — Today vs This Month" loading={isLoading} style={{ borderRadius: 8, border: 'none', boxShadow: '0 1px 4px rgba(0,0,0,.07)' }}>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={chartRows} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                <XAxis dataKey="shortName" tick={{ fontSize: 11 }} interval={0} angle={chartRows.length > 4 ? -20 : 0} textAnchor={chartRows.length > 4 ? 'end' : 'middle'} height={chartRows.length > 4 ? 50 : 30} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={compactCurrency} width={60} />
+                <Tooltip contentStyle={chartTooltipStyle} formatter={(v) => formatCurrency(v)} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="today_sales" name="Today's Sales" fill="#52c41a" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="month_sales" name="Monthly Sales" fill="#1890ff" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+        </Col>
+        <Col xs={24} lg={10}>
+          <Card size="small" title="Stock Value Share by Branch" loading={isLoading} style={{ borderRadius: 8, border: 'none', boxShadow: '0 1px 4px rgba(0,0,0,.07)' }}>
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie data={stockPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
+                  {stockPieData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                </Pie>
+                <Tooltip contentStyle={chartTooltipStyle} formatter={(v) => formatCurrency(v)} />
+              </PieChart>
+            </ResponsiveContainer>
+          </Card>
+        </Col>
       </Row>
 
       {/* Branch comparison table — spec §10/38 */}

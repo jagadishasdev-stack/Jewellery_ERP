@@ -12,6 +12,7 @@
  */
 const db = require('../db/knex');
 const { modeVal } = require('../utils/dataModeFilter');
+const { withBranch } = require('../utils/branchAccess');
 
 // Metal is not a stored column anywhere — derive it from the item type's own
 // attributes. Item types in this schema are already named/flagged distinctly
@@ -56,6 +57,7 @@ async function queryOpening({ tenantId, req, fromDate, metal }) {
   const qb = db('tbl_ornament_master as o');
   baseOrnamentJoin(qb);
   applyOrnamentModeScope(qb, req, 'o');
+  withBranch(qb, req, 'o.Branch_ID');
   qb.where('o.Tenant_ID', tenantId)
     .where('o.Is_Active', true)
     .where('o.Created_Date', '<', fromDate)
@@ -89,6 +91,7 @@ async function queryAdd({ tenantId, req, fromDate, toDate, metal }) {
   const qb = db('tbl_ornament_master as o');
   baseOrnamentJoin(qb);
   applyOrnamentModeScope(qb, req, 'o');
+  withBranch(qb, req, 'o.Branch_ID');
   qb.where('o.Tenant_ID', tenantId)
     .whereBetween('o.Created_Date', [fromDate, toDate])
     .groupBy('it.Type_ID')
@@ -109,8 +112,9 @@ async function querySold({ tenantId, req, fromDate, toDate, metal }) {
     .where('sh.Tenant_ID', tenantId)
     .where('o.Tenant_ID', tenantId)
     .where('sh.Data_Mode', modeVal(req))
-    .whereBetween('sh.Sale_Date', [fromDate, toDate])
-    .groupBy('it.Type_ID')
+    .whereBetween('sh.Sale_Date', [fromDate, toDate]);
+  withBranch(qb, req, 'o.Branch_ID');
+  qb.groupBy('it.Type_ID')
     .select('it.Type_Name as typeName')
     .select(db.raw(`${METAL_CASE} as metal`))
     .count('sd.Detail_ID as pieces')
@@ -129,8 +133,9 @@ async function queryApprovalIssue({ tenantId, req, fromDate, toDate, metal }) {
     .where('o.Tenant_ID', tenantId)
     .where('aih.Data_Mode', modeVal(req))
     .where('aih.Status', '!=', 'Cancelled')
-    .whereBetween('aih.Issue_Date', [fromDate, toDate])
-    .groupBy('it.Type_ID')
+    .whereBetween('aih.Issue_Date', [fromDate, toDate]);
+  withBranch(qb, req, 'o.Branch_ID');
+  qb.groupBy('it.Type_ID')
     .select('it.Type_Name as typeName')
     .select(db.raw(`${METAL_CASE} as metal`))
     .count('aii.Issue_Item_ID as pieces')
@@ -149,8 +154,9 @@ async function queryApprovalReceive({ tenantId, req, fromDate, toDate, metal }) 
     .where('o.Tenant_ID', tenantId)
     .where('aih.Data_Mode', modeVal(req))
     .where('aii.Item_Status', 'Received')
-    .whereBetween('aii.Received_Date', [fromDate, toDate])
-    .groupBy('it.Type_ID')
+    .whereBetween('aii.Received_Date', [fromDate, toDate]);
+  withBranch(qb, req, 'o.Branch_ID');
+  qb.groupBy('it.Type_ID')
     .select('it.Type_Name as typeName')
     .select(db.raw(`${METAL_CASE} as metal`))
     .count('aii.Issue_Item_ID as pieces')
@@ -167,6 +173,7 @@ async function queryTags({ tenantId, req, metal }) {
   const qb = db('tbl_ornament_master as o');
   baseOrnamentJoin(qb);
   applyOrnamentModeScope(qb, req, 'o');
+  withBranch(qb, req, 'o.Branch_ID');
   qb.where('o.Tenant_ID', tenantId)
     .groupBy('it.Type_ID')
     .select('it.Type_Name as typeName')

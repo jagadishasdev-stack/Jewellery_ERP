@@ -10,21 +10,24 @@ const dayjs = require('dayjs');
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 // ─── GET /api/reports/sales-summary ───────────────────────────────────────────
-router.get('/sales-summary', authenticate, async (req, res) => {
-  const { fromDate, toDate, branchId } = req.query;
+router.get('/sales-summary', authenticate, requireValidBranch, async (req, res) => {
+  const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'fromDate and toDate required.');
 
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
 
-    let qb = excludeHiddenStockSales(db('tbl_sales_header')
+    // Was a manual, unvalidated ?branchId= query param — replaced with the
+    // standard X-Branch-ID header + requireValidBranch/withBranch mechanism
+    // every other branch-aware report uses (found via audit: the old param
+    // had no access check, so a user could pass a branch they weren't
+    // actually granted and get its data back).
+    let qb = excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId)
       .where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('Payment_Status', 'Cancelled'), req);
-
-    if (branchId) qb = qb.where('Branch_ID', branchId);
+      .whereNot('Payment_Status', 'Cancelled'), req), req);
 
     const summary = await qb.select(
       db.raw('COUNT(*) as total_bills'),
@@ -37,27 +40,27 @@ router.get('/sales-summary', authenticate, async (req, res) => {
       db.raw('SUM("Old_Gold_Exchange_Amount") as total_old_gold')
     ).first();
 
-    const byPaymentMode = await excludeHiddenStockSales(db('tbl_sales_payments as sp')
+    const byPaymentMode = await excludeHiddenStockSales(withBranch(db('tbl_sales_payments as sp')
       .join('tbl_sales_header as sh', 'sp.Sale_ID', 'sh.Sale_ID')
       .where('sh.Tenant_ID', tenantId)
       .where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .groupBy('sp.Payment_Mode')
       .select('sp.Payment_Mode', db.raw('COUNT(DISTINCT "sp"."Sale_ID") as count'), db.raw('SUM("sp"."Amount") as amount'))
       .orderBy('amount', 'desc');
 
-    const bySaleType = await excludeHiddenStockSales(db('tbl_sales_header')
+    const bySaleType = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('Payment_Status', 'Cancelled'), req)
+      .whereNot('Payment_Status', 'Cancelled'), req), req)
       .groupBy('Sale_Type')
       .select('Sale_Type', db.raw('COUNT(*) as count'), db.raw('SUM("Net_Payable_Amount") as amount'));
 
-    const dailyBreakdown = await excludeHiddenStockSales(db('tbl_sales_header')
+    const dailyBreakdown = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('Payment_Status', 'Cancelled'), req)
+      .whereNot('Payment_Status', 'Cancelled'), req), req)
       .groupByRaw(`DATE("Sale_Date")`)
       .select(db.raw(`DATE("Sale_Date") as date`), db.raw('COUNT(*) as bills'), db.raw('SUM("Net_Payable_Amount") as revenue'), db.raw('SUM("GST_Amount") as gst'))
       .orderBy('date');
@@ -76,19 +79,19 @@ router.get('/sales-summary', authenticate, async (req, res) => {
 // Joins each sale line back to its ornament for Metal_Type; a line with no
 // Ornament_ID (a manual/adjustment line) or an ornament since deleted
 // falls under 'Unknown' rather than being silently dropped.
-router.get('/sales-by-metal', authenticate, async (req, res) => {
+router.get('/sales-by-metal', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'fromDate and toDate required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
 
-    const byMetal = await excludeHiddenStockSales(db('tbl_sales_details as sd')
+    const byMetal = await excludeHiddenStockSales(withBranch(db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .leftJoin('tbl_ornament_master as o', 'sd.Ornament_ID', 'o.Ornament_ID')
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw('DATE("sh"."Sale_Date") BETWEEN ? AND ?', [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .groupBy(db.raw(`COALESCE("o"."Metal_Type", 'Unknown')`))
       .select(
         db.raw(`COALESCE("o"."Metal_Type", 'Unknown') as "Metal_Type"`),
@@ -98,11 +101,11 @@ router.get('/sales-by-metal', authenticate, async (req, res) => {
       )
       .orderBy('total_revenue', 'desc');
 
-    const [overall] = await excludeHiddenStockSales(db('tbl_sales_details as sd')
+    const [overall] = await excludeHiddenStockSales(withBranch(db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw('DATE("sh"."Sale_Date") BETWEEN ? AND ?', [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .select(db.raw('COUNT(*) as pieces_sold'), db.raw('SUM("sd"."Gross_Weight") as total_weight'), db.raw('SUM("sd"."Total_Line_Price") as total_revenue'));
 
     return sendSuccess(res, { fromDate, toDate, overall, byMetal });
@@ -116,31 +119,31 @@ router.get('/sales-by-metal', authenticate, async (req, res) => {
 // Diamond) as its own report. byMetal is always returned unfiltered
 // (regardless of ?metalType) so the segmented totals across all four are
 // visible at a glance even while drilled into one.
-router.get('/inventory-value', authenticate, async (req, res) => {
+router.get('/inventory-value', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const { metalType } = req.query;
 
-    let byTypeQb = db('tbl_ornament_master as o')
+    let byTypeQb = withBranch(db('tbl_ornament_master as o')
       .join('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
       .where('o.Tenant_ID', tenantId)
       .where('o.Is_Active', true)
-      .where('o.Is_Sold', false)
+      .where('o.Is_Sold', false), req, 'o.Branch_ID')
       .groupBy('t.Type_Name', 't.Type_Code')
       .select('t.Type_Name', 't.Type_Code', db.raw('COUNT(*) as count'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'))
       .orderBy('total_mrp', 'desc');
     if (metalType) byTypeQb = byTypeQb.where('o.Metal_Type', metalType);
     const byType = await applyStockVisibility(byTypeQb, req, 'o');
 
-    let byMetalQb = db('tbl_ornament_master as o')
-      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).where('o.Is_Sold', false)
+    let byMetalQb = withBranch(db('tbl_ornament_master as o')
+      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).where('o.Is_Sold', false), req, 'o.Branch_ID')
       .groupBy('o.Metal_Type')
       .select('o.Metal_Type', db.raw('COUNT(*) as count'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'))
       .orderBy('total_mrp', 'desc');
     const byMetal = await applyStockVisibility(byMetalQb, req, 'o');
 
-    let overallQb = db('tbl_ornament_master')
-      .where('Tenant_ID', tenantId).where('Is_Active', true).where('Is_Sold', false)
+    let overallQb = withBranch(db('tbl_ornament_master')
+      .where('Tenant_ID', tenantId).where('Is_Active', true).where('Is_Sold', false), req)
       .select(db.raw('COUNT(*) as total_pieces'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'));
     if (metalType) overallQb = overallQb.where('Metal_Type', metalType);
     const overall = await applyStockVisibility(overallQb, req).first();
@@ -152,14 +155,14 @@ router.get('/inventory-value', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/karigar-summary ─────────────────────────────────────────
-router.get('/karigar-summary', authenticate, async (req, res) => {
+router.get('/karigar-summary', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const summary = await db('tbl_issue_to_karigar as i')
+    const summary = await withBranch(db('tbl_issue_to_karigar as i')
       .join('tbl_vendor_master as v', 'i.Karigar_ID', 'v.Vendor_ID')
       .where('i.Tenant_ID', tenantId)
-      .where('i.Data_Mode', dm)
+      .where('i.Data_Mode', dm), req, 'i.Branch_ID')
       .groupBy('v.Vendor_Name', 'v.Vendor_Code', 'i.Status')
       .select('v.Vendor_Name', 'v.Vendor_Code', 'i.Status', db.raw('COUNT(*) as issues'), db.raw('SUM("Gold_Weight_Issued") as total_issued'), db.raw('SUM("Returned_Weight") as total_returned'), db.raw('SUM("Gold_Weight_Issued" - "Returned_Weight") as pending_weight'))
       .orderBy('v.Vendor_Name');
@@ -170,14 +173,14 @@ router.get('/karigar-summary', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/customer-ledger/:id ─────────────────────────────────────
-router.get('/customer-ledger/:id', authenticate, async (req, res) => {
+router.get('/customer-ledger/:id', authenticate, requireValidBranch, async (req, res) => {
   try {
     const dm = modeVal(req);
-    const sales = await excludeHiddenStockSales(db('tbl_sales_header as s')
+    const sales = await excludeHiddenStockSales(withBranch(db('tbl_sales_header as s')
       .leftJoin('tbl_sales_details as d', 's.Sale_ID', 'd.Sale_ID')
       .where('s.Customer_ID', req.params.id)
       .where('s.Tenant_ID', req.user.tenantId)
-      .where('s.Data_Mode', dm), req, 's')
+      .where('s.Data_Mode', dm), req, 's.Branch_ID'), req, 's')
       .orderBy('s.Sale_Date', 'desc')
       .select('s.Sale_ID', 's.Invoice_Number', 's.Sale_Date', 's.Net_Payable_Amount', 's.Amount_Paid', 's.Balance_Amount', 's.Payment_Mode', 's.Payment_Status', db.raw('COUNT(d."Detail_ID") as item_count'), db.raw('SUM(d."Gross_Weight") as total_weight'))
       .groupBy('s.Sale_ID', 's.Invoice_Number', 's.Sale_Date', 's.Net_Payable_Amount', 's.Amount_Paid', 's.Balance_Amount', 's.Payment_Mode', 's.Payment_Status');
@@ -194,16 +197,16 @@ router.get('/customer-ledger/:id', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/counter-summary ────────────────────────────────────────
-router.get('/counter-summary', authenticate, async (req, res) => {
+router.get('/counter-summary', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const counterStats = await excludeHiddenStockSales(db('tbl_sales_header')
+    const counterStats = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('Payment_Status', 'Cancelled'), req)
+      .whereNot('Payment_Status', 'Cancelled'), req), req)
       .groupByRaw('"Counter_ID", "Counter_Name", "Operator_Name"')
       .select(
         db.raw('COALESCE("Counter_Name", \'Walk-in\') AS counter'),
@@ -494,17 +497,17 @@ router.get('/gstr3b', authenticate, requireValidBranch, async (req, res) => {
 });
 
 // ─── GET /api/reports/item-wise-sales ─────────────────────────────────────────
-router.get('/item-wise-sales', authenticate, async (req, res) => {
+router.get('/item-wise-sales', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, classification } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    let qb = db('tbl_sales_details as sd')
+    let qb = withBranch(db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled');
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID');
     // Optional operational filter (Special Stock spec, section 19) — this
     // narrows which rows are SHOWN, nothing more. It joins the ornament's
     // CURRENT Stock_Classification (a display tag that can be changed
@@ -527,33 +530,38 @@ router.get('/item-wise-sales', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/sales-returns ───────────────────────────────────────────
-router.get('/sales-returns', authenticate, async (req, res) => {
+router.get('/sales-returns', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const data = await excludeHiddenStockSales(db('tbl_sales_header')
+    const data = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .where('Payment_Status', 'Cancelled')
-      .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate]), req)
+      .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate]), req), req)
       .orderBy('Sale_Date', 'desc');
     return sendSuccess(res, data);
   } catch (err) { return sendError(res, 500, 'Failed.'); }
 });
 
 // ─── GET /api/reports/branch-wise-sales ───────────────────────────────────────
-router.get('/branch-wise-sales', authenticate, async (req, res) => {
+// This report's own purpose is comparing branches side by side, so unlike
+// most reports here it's meant to keep showing every branch's row when
+// "All Branches" is selected — requireValidBranch/withBranch already do
+// exactly that (no-op on 'ALL', and a restricted-access user gets 403 on
+// 'ALL' before reaching this handler at all, same as everywhere else).
+router.get('/branch-wise-sales', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const data = await excludeHiddenStockSales(db('tbl_sales_header as s')
+    const data = await excludeHiddenStockSales(withBranch(db('tbl_sales_header as s')
       .leftJoin('tbl_branch_master as b', 's.Branch_ID', 'b.Branch_ID')
       .where('s.Tenant_ID', tenantId).where('s.Data_Mode', dm)
       .whereRaw(`DATE("s"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('s.Payment_Status', 'Cancelled'), req, 's')
+      .whereNot('s.Payment_Status', 'Cancelled'), req, 's.Branch_ID'), req, 's')
       .groupByRaw('"s"."Branch_ID", COALESCE("b"."Branch_Name", \'Main Branch\')')
       .select(db.raw('COALESCE("b"."Branch_Name", \'Main Branch\') as branch_name'), db.raw('COUNT(*) as total_bills'), db.raw('SUM("s"."Net_Payable_Amount") as total_revenue'), db.raw('SUM("s"."GST_Amount") as total_gst'), db.raw('SUM("s"."Amount_Paid") as total_collected'))
       .orderBy('total_revenue', 'desc');
@@ -562,27 +570,27 @@ router.get('/branch-wise-sales', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/item-movement ───────────────────────────────────────────
-router.get('/item-movement', authenticate, async (req, res) => {
+router.get('/item-movement', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
     const { metalType } = req.query;
     const thirtyDaysAgo = dayjs().subtract(30, 'day').format('YYYY-MM-DD'); // local (IST) day, not toISOString()'s UTC one
 
-    let unsoldQb = db('tbl_ornament_master as o')
+    let unsoldQb = withBranch(db('tbl_ornament_master as o')
       .leftJoin('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
       .leftJoin('tbl_purity_master as p', 'o.Purity_ID', 'p.Purity_ID')
       .where('o.Tenant_ID', tenantId)
-      .where('o.Is_Active', true).where('o.Is_Sold', false)
+      .where('o.Is_Active', true).where('o.Is_Sold', false), req, 'o.Branch_ID')
       .select('o.Ornament_ID', 'o.Article_Number', 'o.Metal_Type', db.raw('COALESCE("t"."Type_Name", \'Unknown\') as "Type_Name"'), db.raw('COALESCE("p"."Purity_Code", \'-\') as "Purity_Code"'), 'o.Gross_Weight', 'o.Total_Price', db.raw(`ROUND(EXTRACT(EPOCH FROM (NOW() - "o"."Created_Date")) / 86400) as days_in_stock`), db.raw('0 as sold_last_30_days'));
     if (metalType) unsoldQb = unsoldQb.where('o.Metal_Type', metalType);
     const unsold = await applyStockVisibility(unsoldQb, req, 'o');
 
-    const recentSales = await excludeHiddenStockSales(db('tbl_sales_details as sd')
+    const recentSales = await excludeHiddenStockSales(withBranch(db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") >= ?`, [thirtyDaysAgo])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .groupBy('sd.Item_Type_Name')
       .select('sd.Item_Type_Name', db.raw('COUNT(*) as sold_count'));
 
@@ -605,7 +613,7 @@ router.get('/item-movement', authenticate, async (req, res) => {
 // this reuses the same underlying tables for) — same response shape the
 // frontend already expects, so no frontend change was needed for this to
 // become real.
-router.get('/financial', authenticate, async (req, res) => {
+router.get('/financial', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
@@ -618,10 +626,13 @@ router.get('/financial', authenticate, async (req, res) => {
     // Every journal entry for this tenant, ever — cheap enough at this
     // scale, and needed both for the period's books and for balances
     // computed as-of the period end (which include everything up to
-    // then, not just entries strictly inside the date range).
-    const allEntries = await db('tbl_accounting_entries as e')
+    // then, not just entries strictly inside the date range). Branch_ID
+    // lives on the journal (tbl_accounting_journal), not the entry line,
+    // so withBranch filters via the join, same as every other route here
+    // that reaches accounting entries through their journal.
+    const allEntries = await withBranch(db('tbl_accounting_entries as e')
       .join('tbl_accounting_journal as j', 'e.Journal_ID', 'j.Journal_ID')
-      .where({ 'e.Tenant_ID': tenantId })
+      .where({ 'e.Tenant_ID': tenantId }), req, 'j.Branch_ID')
       .select('e.Account_ID', 'e.Entry_Type', 'e.Amount', 'e.Narration', 'j.Journal_Number', 'j.Entry_Date', 'j.Source_Type', 'j.Reference');
 
     const inWindow = allEntries.filter((e) => {
@@ -715,24 +726,24 @@ router.get('/financial', authenticate, async (req, res) => {
 
     // ── P&L — Sales/GST/Discounts still come from the sales header (already
     // accurate); Operating Expenses is now REAL (was hardcoded 0) ──────────
-    const [salesTotals] = await excludeHiddenStockSales(db('tbl_sales_header')
+    const [salesTotals] = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('Payment_Status', 'Cancelled'), req)
+      .whereNot('Payment_Status', 'Cancelled'), req), req)
       .select(db.raw('SUM("Net_Payable_Amount") as total_sales'), db.raw('SUM("GST_Amount") as total_gst'), db.raw('SUM("Discount_Amount") as total_discounts'));
-    const [purchaseTotals] = await db('tbl_purchase_header')
+    const [purchaseTotals] = await withBranch(db('tbl_purchase_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
-      .whereRaw(`DATE("Purchase_Date") BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereRaw(`DATE("Purchase_Date") BETWEEN ? AND ?`, [fromDate, toDate]), req)
       .select(db.raw('SUM("Total_Amount") as total_purchases')).catch(() => [{ total_purchases: 0 }]);
     const ts = salesTotals || {}; const tp = purchaseTotals || {};
 
     // Was hardcoded to 0 (found via audit) — real making-charge total,
     // same date range/exclusions as the sales totals above.
-    const [makingTotals] = await excludeHiddenStockSales(db('tbl_sales_details as sd')
+    const [makingTotals] = await excludeHiddenStockSales(withBranch(db('tbl_sales_details as sd')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .select(db.raw('SUM("sd"."Making_Charge_Applied") as total_making'));
     const totalMaking = parseFloat(makingTotals?.total_making || 0);
 
@@ -749,7 +760,7 @@ router.get('/financial', authenticate, async (req, res) => {
 
     // ── Balance Sheet — every figure below is now a REAL ledger balance,
     // not a hardcoded 0 or a raw-table approximation ────────────────────────
-    let stockValQb = db('tbl_ornament_master').where({ Tenant_ID: tenantId, Is_Sold: false, Is_Active: true }).select(db.raw('SUM("Total_Price") as mrp'));
+    let stockValQb = withBranch(db('tbl_ornament_master').where({ Tenant_ID: tenantId, Is_Sold: false, Is_Active: true }), req).select(db.raw('SUM("Total_Price") as mrp'));
     const [stockVal] = await applyStockVisibility(stockValQb, req);
 
     const cash = balanceAsOf(upToWindowEnd, ['Cash Account']);
@@ -841,19 +852,19 @@ router.get('/supplier-outstanding', authenticate, requireValidBranch, async (req
 });
 
 // ─── GET /api/reports/scheme-adjustments ─────────────────────────────────────
-router.get('/scheme-adjustments', authenticate, async (req, res) => {
+router.get('/scheme-adjustments', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const sales = await excludeHiddenStockSales(db('tbl_sales_header')
+    const sales = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
       .where(function () {
         this.where(db.raw('"Scheme_Adjustment_Amount" > 0')).orWhere(db.raw('"Bonus_Adjustment_Amount" > 0'));
       })
-      .whereNot('Payment_Status', 'Cancelled'), req)
+      .whereNot('Payment_Status', 'Cancelled'), req), req)
       .orderBy('Sale_Date', 'desc');
 
     const invoiceNumbers = sales.map(s => s.Invoice_Number);
@@ -874,17 +885,17 @@ router.get('/scheme-adjustments', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/old-gold-adjustments ───────────────────────────────────
-router.get('/old-gold-adjustments', authenticate, async (req, res) => {
+router.get('/old-gold-adjustments', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const data = await excludeHiddenStockSales(db('tbl_old_gold_exchange as oge')
+    const data = await excludeHiddenStockSales(withBranch(db('tbl_old_gold_exchange as oge')
       .join('tbl_sales_header as sh', 'oge.Sale_ID', 'sh.Sale_ID')
       .where('oge.Tenant_ID', tenantId).where('oge.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh')
       .select('oge.*', 'sh.Invoice_Number', 'sh.Customer_Name', 'sh.Customer_Mobile', 'sh.Sale_Date', 'sh.Net_Payable_Amount')
       .orderBy('sh.Sale_Date', 'desc');
     const totalValue = data.reduce((s, r) => s + parseFloat(r.Used_Amount || 0), 0);
@@ -895,13 +906,13 @@ router.get('/old-gold-adjustments', authenticate, async (req, res) => {
 // ─── GET /api/reports/combined-adjustments ───────────────────────────────────
 // Invoice / Old Gold / Scheme / Bonus / Final Payable per sale, per the spec's
 // required calculation sequence.
-router.get('/combined-adjustments', authenticate, async (req, res) => {
+router.get('/combined-adjustments', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const items = await excludeHiddenStockSales(db('tbl_sales_header')
+    const items = await excludeHiddenStockSales(withBranch(db('tbl_sales_header')
       .where('Tenant_ID', tenantId).where('Data_Mode', dm)
       .whereRaw(`DATE("Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
       .whereNot('Payment_Status', 'Cancelled')
@@ -909,7 +920,7 @@ router.get('/combined-adjustments', authenticate, async (req, res) => {
         this.where(db.raw('"Old_Gold_Exchange_Amount" > 0'))
           .orWhere(db.raw('"Scheme_Adjustment_Amount" > 0'))
           .orWhere(db.raw('"Bonus_Adjustment_Amount" > 0'));
-      }), req)
+      }), req), req)
       .select('Sale_ID', 'Invoice_Number', 'Sale_Date', 'Customer_Name', 'Customer_Mobile',
         'Subtotal_Amount', 'GST_Amount', 'Old_Gold_Exchange_Amount', 'Scheme_Adjustment_Amount',
         'Bonus_Adjustment_Amount', 'Voucher_Amount', 'Net_Payable_Amount', 'Amount_Paid', 'Balance_Amount', 'Payment_Status')
@@ -928,15 +939,15 @@ router.get('/combined-adjustments', authenticate, async (req, res) => {
 // ─── GET /api/reports/approval-pending ────────────────────────────────────────
 // One row per still-open voucher (Pending/Partial), tagged + non-tagged
 // merged, with the pending-only item count/weight/value for that voucher.
-router.get('/approval-pending', authenticate, async (req, res) => {
+router.get('/approval-pending', authenticate, requireValidBranch, async (req, res) => {
   const { partyId, fromDate, toDate } = req.query;
   try {
     const tenantId = req.user.tenantId;
 
-    let taggedQb = db('tbl_approval_issue_header as h')
+    let taggedQb = withBranch(db('tbl_approval_issue_header as h')
       .join('tbl_approval_issue_items as i', 'i.Issue_ID', 'h.Issue_ID')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
-      .where('h.Tenant_ID', tenantId).whereIn('h.Status', ['Pending', 'Partial'])
+      .where('h.Tenant_ID', tenantId).whereIn('h.Status', ['Pending', 'Partial']), req, 'h.Branch_ID')
       .groupBy('h.Issue_ID', 'h.Voucher_Number', 'h.Issue_Date', 'h.Status', 'p.Party_Name', 'p.Mobile')
       .select('h.Issue_ID', 'h.Voucher_Number', 'h.Issue_Date', 'h.Status', 'p.Party_Name', 'p.Mobile',
         db.raw(`count(*) filter (where "i"."Item_Status" = 'Pending') as pending_items`),
@@ -946,10 +957,10 @@ router.get('/approval-pending', authenticate, async (req, res) => {
     if (fromDate) taggedQb = taggedQb.where('h.Issue_Date', '>=', fromDate);
     if (toDate) taggedQb = taggedQb.where('h.Issue_Date', '<=', toDate);
 
-    let ntaQb = db('tbl_non_tag_issue_header as h')
+    let ntaQb = withBranch(db('tbl_non_tag_issue_header as h')
       .join('tbl_non_tag_issue_items as i', 'i.NTA_Issue_ID', 'h.NTA_Issue_ID')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
-      .where('h.Tenant_ID', tenantId).whereIn('h.Status', ['Pending', 'Partial'])
+      .where('h.Tenant_ID', tenantId).whereIn('h.Status', ['Pending', 'Partial']), req, 'h.Branch_ID')
       .groupBy('h.NTA_Issue_ID', 'h.Voucher_Number', 'h.Issue_Date', 'h.Status', 'p.Party_Name', 'p.Mobile')
       .select('h.NTA_Issue_ID as Issue_ID', 'h.Voucher_Number', 'h.Issue_Date', 'h.Status', 'p.Party_Name', 'p.Mobile',
         db.raw(`count(*) filter (where "i"."Item_Status" = 'Pending') as pending_items`),
@@ -977,22 +988,22 @@ router.get('/approval-pending', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/approval-issue ──────────────────────────────────────────
-router.get('/approval-issue', authenticate, async (req, res) => {
+router.get('/approval-issue', authenticate, requireValidBranch, async (req, res) => {
   const { partyId, fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
 
-    let taggedQb = db('tbl_approval_issue_header as h')
+    let taggedQb = withBranch(db('tbl_approval_issue_header as h')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
-      .where('h.Tenant_ID', tenantId).whereRaw(`"h"."Issue_Date" BETWEEN ? AND ?`, [fromDate, toDate])
+      .where('h.Tenant_ID', tenantId).whereRaw(`"h"."Issue_Date" BETWEEN ? AND ?`, [fromDate, toDate]), req, 'h.Branch_ID')
       .select('h.Issue_ID', 'h.Voucher_Number', 'h.Issue_Date', 'h.Status', 'p.Party_Name', 'p.Mobile',
         'h.Total_Items_Issued', 'h.Total_Weight_Issued', 'h.Total_Value_Issued');
     if (partyId) taggedQb = taggedQb.where('h.Party_ID', partyId);
 
-    let ntaQb = db('tbl_non_tag_issue_header as h')
+    let ntaQb = withBranch(db('tbl_non_tag_issue_header as h')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
-      .where('h.Tenant_ID', tenantId).whereRaw(`"h"."Issue_Date" BETWEEN ? AND ?`, [fromDate, toDate])
+      .where('h.Tenant_ID', tenantId).whereRaw(`"h"."Issue_Date" BETWEEN ? AND ?`, [fromDate, toDate]), req, 'h.Branch_ID')
       .select('h.NTA_Issue_ID as Issue_ID', 'h.Voucher_Number', 'h.Issue_Date', 'h.Status', 'p.Party_Name', 'p.Mobile',
         'h.Total_Items_Issued', 'h.Total_Weight_Issued', 'h.Total_Value_Issued');
     if (partyId) ntaQb = ntaQb.where('h.Party_ID', partyId);
@@ -1015,24 +1026,24 @@ router.get('/approval-issue', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/approval-receive ────────────────────────────────────────
-router.get('/approval-receive', authenticate, async (req, res) => {
+router.get('/approval-receive', authenticate, requireValidBranch, async (req, res) => {
   const { partyId, fromDate, toDate } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
 
-    let taggedQb = db('tbl_approval_receive_header as r')
+    let taggedQb = withBranch(db('tbl_approval_receive_header as r')
       .join('tbl_approval_issue_header as h', 'r.Issue_ID', 'h.Issue_ID')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
-      .where('r.Tenant_ID', tenantId).whereRaw(`"r"."Receive_Date" BETWEEN ? AND ?`, [fromDate, toDate])
+      .where('r.Tenant_ID', tenantId).whereRaw(`"r"."Receive_Date" BETWEEN ? AND ?`, [fromDate, toDate]), req, 'r.Branch_ID')
       .select('r.Receive_ID', 'r.Voucher_Number', 'r.Receive_Date', 'h.Voucher_Number as Issue_Voucher_Number',
         'p.Party_Name', 'p.Mobile', 'r.Items_Received_Count', 'r.Total_Weight_Received', 'r.Total_Value_Received');
     if (partyId) taggedQb = taggedQb.where('h.Party_ID', partyId);
 
-    let ntaQb = db('tbl_non_tag_receive_header as r')
+    let ntaQb = withBranch(db('tbl_non_tag_receive_header as r')
       .join('tbl_non_tag_issue_header as h', 'r.NTA_Issue_ID', 'h.NTA_Issue_ID')
       .leftJoin('tbl_approval_party_master as p', 'h.Party_ID', 'p.Party_ID')
-      .where('r.Tenant_ID', tenantId).whereRaw(`"r"."Receive_Date" BETWEEN ? AND ?`, [fromDate, toDate])
+      .where('r.Tenant_ID', tenantId).whereRaw(`"r"."Receive_Date" BETWEEN ? AND ?`, [fromDate, toDate]), req, 'r.Branch_ID')
       .select('r.NTA_Receive_ID as Receive_ID', 'r.Voucher_Number', 'r.Receive_Date', 'h.Voucher_Number as Issue_Voucher_Number',
         'p.Party_Name', 'p.Mobile', 'r.Items_Received_Count', 'r.Total_Weight_Received', 'r.Total_Value_Received');
     if (partyId) ntaQb = ntaQb.where('h.Party_ID', partyId);
@@ -1057,15 +1068,15 @@ router.get('/approval-receive', authenticate, async (req, res) => {
 // ─── GET /api/reports/approval-outstanding ────────────────────────────────────
 // Per-party rollup across ALL vouchers (not just currently-open ones):
 // total issued vs total received vs still-pending count/weight/value.
-router.get('/approval-outstanding', authenticate, async (req, res) => {
+router.get('/approval-outstanding', authenticate, requireValidBranch, async (req, res) => {
   const { partyId } = req.query;
   try {
     const tenantId = req.user.tenantId;
 
-    let taggedQb = db('tbl_approval_party_master as p')
+    let taggedQb = withBranch(db('tbl_approval_party_master as p')
       .join('tbl_approval_issue_header as h', 'h.Party_ID', 'p.Party_ID')
       .join('tbl_approval_issue_items as i', 'i.Issue_ID', 'h.Issue_ID')
-      .where('p.Tenant_ID', tenantId)
+      .where('p.Tenant_ID', tenantId), req, 'h.Branch_ID')
       .groupBy('p.Party_ID', 'p.Party_Name', 'p.Mobile')
       .select('p.Party_ID', 'p.Party_Name', 'p.Mobile',
         db.raw(`count(*) filter (where "i"."Item_Status" IN ('Pending','Received')) as total_issued`),
@@ -1075,10 +1086,10 @@ router.get('/approval-outstanding', authenticate, async (req, res) => {
         db.raw(`sum(case when "i"."Item_Status" = 'Pending' then "i"."Approx_Value" else 0 end) as pending_value`));
     if (partyId) taggedQb = taggedQb.where('p.Party_ID', partyId);
 
-    let ntaQb = db('tbl_approval_party_master as p')
+    let ntaQb = withBranch(db('tbl_approval_party_master as p')
       .join('tbl_non_tag_issue_header as h', 'h.Party_ID', 'p.Party_ID')
       .join('tbl_non_tag_issue_items as i', 'i.NTA_Issue_ID', 'h.NTA_Issue_ID')
-      .where('p.Tenant_ID', tenantId)
+      .where('p.Tenant_ID', tenantId), req, 'h.Branch_ID')
       .groupBy('p.Party_ID', 'p.Party_Name', 'p.Mobile')
       .select('p.Party_ID', 'p.Party_Name', 'p.Mobile',
         db.raw(`count(*) filter (where "i"."Item_Status" IN ('Pending','Received')) as total_issued`),
@@ -1116,17 +1127,17 @@ router.get('/approval-outstanding', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/collection-by-mode ─────────────────────────────────────
-router.get('/collection-by-mode', authenticate, async (req, res) => {
+router.get('/collection-by-mode', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, mode } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'fromDate and toDate required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    let qb = excludeHiddenStockSales(db('tbl_sales_payments as sp')
+    let qb = excludeHiddenStockSales(withBranch(db('tbl_sales_payments as sp')
       .join('tbl_sales_header as sh', 'sp.Sale_ID', 'sh.Sale_ID')
       .where('sh.Tenant_ID', tenantId).where('sh.Data_Mode', dm)
       .whereRaw(`DATE("sh"."Sale_Date") BETWEEN ? AND ?`, [fromDate, toDate])
-      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh');
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'sh.Branch_ID'), req, 'sh');
     if (mode) qb = qb.where('sp.Payment_Mode', mode);
     const byMode = await qb.clone().groupBy('sp.Payment_Mode').select('sp.Payment_Mode', db.raw('COUNT(DISTINCT "sp"."Sale_ID") as transactions'), db.raw('SUM("sp"."Amount") as amount')).orderBy('amount', 'desc');
     const byDay  = await qb.clone().groupByRaw(`DATE("sh"."Sale_Date"), "sp"."Payment_Mode"`).select(db.raw(`DATE("sh"."Sale_Date") as date`), 'sp.Payment_Mode', db.raw('SUM("sp"."Amount") as amount')).orderBy('date');
@@ -1135,12 +1146,12 @@ router.get('/collection-by-mode', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/accounting-journal ─────────────────────────────────────
-router.get('/accounting-journal', authenticate, async (req, res) => {
+router.get('/accounting-journal', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, sourceType, page = 1, limit = 50 } = req.query;
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    let qb = db('tbl_accounting_journal').where('Tenant_ID', tenantId).where('Data_Mode', dm).orderBy('Entry_Date', 'desc').orderBy('Journal_ID', 'desc');
+    let qb = withBranch(db('tbl_accounting_journal').where('Tenant_ID', tenantId).where('Data_Mode', dm), req).orderBy('Entry_Date', 'desc').orderBy('Journal_ID', 'desc');
     if (fromDate)    qb = qb.whereRaw(`"Entry_Date" >= ?`, [fromDate]);
     if (toDate)      qb = qb.whereRaw(`"Entry_Date" <= ?`, [toDate]);
     if (sourceType)  qb = qb.where('Source_Type', sourceType);
@@ -1155,15 +1166,15 @@ router.get('/accounting-journal', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/ledger ──────────────────────────────────────────────────
-router.get('/ledger', authenticate, async (req, res) => {
+router.get('/ledger', authenticate, requireValidBranch, async (req, res) => {
   const { account, fromDate, toDate } = req.query;
   if (!account) return sendError(res, 400, 'account name required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    let qb = db('tbl_accounting_entries as ae')
+    let qb = withBranch(db('tbl_accounting_entries as ae')
       .join('tbl_accounting_journal as aj', 'ae.Journal_ID', 'aj.Journal_ID')
-      .where('ae.Tenant_ID', tenantId).where('ae.Data_Mode', dm).where('ae.Ledger_Account', account)
+      .where('ae.Tenant_ID', tenantId).where('ae.Data_Mode', dm).where('ae.Ledger_Account', account), req, 'aj.Branch_ID')
       .select('ae.*', 'aj.Entry_Date', 'aj.Reference', 'aj.Narration as Journal_Narration', 'aj.Source_Type')
       .orderBy('aj.Entry_Date').orderBy('aj.Journal_ID');
     if (fromDate) qb = qb.whereRaw(`"aj"."Entry_Date" >= ?`, [fromDate]);
@@ -1176,13 +1187,13 @@ router.get('/ledger', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/day-book ────────────────────────────────────────────────
-router.get('/day-book', authenticate, async (req, res) => {
+router.get('/day-book', authenticate, requireValidBranch, async (req, res) => {
   const { date } = req.query;
   const targetDate = date || dayjs().format('YYYY-MM-DD'); // local (IST) day, not toISOString()'s UTC one
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const journals = await db('tbl_accounting_journal').where('Tenant_ID', tenantId).where('Data_Mode', dm).whereRaw(`"Entry_Date" = ?`, [targetDate]).orderBy('Journal_ID');
+    const journals = await withBranch(db('tbl_accounting_journal').where('Tenant_ID', tenantId).where('Data_Mode', dm).whereRaw(`"Entry_Date" = ?`, [targetDate]), req).orderBy('Journal_ID');
     const journalIds = journals.map(j => j.Journal_ID);
     const entries = journalIds.length > 0 ? await db('tbl_accounting_entries').where('Data_Mode', dm).whereIn('Journal_ID', journalIds) : [];
     const em = {};
@@ -1194,16 +1205,16 @@ router.get('/day-book', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/cash-book ───────────────────────────────────────────────
-router.get('/cash-book', authenticate, async (req, res) => {
+router.get('/cash-book', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, account = 'Cash Account' } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'Date range required.');
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const rows = await db('tbl_accounting_entries as ae')
+    const rows = await withBranch(db('tbl_accounting_entries as ae')
       .join('tbl_accounting_journal as aj', 'ae.Journal_ID', 'aj.Journal_ID')
       .where('ae.Tenant_ID', tenantId).where('ae.Data_Mode', dm).where('ae.Ledger_Account', account)
-      .whereRaw(`"aj"."Entry_Date" BETWEEN ? AND ?`, [fromDate, toDate])
+      .whereRaw(`"aj"."Entry_Date" BETWEEN ? AND ?`, [fromDate, toDate]), req, 'aj.Branch_ID')
       .select('ae.*', 'aj.Entry_Date', 'aj.Reference', 'aj.Source_Type')
       .orderBy('aj.Entry_Date').orderBy('aj.Journal_ID');
     let balance = 0, totalIn = 0, totalOut = 0;
@@ -1213,7 +1224,7 @@ router.get('/cash-book', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/closing-report ──────────────────────────────────────────
-router.get('/closing-report', authenticate, async (req, res) => {
+router.get('/closing-report', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, metal = 'All' } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'fromDate and toDate required.');
   try {
@@ -1225,7 +1236,7 @@ router.get('/closing-report', authenticate, async (req, res) => {
 });
 
 // ─── GET /api/reports/closing-report/pdf ──────────────────────────────────────
-router.get('/closing-report/pdf', authenticate, async (req, res) => {
+router.get('/closing-report/pdf', authenticate, requireValidBranch, async (req, res) => {
   const { fromDate, toDate, metal = 'All' } = req.query;
   if (!fromDate || !toDate) return sendError(res, 400, 'fromDate and toDate required.');
   try {
@@ -1248,11 +1259,11 @@ router.get('/closing-report/pdf', authenticate, async (req, res) => {
 // the normal sales/GST reports. No special permission or Unofficial-mode
 // gate, unlike /floors/reports/hidden-stock-sales (a different, unrelated
 // feature — see that route's own comment for why it IS gated).
-router.get('/catalog-hidden-stock', authenticate, async (req, res) => {
+router.get('/catalog-hidden-stock', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const items = await db('tbl_ornament_master as o')
+    const items = await withBranch(db('tbl_ornament_master as o')
       .leftJoin('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
       .leftJoin('tbl_sales_details as sd', 'o.Ornament_ID', 'sd.Ornament_ID')
       .leftJoin('tbl_sales_header as sh', function () {
@@ -1260,7 +1271,7 @@ router.get('/catalog-hidden-stock', authenticate, async (req, res) => {
       })
       .where('o.Tenant_ID', tenantId).where('o.Is_Active', true)
       .where('o.Show_In_Catalog', false)
-      .where('o.Data_Mode', dm)
+      .where('o.Data_Mode', dm), req, 'o.Branch_ID')
       .select(
         'o.Ornament_ID', 'o.Article_Number', 't.Type_Name', 'o.Gross_Weight', 'o.Total_Price',
         'o.Is_Sold', 'o.Last_Updated_By', 'o.Last_Updated_Date',
@@ -1292,13 +1303,13 @@ router.get('/catalog-hidden-stock', authenticate, async (req, res) => {
 // by that one extra column. No permission gate beyond normal report
 // access — unlike /floors/hidden-stock and its siblings, there is nothing
 // here that needs hiding from anyone.
-router.get('/stock-classification-summary', authenticate, async (req, res) => {
+router.get('/stock-classification-summary', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const dm = modeVal(req);
-    const rows = await db('tbl_ornament_master')
+    const rows = await withBranch(db('tbl_ornament_master')
       .where('Tenant_ID', tenantId).where('Is_Active', true).where('Is_Sold', false)
-      .where('Data_Mode', dm)
+      .where('Data_Mode', dm), req)
       .groupBy('Stock_Classification', 'Metal_Type')
       .select(
         'Stock_Classification', 'Metal_Type',
@@ -1343,20 +1354,20 @@ router.get('/stock-classification-summary', authenticate, async (req, res) => {
 // as a share of what they've sold) — not a manual rating, since it's
 // computable from real records rather than relying on someone remembering
 // to score it.
-router.get('/karigar-performance', authenticate, async (req, res) => {
+router.get('/karigar-performance', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const manufactured = await db('tbl_ornament_master as o')
+    const manufactured = await withBranch(db('tbl_ornament_master as o')
       .join('tbl_vendor_master as v', 'o.Karigar_ID', 'v.Vendor_ID')
-      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).whereNotNull('o.Karigar_ID')
+      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).whereNotNull('o.Karigar_ID'), req, 'o.Branch_ID')
       .groupBy('o.Karigar_ID', 'v.Vendor_Name', 'v.Vendor_Code')
       .select('o.Karigar_ID', 'v.Vendor_Name', 'v.Vendor_Code', db.raw('COUNT(*) as pieces_manufactured'));
 
-    const sold = await db('tbl_ornament_master as o')
+    const sold = await withBranch(db('tbl_ornament_master as o')
       .join('tbl_sales_details as sd', 'sd.Ornament_ID', 'o.Ornament_ID')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .where('o.Tenant_ID', tenantId).whereNotNull('o.Karigar_ID')
-      .whereNot('sh.Payment_Status', 'Cancelled')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'o.Branch_ID')
       .groupBy('o.Karigar_ID')
       .select(
         'o.Karigar_ID',
@@ -1365,8 +1376,8 @@ router.get('/karigar-performance', authenticate, async (req, res) => {
         db.raw('AVG(EXTRACT(EPOCH FROM ("sh"."Sale_Date" - "o"."Created_Date")) / 86400) as avg_days_to_sell'),
       );
 
-    const repairs = await db('tbl_repair_orders')
-      .where('Tenant_ID', tenantId).whereNotNull('Original_Karigar_ID')
+    const repairs = await withBranch(db('tbl_repair_orders')
+      .where('Tenant_ID', tenantId).whereNotNull('Original_Karigar_ID'), req)
       .groupBy('Original_Karigar_ID')
       .select('Original_Karigar_ID as Karigar_ID', db.raw('COUNT(*) as repair_count'));
 
@@ -1404,20 +1415,20 @@ router.get('/karigar-performance', authenticate, async (req, res) => {
 // ─── GET /api/reports/design-performance ──────────────────────────────────────
 // "Which design is good" — per-design sell-through and velocity, same
 // shape as karigar-performance above.
-router.get('/design-performance', authenticate, async (req, res) => {
+router.get('/design-performance', authenticate, requireValidBranch, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const manufactured = await db('tbl_ornament_master as o')
+    const manufactured = await withBranch(db('tbl_ornament_master as o')
       .join('tbl_design_master as d', 'o.Design_ID', 'd.Design_ID')
-      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).whereNotNull('o.Design_ID')
+      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).whereNotNull('o.Design_ID'), req, 'o.Branch_ID')
       .groupBy('o.Design_ID', 'd.Design_Name', 'd.Design_Code')
       .select('o.Design_ID', 'd.Design_Name', 'd.Design_Code', db.raw('COUNT(*) as pieces_manufactured'));
 
-    const sold = await db('tbl_ornament_master as o')
+    const sold = await withBranch(db('tbl_ornament_master as o')
       .join('tbl_sales_details as sd', 'sd.Ornament_ID', 'o.Ornament_ID')
       .join('tbl_sales_header as sh', 'sd.Sale_ID', 'sh.Sale_ID')
       .where('o.Tenant_ID', tenantId).whereNotNull('o.Design_ID')
-      .whereNot('sh.Payment_Status', 'Cancelled')
+      .whereNot('sh.Payment_Status', 'Cancelled'), req, 'o.Branch_ID')
       .groupBy('o.Design_ID')
       .select(
         'o.Design_ID',
