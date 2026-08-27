@@ -573,7 +573,7 @@ export default function InvoiceStudio() {
     { title: '2. Design Canvas', description: 'Drag a block anywhere to reposition it, and click a block to select it. This canvas is a to-scale mock-up of exactly how the printed invoice will look.', target: () => canvasRef.current },
     { title: '3. Properties Panel', description: 'With a block selected, fine-tune its position, size, text, color and other settings here.', target: () => propertiesRef.current },
     { title: '4. Save', description: 'Give your template a name at the top-left, then save any time — you can keep multiple templates per invoice type.', target: () => saveRef.current },
-    { title: '5. Set as Default', description: 'Once a template is saved, mark it as Default to make it the one actually used when printing real invoices of this type.', target: () => setDefaultRef.current },
+    { title: '5. Set as Default', description: 'Your first template for a document type is made the default automatically on Save — real bills already use it. This button only matters if you add a second, alternate design later and want to switch which one prints.', target: () => setDefaultRef.current },
   ];
 
   const paper = { ...PAPER_SIZES[paperSize] };
@@ -1324,10 +1324,20 @@ export default function InvoiceStudio() {
           </Button>
           <Button size="small" icon={<HistoryOutlined />} style={{ color: '#aaa', borderColor: '#555' }} onClick={() => setShowHistory(true)}>History</Button>
           {editingId && (
-            <Tooltip title="Set this as the default template for this invoice type">
-              <Button ref={setDefaultRef} size="small" icon={<StarOutlined />} style={{ borderColor: '#FFD700', color: '#FFD700' }}
-                onClick={() => setAsDefault.mutate(editingId)}>Set Default</Button>
-            </Tooltip>
+            (templates || []).find(t => t.Template_ID === editingId)?.Is_Default ? (
+              // Already the default — no button to click here at all, since
+              // clicking Set Default again used to silently wipe the saved
+              // design (a real bug: it sent { Is_Default: true } alone, no
+              // Layout_JSON, which the server used to read as "save an
+              // empty layout"). Fixed server-side too, but removing the
+              // temptation to re-click is the safer fix.
+              <Tag ref={setDefaultRef} color="gold" style={{ margin: 0 }}>★ This is the default</Tag>
+            ) : (
+              <Tooltip title="Set this as the default template for this invoice type — real bills print using this one instead">
+                <Button ref={setDefaultRef} size="small" icon={<StarOutlined />} style={{ borderColor: '#FFD700', color: '#FFD700' }}
+                  onClick={() => setAsDefault.mutate(editingId)}>Set Default</Button>
+              </Tooltip>
+            )
           )}
           <Button size="small" icon={<PrinterOutlined />} style={{ borderColor: '#52c41a', color: '#52c41a' }}
             onClick={() => {

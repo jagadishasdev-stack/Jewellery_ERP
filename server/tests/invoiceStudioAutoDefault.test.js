@@ -68,6 +68,29 @@ test('an explicit Set-as-Default on the second template switches which one resol
   expect(resolved.body.data.Template_Name).toBe('Alternate Sales Bill Design');
 });
 
+test('REGRESSION: "Set as Default" alone — { Is_Default: true }, no Layout_JSON — must NOT wipe the saved design', async () => {
+  // Real production bug: setAsDefault (InvoiceStudio.jsx) sends only
+  // { Is_Default: true }. The old PUT handler did
+  // `JSON.stringify(Layout_JSON || [])` unconditionally, which for an
+  // omitted Layout_JSON silently computed "[]" and overwrote Components —
+  // a saved Sales Bill design vanished the moment its default status was
+  // (re-)confirmed, and printing fell back to the plain layout even
+  // though resolve/:docType still found an Is_Default=true, Is_Active=true
+  // row (just with zero blocks).
+  const asLayout = (v) => typeof v === 'string' ? JSON.parse(v) : v;
+  const before = await db('tbl_invoice_studio_templates').where({ Tenant_ID: tenant.tenantId, Template_Name: 'My Sales Bill Design' }).first();
+  expect(asLayout(before.Components)).toEqual([{ id: 'logo' }]); // the real layout saved by the very first test
+
+  const res = await request(app).put(`/api/invoice-studio/templates/${before.Template_ID}`).set(auth()).send({ Is_Default: true });
+  expect(res.status).toBe(200);
+
+  const after = await db('tbl_invoice_studio_templates').where({ Template_ID: before.Template_ID }).first();
+  expect(asLayout(after.Components)).toEqual([{ id: 'logo' }]); // unchanged — not wiped to []
+
+  const resolved = await request(app).get('/api/invoice-studio/resolve/SALES_BILL').set(auth());
+  expect(asLayout(resolved.body.data.Components)).toEqual([{ id: 'logo' }]);
+});
+
 test('the first template a tenant saves for a DIFFERENT document type is independently auto-defaulted', async () => {
   const res = await request(app).post('/api/invoice-studio/templates').set(auth())
     .send({ Template_Name: 'My Quotation Design', Document_Type: 'QUOTATION', Layout_JSON: [] });

@@ -42,6 +42,28 @@ const canManageLabel = (req) => isSuperAdmin(req) || req.user?.permissions?.tena
 // below) so it can never live inside — or be mistaken for — any tenant's
 // own template set.
 const isPlatformOnlyDocType = (documentType) => documentType === 'PLATFORM_SAAS_INVOICE';
+
+// PUT/DELETE look up the existing row scoped by resolveTenantId(req) BEFORE
+// they know its Document_Type (it comes FROM the row) — for a Super Admin
+// editing/deleting a Platform Billing template with no ?tenantId= query
+// param at all (the normal case: InvoiceStudio.jsx's Platform Billing
+// panel deliberately never sets managedTenantId, since this doc type has
+// no "on behalf of a tenant" concept), resolveTenantId falls back to the
+// Super Admin's OWN tenant id, which never matches the platform row's
+// Tenant_ID = null — a 404 on every edit of an already-saved template.
+// Falls back to an unscoped-by-tenant lookup ONLY for a genuine Super
+// Admin AND only accepts the row if it's platform-only — never widens
+// what a regular tenant can reach.
+const findTemplateForWrite = async (req, id) => {
+  const tenantId = resolveTenantId(req);
+  let qb = db('tbl_invoice_studio_templates').where({ Template_ID: id });
+  qb = tenantId === null ? qb.whereNull('Tenant_ID') : qb.where('Tenant_ID', tenantId);
+  const found = await qb.first();
+  if (found) return found;
+  if (!isSuperAdmin(req)) return null;
+  const platformRow = await db('tbl_invoice_studio_templates').where({ Template_ID: id }).first();
+  return platformRow && isPlatformOnlyDocType(platformRow.Document_Type) ? platformRow : null;
+};
 const requireSuperAdminForLabel = (documentType, req, res) => {
   if (documentType === 'BARCODE_LABEL' && !canManageLabel(req)) {
     sendError(res, 403, 'You need Tenant Management permission to edit label templates.');
@@ -487,21 +509,40 @@ router.post('/templates', authenticate, async (req, res) => {
 // ── PUT /api/invoice-studio/templates/:id — update template ───────────────────
 router.put('/templates/:id', authenticate, async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
-    let existingQb = db('tbl_invoice_studio_templates').where({ Template_ID: req.params.id });
-    existingQb = tenantId === null ? existingQb.whereNull('Tenant_ID') : existingQb.where('Tenant_ID', tenantId);
-    const existing = await existingQb.first();
+    const existing = await findTemplateForWrite(req, req.params.id);
     if (!existing) return sendError(res, 404, 'Template not found.');
     if (requireSuperAdminForLabel(existing.Document_Type, req, res)) return;
 
     const { Layout_JSON, Template_Name, Paper_Size, Is_Default } = req.body;
-    const newVersion = (existing.Version || 1) + 1;
-    const layoutStr = typeof Layout_JSON === 'string' ? Layout_JSON : JSON.stringify(Layout_JSON || []);
+    // Real, reported bug: "Set as Default" (setAsDefault mutation in
+    // InvoiceStudio.jsx) sends ONLY { Is_Default: true } — no Layout_JSON
+    // at all, by design, since it's just flipping a flag. The old code
+    // below unconditionally did `JSON.stringify(Layout_JSON || [])`,
+    // which for an omitted Layout_JSON silently computed "[]" and wrote
+    // it into Components — DESTROYING the entire saved design the moment
+    // anyone clicked Set Default on an already-saved template (exactly
+    // what the design-canvas tour tells a first-time admin to do right
+    // after saving). printFromInvoiceStudio then finds a row that's
+    // Is_Default=true and Is_Active=true, but with zero blocks, and
+    // falls back to the plain layout — a real Sales Bill design vanished
+    // this way in production. Layout_JSON is now only touched when the
+    // caller actually sent one; a pure default-flag flip (or any other
+    // partial update) leaves the saved design exactly as it was.
+    const layoutSent = Layout_JSON !== undefined;
+    // existing.Components comes back from the jsonb column already parsed
+    // into a real array/object (not a string) — writing it straight back
+    // as a bind parameter fails ("invalid input syntax for type json"), so
+    // it has to be re-stringified same as a genuinely new Layout_JSON does.
+    const currentLayout = layoutSent ? Layout_JSON : existing.Components;
+    const layoutStr = typeof currentLayout === 'string' ? currentLayout : JSON.stringify(currentLayout);
+    const newVersion = layoutSent ? (existing.Version || 1) + 1 : (existing.Version || 1);
 
     let history = [];
     try { history = typeof existing.Version_History === 'string' ? JSON.parse(existing.Version_History) : (existing.Version_History || []); } catch {}
-    history.push({ version: existing.Version || 1, saved_at: new Date().toISOString(), layout: existing.Components });
-    if (history.length > 10) history = history.slice(-10);
+    if (layoutSent) {
+      history.push({ version: existing.Version || 1, saved_at: new Date().toISOString(), layout: existing.Components });
+      if (history.length > 10) history = history.slice(-10);
+    }
 
     // "Set as Default" was setting Is_Default=true on this row WITHOUT
     // clearing it on whichever OTHER template already held the default
@@ -542,10 +583,7 @@ router.put('/templates/:id', authenticate, async (req, res) => {
 // ── DELETE /api/invoice-studio/templates/:id ──────────────────────────────────
 router.delete('/templates/:id', authenticate, async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
-    let qb = db('tbl_invoice_studio_templates').where({ Template_ID: req.params.id });
-    qb = tenantId === null ? qb.whereNull('Tenant_ID') : qb.where('Tenant_ID', tenantId);
-    const existing = await qb.first();
+    const existing = await findTemplateForWrite(req, req.params.id);
     if (!existing) return sendError(res, 404, 'Template not found.');
     if (requireSuperAdminForLabel(existing.Document_Type, req, res)) return;
 
