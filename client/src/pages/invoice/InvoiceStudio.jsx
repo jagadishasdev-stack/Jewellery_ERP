@@ -156,6 +156,7 @@ const COMPONENTS = [
   { type: 'old_gold',      label: '🥇 Old Gold Exchange',   group: 'Content' },
   { type: 'scheme_block',  label: '🪙 Scheme Details',      group: 'Content' },
   { type: 'karigar_table', label: '⚒️ Karigar Table',       group: 'Content' },
+  { type: 'excel_grid',    label: '📊 Excel-Style Grid',    group: 'Content' },
   { type: 'bank_details',  label: '🏦 Bank Details',        group: 'Footer' },
   { type: 'terms',         label: '📃 Terms & Conditions',  group: 'Footer' },
   { type: 'signature',     label: '✍️ Signature Line',      group: 'Footer' },
@@ -169,6 +170,212 @@ const COMPONENTS = [
 ];
 
 const COMP_GROUPS = ['Header', 'Content', 'Footer', 'Elements'];
+
+// ── Excel-style grid — a free-form spreadsheet block, unlike items_table/
+// karigar_table (which are bound to a fixed ERP column set). Any cell can
+// hold static text or a {{variable}}, cells can be merged left-to-right
+// and top-to-bottom (like Excel's Merge Cells), and every cell carries its
+// own bold/align/fill/text-color. Rendered as a real HTML <table> at print
+// time (invoiceRenderer.js's renderExcelGrid) — colspan/rowspan and all.
+// A `covers` list on the top-left cell of a merge tracks exactly which
+// other cells it currently owns, so Unmerge can restore precisely those
+// cells (and only those) without guessing.
+const mkGridCell = (text = '') => ({ text, colspan: 1, rowspan: 1, merged: false, bold: false, align: 'left', bg: '', color: '', covers: [] });
+
+const buildDefaultGrid = () => {
+  const numCols = 4;
+  const header = ['Item', 'Qty', 'Rate', 'Amount'].map(t => ({ ...mkGridCell(t), bold: true, align: 'center', bg: '#B8860B', color: '#ffffff' }));
+  const blankRow = () => Array.from({ length: numCols }, () => mkGridCell());
+  return {
+    numCols, showBorders: true, fontSize: 10,
+    rows: [{ height: 26, cells: header }, { height: 22, cells: blankRow() }, { height: 22, cells: blankRow() }],
+  };
+};
+
+const gridAddRow = (content) => ({
+  ...content,
+  rows: [...content.rows, { height: 22, cells: Array.from({ length: content.numCols }, () => mkGridCell()) }],
+});
+
+// Returns null (instead of throwing) when the row holds any merge —
+// callers show a "Unmerge first" message rather than silently corrupting
+// spans that reach into a row that no longer exists.
+const gridDeleteRow = (content, rowIdx) => {
+  if (content.rows.length <= 1) return null;
+  const blocked = content.rows[rowIdx].cells.some(cell => cell.merged || cell.rowspan > 1 || cell.colspan > 1);
+  if (blocked) return null;
+  return { ...content, rows: content.rows.filter((_, i) => i !== rowIdx) };
+};
+
+const gridAddCol = (content) => ({
+  ...content,
+  numCols: content.numCols + 1,
+  rows: content.rows.map(r => ({ ...r, cells: [...r.cells, mkGridCell()] })),
+});
+
+const gridDeleteCol = (content, colIdx) => {
+  if (content.numCols <= 1) return null;
+  const blocked = content.rows.some(r => { const cell = r.cells[colIdx]; return cell.merged || cell.rowspan > 1 || cell.colspan > 1; });
+  if (blocked) return null;
+  return { ...content, numCols: content.numCols - 1, rows: content.rows.map(r => ({ ...r, cells: r.cells.filter((_, i) => i !== colIdx) })) };
+};
+
+// Only merges with the immediately-adjacent plain (unmerged, un-spanned)
+// cell — kept deliberately simple rather than supporting arbitrary
+// rectangular selections, but merging twice extends the same span, so a
+// 3-column header cell is still just "Merge Right" clicked twice.
+const gridMergeRight = (content, r, c) => {
+  const cell = content.rows[r].cells[c];
+  const rightIdx = c + cell.colspan;
+  if (rightIdx >= content.numCols) return null;
+  const rightCell = content.rows[r].cells[rightIdx];
+  if (rightCell.merged || rightCell.colspan > 1 || rightCell.rowspan > 1) return null;
+  const rows = content.rows.map((row, ri) => ri !== r ? row : {
+    ...row,
+    cells: row.cells.map((cc, ci) => {
+      if (ci === c) return { ...cc, colspan: cc.colspan + 1, covers: [...cc.covers, { r, c: rightIdx }] };
+      if (ci === rightIdx) return { ...cc, merged: true };
+      return cc;
+    }),
+  });
+  return { ...content, rows };
+};
+
+const gridMergeDown = (content, r, c) => {
+  const cell = content.rows[r].cells[c];
+  const belowIdx = r + cell.rowspan;
+  if (belowIdx >= content.rows.length) return null;
+  const belowCell = content.rows[belowIdx].cells[c];
+  if (belowCell.merged || belowCell.colspan > 1 || belowCell.rowspan > 1) return null;
+  const rows = content.rows.map((row, ri) => {
+    if (ri === r) return { ...row, cells: row.cells.map((cc, ci) => ci === c ? { ...cc, rowspan: cc.rowspan + 1, covers: [...cc.covers, { r: belowIdx, c }] } : cc) };
+    if (ri === belowIdx) return { ...row, cells: row.cells.map((cc, ci) => ci === c ? { ...cc, merged: true } : cc) };
+    return row;
+  });
+  return { ...content, rows };
+};
+
+const gridUnmerge = (content, r, c) => {
+  const cell = content.rows[r].cells[c];
+  if (!cell.covers?.length) return content;
+  const coverSet = new Set(cell.covers.map(({ r: rr, c: cc }) => `${rr}:${cc}`));
+  const rows = content.rows.map((row, ri) => ({
+    ...row,
+    cells: row.cells.map((cc, ci) => {
+      if (ri === r && ci === c) return { ...cc, colspan: 1, rowspan: 1, covers: [] };
+      if (coverSet.has(`${ri}:${ci}`)) return { ...cc, merged: false };
+      return cc;
+    }),
+  }));
+  return { ...content, rows };
+};
+
+const gridUpdateCell = (content, r, c, patch) => ({
+  ...content,
+  rows: content.rows.map((row, ri) => ri !== r ? row : { ...row, cells: row.cells.map((cc, ci) => ci !== c ? cc : { ...cc, ...patch }) }),
+});
+
+const gridUpdateRowHeight = (content, r, height) => ({
+  ...content,
+  rows: content.rows.map((row, ri) => ri === r ? { ...row, height } : row),
+});
+
+// ── Excel Grid editor — opened from the Properties panel when an
+// excel_grid block is selected. Click a cell to select it (toolbar acts
+// on whichever cell is selected), type directly into any cell, and use
+// {{variable}} anywhere for real invoice data (see the ERP Variables
+// panel for the full list) — resolved for real at print time exactly
+// like every other block's text.
+function ExcelGridEditorModal({ open, content, onChange, onClose }) {
+  const [active, setActive] = useState(null); // { r, c }
+  if (!content) return null;
+  const apply = (fn) => {
+    const next = fn(content);
+    if (next === null) { message.warning('This row/column is part of a merge — Unmerge it first.'); return; }
+    onChange(next);
+  };
+  const activeCell = active ? content.rows[active.r]?.cells[active.c] : null;
+
+  return (
+    <Modal title="📊 Edit Excel-Style Grid" open={open} onCancel={onClose} width={800} destroyOnClose
+      footer={<Button type="primary" onClick={onClose} style={{ background: '#B8860B', borderColor: '#B8860B' }}>Done</Button>}>
+      <Space wrap size={6} style={{ marginBottom: 10 }}>
+        <Button size="small" onClick={() => apply(gridAddRow)}>+ Row</Button>
+        <Button size="small" disabled={!active} onClick={() => apply(gc => gridDeleteRow(gc, active.r))}>− Row</Button>
+        <Button size="small" onClick={() => apply(gridAddCol)}>+ Column</Button>
+        <Button size="small" disabled={!active} onClick={() => apply(gc => gridDeleteCol(gc, active.c))}>− Column</Button>
+        <Divider type="vertical" />
+        <Button size="small" disabled={!active} onClick={() => apply(gc => gridMergeRight(gc, active.r, active.c))}>Merge Right</Button>
+        <Button size="small" disabled={!active} onClick={() => apply(gc => gridMergeDown(gc, active.r, active.c))}>Merge Down</Button>
+        <Button size="small" disabled={!active || !activeCell?.covers?.length} onClick={() => apply(gc => gridUnmerge(gc, active.r, active.c))}>Unmerge</Button>
+        <Divider type="vertical" />
+        <Switch size="small" disabled={!active} checked={!!activeCell?.bold}
+          onChange={v => apply(gc => gridUpdateCell(gc, active.r, active.c, { bold: v }))} />
+        <Text style={{ fontSize: 11 }}>Bold</Text>
+        <Select size="small" style={{ width: 86 }} disabled={!active} value={activeCell?.align || 'left'}
+          onChange={v => apply(gc => gridUpdateCell(gc, active.r, active.c, { align: v }))}>
+          <Option value="left">Left</Option><Option value="center">Center</Option><Option value="right">Right</Option>
+        </Select>
+        <Tooltip title="Cell fill color">
+          <input type="color" disabled={!active} value={activeCell?.bg || '#ffffff'}
+            onChange={e => apply(gc => gridUpdateCell(gc, active.r, active.c, { bg: e.target.value }))}
+            style={{ width: 26, height: 24, border: 'none', cursor: active ? 'pointer' : 'not-allowed' }} />
+        </Tooltip>
+        <Tooltip title="Text color">
+          <input type="color" disabled={!active} value={activeCell?.color || '#1a1a2e'}
+            onChange={e => apply(gc => gridUpdateCell(gc, active.r, active.c, { color: e.target.value }))}
+            style={{ width: 26, height: 24, border: 'none', cursor: active ? 'pointer' : 'not-allowed' }} />
+        </Tooltip>
+        <Divider type="vertical" />
+        <InputNumber size="small" min={14} max={80} style={{ width: 74 }} disabled={!active}
+          value={active ? (content.rows[active.r]?.height || 22) : undefined}
+          onChange={v => active && onChange(gridUpdateRowHeight(content, active.r, v || 22))} addonAfter="h" />
+        <InputNumber size="small" min={6} max={24} style={{ width: 68 }} value={content.fontSize || 10}
+          onChange={v => onChange({ ...content, fontSize: v || 10 })} addonAfter="pt" />
+        <Switch size="small" checked={content.showBorders !== false} onChange={v => onChange({ ...content, showBorders: v })} />
+        <Text style={{ fontSize: 11 }}>Borders</Text>
+      </Space>
+      <Alert type="info" showIcon style={{ marginBottom: 8, fontSize: 11 }}
+        message='Click a cell, then type its content — including {{variable}} for real invoice data. The toolbar above acts on whichever cell is selected.' />
+      <div style={{ border: '1px solid #eee', borderRadius: 6, overflow: 'auto', maxHeight: 400 }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+          <tbody>
+            {content.rows.map((row, r) => (
+              <tr key={r} style={{ height: row.height || 22 }}>
+                {row.cells.map((cell, c) => {
+                  if (cell.merged) return null;
+                  const isActive = active?.r === r && active?.c === c;
+                  return (
+                    <td key={c} colSpan={cell.colspan} rowSpan={cell.rowspan}
+                      onClick={() => setActive({ r, c })}
+                      style={{
+                        border: content.showBorders !== false ? '1px solid #ccc' : '1px dashed #eee',
+                        background: cell.bg || '#fff',
+                        boxShadow: isActive ? 'inset 0 0 0 2px #B8860B' : 'none',
+                        padding: 0, minWidth: 64,
+                      }}>
+                      <input
+                        value={cell.text}
+                        onChange={e => apply(gc => gridUpdateCell(gc, r, c, { text: e.target.value }))}
+                        onFocus={() => setActive({ r, c })}
+                        style={{
+                          width: '100%', height: '100%', border: 'none', outline: 'none', background: 'transparent',
+                          padding: '4px 6px', fontSize: content.fontSize || 10, boxSizing: 'border-box',
+                          fontWeight: cell.bold ? 700 : 400, textAlign: cell.align || 'left',
+                          color: cell.color || '#1a1a2e',
+                        }}
+                      />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
+  );
+}
 
 // ── ERP variables ─────────────────────────────────────────────────────────────
 const ERP_VARIABLES = [
@@ -208,6 +415,7 @@ const defaultContent = (type) => {
     old_gold:      { show_weight: true, show_purity: true, show_value: true },
     scheme_block:  { show_name: true, show_balance: true, show_maturity: true },
     karigar_table: { columns: ['Item','Issued Wt','Return Wt','Wastage','Wages'] },
+    excel_grid:    buildDefaultGrid(),
     bank_details:  { show_account: true, show_ifsc: true, show_upi: true },
     terms:         { text: '1. Goods once sold will not be taken back.\n2. Subject to local jurisdiction.\n3. E.&O.E.' },
     signature:     { label: 'Authorised Signatory', show_stamp: true },
@@ -260,7 +468,7 @@ function CanvasBlock({ block, selected, onSelect, onMove, paperW }) {
     customer: '👤 Customer', items_table: '📊 Items Table', gold_rate: '💛 Gold Rate',
     totals: '💰 Totals', gst_block: '🧾 GST', payment: '💳 Payment',
     old_gold: '🥇 Old Gold', scheme_block: '🪙 Scheme', karigar_table: '⚒️ Karigar',
-    bank_details: '🏦 Bank', terms: '📃 Terms', signature: '✍️ Signature',
+    bank_details: '🏦 Bank', terms: '📃 Terms', signature: '✍️ Signature', excel_grid: '📊 Excel Grid',
     stamp: '🔵 Stamp', qr_code: '🔲 QR', barcode: '📦 Barcode',
     text: block.content?.text?.substring(0, 20) || '📄 Text',
     line: '─────────', image: '🖼️ Image', rectangle: '▭',
@@ -337,6 +545,7 @@ export default function InvoiceStudio() {
   // ── Properties panel ──────────────────────────────────────────────────────
   const [showVars, setShowVars]       = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [gridEditorOpen, setGridEditorOpen] = useState(false);
 
   // ── Walkthrough tour refs (Design Canvas screen) ───────────────────────────
   const paletteRef = useRef(null);
@@ -591,6 +800,31 @@ export default function InvoiceStudio() {
           return <div key={b.id} style={{ ...style, fontSize: (b.content?.fontSize || 12) * previewScale, fontWeight: b.content?.bold ? 700 : 400, textAlign: b.content?.align || 'left', color: b.content?.color || '#333' }}>{b.content?.text || 'Text'}</div>;
         case 'rectangle':
           return <div key={b.id} style={{ ...style, border: `${(b.content?.borderWidth||1)*previewScale}px solid ${b.content?.borderColor||'#B8860B'}`, background: b.content?.fillColor || 'transparent', borderRadius: b.content?.borderRadius || 0 }} />;
+        case 'excel_grid': {
+          const gc = b.content || {};
+          return (
+            <div key={b.id} style={{ ...style, overflow: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: (gc.fontSize || 10) * previewScale }}>
+                <tbody>
+                  {(gc.rows || []).map((row, ri) => (
+                    <tr key={ri}>
+                      {row.cells.map((cell, ci) => cell.merged ? null : (
+                        <td key={ci} colSpan={cell.colspan} rowSpan={cell.rowspan}
+                          style={{
+                            border: gc.showBorders !== false ? '1px solid #ccc' : 'none', padding: 2 * previewScale,
+                            background: cell.bg || 'transparent', fontWeight: cell.bold ? 700 : 400,
+                            textAlign: cell.align || 'left', color: cell.color || '#333',
+                          }}>
+                          {cell.text}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
         default:
           return <div key={b.id} style={{ ...style, background: '#f9f9f9', border: '1px dashed #d9d9d9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 6, color: '#aaa' }}>{b.type}</div>;
       }
@@ -1189,6 +1423,18 @@ export default function InvoiceStudio() {
                   )}
                 </>
               )}
+              {selectedBlock.type === 'excel_grid' && (
+                <>
+                  <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>EXCEL-STYLE GRID</Text>
+                  <div style={{ fontSize: 11, color: '#666', margin: '4px 0 6px' }}>
+                    {selectedBlock.content?.rows?.length || 0} rows × {selectedBlock.content?.numCols || 0} columns
+                  </div>
+                  <Button size="small" block icon={<AppstoreOutlined />} style={{ borderColor: '#B8860B', color: '#B8860B' }}
+                    onClick={() => setGridEditorOpen(true)}>
+                    Edit Grid
+                  </Button>
+                </>
+              )}
               {(selectedBlock.type === 'shop_header' || selectedBlock.type === 'terms') && (
                 <>
                   <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>CONTENT</Text>
@@ -1219,6 +1465,14 @@ export default function InvoiceStudio() {
           )}
         </div>
       </div>
+
+      {/* Excel-Style Grid editor */}
+      <ExcelGridEditorModal
+        open={gridEditorOpen}
+        content={selectedBlock?.type === 'excel_grid' ? selectedBlock.content : null}
+        onChange={(patch) => updateBlockContent(selectedBlock.id, patch)}
+        onClose={() => setGridEditorOpen(false)}
+      />
 
       {/* ERP Variables Drawer */}
       <Drawer title="📊 ERP Field Variables" open={showVars} onClose={() => setShowVars(false)} width={360} placement="right">

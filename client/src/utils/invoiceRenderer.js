@@ -102,6 +102,35 @@ function renderItemsTable(content, data) {
   `;
 }
 
+// Excel-style grid — a free-form spreadsheet block (see ExcelGridEditorModal
+// in InvoiceStudio.jsx). Unlike items_table, this is never data-bound to a
+// repeating array; every cell is a fixed position with its own static text
+// and/or {{merge_field}}, resolved here exactly like a text block. Merged
+// cells are simply omitted from their row's <td> list — standard HTML
+// colspan/rowspan semantics, no separate "hidden cell" markup needed.
+function renderExcelGrid(content, data) {
+  const rows = content?.rows || [];
+  const showBorders = content?.showBorders !== false;
+  const fontSize = content?.fontSize || 10;
+  return `
+    <table style="border-collapse:collapse; width:100%; font-size:${fontSize}pt;">
+      <tbody>
+        ${rows.map((row) => `
+          <tr style="height:${row.height || 22}px;">
+            ${row.cells.filter((cell) => !cell.merged).map((cell) => `
+              <td colspan="${cell.colspan || 1}" rowspan="${cell.rowspan || 1}"
+                style="border:${showBorders ? '1px solid #999' : 'none'}; padding:3px 6px;
+                  background:${cell.bg || 'transparent'}; font-weight:${cell.bold ? 700 : 400};
+                  text-align:${cell.align || 'left'}; color:${cell.color || '#1a1a2e'};">
+                ${escapeHtml(resolveMergeFields(cell.text, data))}
+              </td>`).join('')}
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
 function renderTotals(content, data) {
   const rows = [
     content?.show_gold_value !== false && data.gold_value != null && ['Gold Value', data.gold_value],
@@ -252,6 +281,9 @@ function renderBlock(b, data, qrDataUrls) {
 
     case 'rectangle':
       return `<div style="${pos} background:${c.fillColor || 'transparent'}; border:${c.borderWidth || 1}px solid ${c.borderColor || '#B8860B'}; border-radius:${c.borderRadius || 0}px;"></div>`;
+
+    case 'excel_grid':
+      return `<div style="${pos} overflow:auto;">${renderExcelGrid(c, data)}</div>`;
 
     default:
       return `<div style="${pos}"></div>`;
