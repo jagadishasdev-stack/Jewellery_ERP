@@ -13,7 +13,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Row, Col, Card, Input, Button, Table, Space, Typography,
   Modal, Select, InputNumber, Divider, Tag, message,
-  Tooltip, Empty, Badge, Alert, Progress, Statistic, Steps,
+  Tooltip, Badge, Alert, Progress, Statistic, Steps,
   Drawer, List, Image, Grid,
 } from 'antd';
 import {
@@ -37,6 +37,7 @@ import CustomerSearchModal from './CustomerSearchModal';
 import { printThermalReceipt } from '../../utils/thermalReceipt';
 import PrinterOverrideButton from '../../components/PrinterOverrideButton';
 import PageTour from '../../components/PageTour';
+import EmptyState from '../../components/states/EmptyState';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
 import dayjs from 'dayjs';
 
@@ -808,10 +809,11 @@ export default function POSPage() {
             extra={<Button size="small" icon={<ClearOutlined />} onClick={() => { clearCart(); emitClearDisplay(); setLastScannedItem(null); }}>Clear</Button>}
             style={{ borderRadius: 8 }} bodyStyle={{ padding: 0 }}>
             {items.length === 0
-              ? <Empty description="Scan items to add to cart" style={{ padding: '28px 0' }} />
+              ? <EmptyState icon={<ScanOutlined />} title="Cart is empty" hint="Scan a barcode or search for an item above to add it to this bill." compact />
               : isMobile
                 ? <div className="pos-cart-grid">{items.map(renderCartCard)}</div>
                 : <Table
+              className="erp-table"
               scroll={{ x: "max-content" }} columns={cartColumns} dataSource={items} rowKey="Ornament_ID" pagination={false} size="small" />
             }
           </Card>
