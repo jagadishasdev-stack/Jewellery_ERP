@@ -17,7 +17,7 @@ import {
   Layout, Select, Button, Space, Typography, Form, Input,
   InputNumber, Switch, Tooltip, Tag, message, Modal,
   Tabs, Row, Col, Card, Divider, Alert, Badge, Upload, Steps,
-  Drawer, Radio, Spin, Progress, Popconfirm, Table, Empty,
+  Drawer, Radio, Spin, Progress, Popconfirm, Table,
 } from 'antd';
 import {
   SaveOutlined, PrinterOutlined, PlusOutlined, DeleteOutlined,
@@ -26,11 +26,14 @@ import {
   StarOutlined, AppstoreOutlined, ArrowLeftOutlined, CheckCircleOutlined,
   CloudUploadOutlined, EditOutlined, SyncOutlined, DownloadOutlined,
   ShareAltOutlined, WarningOutlined, InfoCircleOutlined, BgColorsOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../../store/authStore';
 import { tenantApi, invoiceStudioApi } from '../../api/modules';
 import PageTour from '../../components/PageTour';
+import KPICard from '../../components/KPICard';
+import EmptyState from '../../components/states/EmptyState';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -876,24 +879,25 @@ export default function InvoiceStudio() {
     return (
       <div className="page-wrapper">
         <div className="page-header">
-          <div>
-            <Title level={4} style={{ margin: 0 }}>💎 Invoice Studio</Title>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Design, manage and deploy invoice templates — no coding required
-            </Text>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div className="icon-badge" style={{ width: 42, height: 42, fontSize: 19, color: 'var(--gold)', background: 'var(--gold-pale)' }}>💎</div>
+            <div>
+              <div className="h2">Invoice Studio</div>
+              <Text className="caption">Design, manage and deploy invoice templates — no coding required</Text>
+            </div>
           </div>
           <Button type="primary" icon={<PlusOutlined />}
-            style={{ background: '#B8860B', borderColor: '#B8860B', fontWeight: 700 }}
+            style={{ background: 'var(--gold)', borderColor: 'var(--gold)', fontWeight: 700, borderRadius: 'var(--radius-sm)' }}
             onClick={() => setScreen('type-select')}
             disabled={isSuperAdmin && !managedTenantId}>
-            + Create New Template
+            Create New Template
           </Button>
         </div>
 
         {/* Super Admin only: design/import a specific tenant's invoices through the master login */}
         {isSuperAdmin && (
-          <div style={{ background: '#fff', borderRadius: 8, padding: '10px 12px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Text strong style={{ fontSize: 12 }}>Designing for:</Text>
+          <div className="erp-card-elevated" style={{ background: '#fff', borderRadius: 'var(--radius-md)', padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <Text strong style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-900)' }}>Designing for:</Text>
             <Select
               showSearch allowClear
               placeholder="Select a customer (tenant)…"
@@ -907,7 +911,7 @@ export default function InvoiceStudio() {
                 .filter((t) => t.Tenant_ID !== 'SA_MASTER')
                 .map((t) => ({ value: t.Tenant_ID, label: `${t.Company_Name} (${t.Tenant_ID})` }))}
             />
-            {managedTenantId && <Text type="secondary" style={{ fontSize: 11 }}>Every template below belongs only to this customer.</Text>}
+            {managedTenantId && <Text className="caption">Every template below belongs only to this customer.</Text>}
           </div>
         )}
 
@@ -916,90 +920,94 @@ export default function InvoiceStudio() {
             tenant, not something designed on behalf of one, so it doesn't
             wait on a managed-tenant pick the way everything below does. */}
         {isSuperAdmin && (
-          <Card size="small" style={{ borderRadius: 8, marginBottom: 16, border: '1px solid #00000022', background: '#fafafa' }}
-            title={<Space><span>🏢</span><Text strong style={{ fontSize: 12 }}>Platform Billing — JewelNexus → Tenant (Super Admin Only)</Text></Space>}>
-            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>
+          <div style={{
+            borderRadius: 'var(--radius-md)', marginBottom: 16, padding: 16,
+            background: 'linear-gradient(135deg, var(--dark) 0%, var(--dark-2) 100%)',
+            boxShadow: 'var(--shadow-md)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <div className="icon-badge" style={{ width: 30, height: 30, fontSize: 14, color: '#FFD700', background: 'rgba(255,215,0,0.15)' }}>🏢</div>
+              <Text strong style={{ fontSize: 'var(--fs-h4)', color: '#fff' }}>Platform Billing — JewelNexus → Tenant</Text>
+              <Tag style={{ background: 'rgba(255,215,0,0.15)', color: '#FFD700', border: 'none', fontSize: 10, borderRadius: 4 }}>Super Admin Only</Tag>
+            </div>
+            <Text style={{ fontSize: 'var(--fs-caption)', color: 'rgba(255,255,255,0.6)', display: 'block', marginBottom: 12 }}>
               The GST invoice YOU send a tenant for their software/subscription — isolated from every tenant-facing template above, never mixed with what a tenant designs for their own customers.
             </Text>
-            <Space wrap size={6}>
+            <Space wrap size={8}>
               {(platformTemplates || []).map(t => (
-                <Tag key={t.Template_ID} color={t.Is_Default ? 'green' : 'default'}
-                  style={{ cursor: 'pointer', padding: '4px 10px', fontSize: 11 }}
+                <Tag key={t.Template_ID}
+                  style={{
+                    cursor: 'pointer', padding: '5px 12px', fontSize: 11, borderRadius: 6, border: 'none',
+                    background: t.Is_Default ? '#FFD700' : 'rgba(255,255,255,0.1)',
+                    color: t.Is_Default ? '#1A1A1A' : '#fff', fontWeight: t.Is_Default ? 700 : 400,
+                  }}
                   onClick={() => openExistingTemplate(t)}>
                   {t.Template_Name}{t.Is_Default ? ' ★ Default' : ''}
                 </Tag>
               ))}
-              <Button size="small" style={{ borderColor: '#000', color: '#000' }}
+              <Button size="small" style={{ borderColor: '#FFD700', color: '#FFD700', background: 'transparent', borderRadius: 6 }}
                 onClick={() => { setSelectedType('PLATFORM_SAAS_INVOICE'); setScreen('method-select'); }}>
                 + {platformTemplates?.length ? 'New Design' : 'Design Platform Invoice'}
               </Button>
             </Space>
-          </Card>
+          </div>
         )}
 
         {isSuperAdmin && !managedTenantId ? (
-          <Card style={{ borderRadius: 8 }}>
-            <Empty description="Pick a customer above to design or manage their invoice templates." />
+          <Card className="erp-card-elevated" style={{ borderRadius: 'var(--radius-md)' }}>
+            <EmptyState icon={<UserOutlined />} title="Pick a customer to get started"
+              hint="Select a customer above to design or manage their invoice templates." />
           </Card>
         ) : (
         <>
         {/* Stats bar */}
-        <Row gutter={[10, 10]} style={{ marginBottom: 16 }}>
-          {[
-            { label: 'Total Templates', value: (templates||[]).length, color: '#B8860B' },
-            { label: 'Invoice Types Used', value: Object.keys(byType).length, color: '#1890ff' },
-            { label: 'Published', value: (templates||[]).filter(t=>t.Is_Active).length, color: '#52c41a' },
-          ].map((s, i) => (
-            <Col xs={8} key={i}>
-              <Card bodyStyle={{ padding: '10px 14px' }} style={{ borderRadius: 8, border: 'none', boxShadow: '0 1px 4px rgba(0,0,0,.07)', borderTop: `3px solid ${s.color}` }}>
-                <Text style={{ fontSize: 11, color: '#888' }}>{s.label}</Text>
-                <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
-              </Card>
-            </Col>
-          ))}
+        <Row gutter={[12, 12]} style={{ marginBottom: 18 }}>
+          <KPICard title="Total Templates" value={(templates||[]).length} icon={<FileTextOutlined />} color="var(--gold)" span={{ xs: 8 }} />
+          <KPICard title="Invoice Types Used" value={Object.keys(byType).length} icon={<AppstoreOutlined />} color="var(--info)" span={{ xs: 8 }} />
+          <KPICard title="Published" value={(templates||[]).filter(t=>t.Is_Active).length} icon={<CheckCircleOutlined />} color="var(--success)" span={{ xs: 8 }} />
         </Row>
 
         {(templates||[]).length === 0 ? (
-          <Card style={{ borderRadius: 10, textAlign: 'center', padding: 40 }}>
-            <FileTextOutlined style={{ fontSize: 56, color: '#d9d9d9' }} />
-            <Title level={4} style={{ color: '#888', marginTop: 16 }}>No templates yet</Title>
-            <Text type="secondary">Create your first invoice template in minutes</Text>
-            <br /><br />
-            <Button type="primary" size="large" icon={<PlusOutlined />}
-              style={{ background: '#B8860B', borderColor: '#B8860B' }}
-              onClick={() => setScreen('type-select')}>
-              Create First Template
-            </Button>
+          <Card className="erp-card-elevated" style={{ borderRadius: 'var(--radius-md)' }}>
+            <EmptyState icon={<FileTextOutlined />} title="No templates yet"
+              hint="Create your first invoice template in minutes — pick a document type, then start blank, from a ready-made design, or let AI build one from an existing invoice."
+              actionLabel="Create First Template" onAction={() => setScreen('type-select')} />
           </Card>
         ) : (
           Object.entries(byType).map(([docType, tmplList]) => (
-            <Card key={docType} style={{ borderRadius: 8, marginBottom: 14 }}
+            <Card key={docType} className="erp-card-elevated" style={{ borderRadius: 'var(--radius-md)', marginBottom: 16 }}
               title={
                 <Space>
-                  <Tag color={TYPE_GROUP_COLOR[docType] || 'default'}>{TYPE_LABEL[docType] || docType}</Tag>
-                  <Text style={{ fontSize: 11, color: '#888' }}>{tmplList.length} template{tmplList.length > 1 ? 's' : ''}</Text>
+                  <Tag color={TYPE_GROUP_COLOR[docType] || 'default'} style={{ borderRadius: 4 }}>{TYPE_LABEL[docType] || docType}</Tag>
+                  <Text className="caption">{tmplList.length} template{tmplList.length > 1 ? 's' : ''}</Text>
                 </Space>
               }
-              extra={<Button size="small" icon={<PlusOutlined />} onClick={() => { setSelectedType(docType); setScreen('method-select'); }}>Add Template</Button>}>
-              <Row gutter={[12, 12]}>
+              extra={<Button size="small" icon={<PlusOutlined />} style={{ borderRadius: 6 }} onClick={() => { setSelectedType(docType); setScreen('method-select'); }}>Add Template</Button>}>
+              <Row gutter={[14, 14]}>
                 {tmplList.map(tmpl => (
                   <Col xs={24} sm={12} lg={8} key={tmpl.Template_ID}>
-                    <Card hoverable bodyStyle={{ padding: 14 }} style={{ borderRadius: 8, border: tmpl.Is_Default ? '2px solid #B8860B' : '1px solid #f0f0f0' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <Text strong style={{ fontSize: 13 }}>{tmpl.Template_Name}</Text>
-                        {tmpl.Is_Default && <Tag color="gold" style={{ fontSize: 9 }}>Default</Tag>}
+                    <Card hoverable bodyStyle={{ padding: 16 }}
+                      style={{
+                        borderRadius: 'var(--radius-md)',
+                        border: tmpl.Is_Default ? '1.5px solid var(--gold)' : '1px solid var(--ink-100)',
+                        boxShadow: tmpl.Is_Default ? '0 0 0 3px var(--gold-pale)' : 'none',
+                        transition: 'box-shadow .15s, transform .15s',
+                      }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                        <Text strong style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-900)' }}>{tmpl.Template_Name}</Text>
+                        {tmpl.Is_Default && <Tag color="gold" style={{ fontSize: 9, borderRadius: 4, flexShrink: 0, marginLeft: 6 }}>★ Default</Tag>}
                       </div>
-                      <Space size={4} style={{ marginBottom: 8 }}>
-                        <Tag style={{ fontSize: 10 }}>{tmpl.Paper_Size || 'A4'}</Tag>
-                        <Tag style={{ fontSize: 10 }}>v{tmpl.Template_Version || 1}</Tag>
-                        <Tag color={tmpl.Is_Active ? 'green' : 'red'} style={{ fontSize: 10 }}>{tmpl.Is_Active ? 'Active' : 'Draft'}</Tag>
+                      <Space size={4} style={{ marginBottom: 12 }}>
+                        <Tag style={{ fontSize: 10, borderRadius: 4 }}>{tmpl.Paper_Size || 'A4'}</Tag>
+                        <Tag style={{ fontSize: 10, borderRadius: 4 }}>v{tmpl.Template_Version || 1}</Tag>
+                        <Tag color={tmpl.Is_Active ? 'green' : 'red'} style={{ fontSize: 10, borderRadius: 4 }}>{tmpl.Is_Active ? 'Active' : 'Draft'}</Tag>
                       </Space>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <Button size="small" icon={<EditOutlined />} style={{ flex: 1 }} onClick={() => openExistingTemplate(tmpl)}>Edit</Button>
-                        <Tooltip title="Duplicate"><Button size="small" icon={<CopyOutlined />} onClick={() => duplicateMutation.mutate(tmpl.Template_ID)} /></Tooltip>
-                        <Tooltip title="Download JSON"><Button size="small" icon={<DownloadOutlined />} onClick={() => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(tmpl, null, 2)], {type:'application/json'})); a.download = `${tmpl.Template_Name}.json`; a.click(); }} /></Tooltip>
+                        <Button size="small" icon={<EditOutlined />} style={{ flex: 1, borderRadius: 6 }} onClick={() => openExistingTemplate(tmpl)}>Edit</Button>
+                        <Tooltip title="Duplicate"><Button size="small" icon={<CopyOutlined />} style={{ borderRadius: 6 }} onClick={() => duplicateMutation.mutate(tmpl.Template_ID)} /></Tooltip>
+                        <Tooltip title="Download JSON"><Button size="small" icon={<DownloadOutlined />} style={{ borderRadius: 6 }} onClick={() => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(tmpl, null, 2)], {type:'application/json'})); a.download = `${tmpl.Template_Name}.json`; a.click(); }} /></Tooltip>
                         <Popconfirm title="Delete this template?" onConfirm={() => deleteMutation.mutate(tmpl.Template_ID)} okText="Delete" okButtonProps={{ danger: true }}>
-                          <Button size="small" danger icon={<DeleteOutlined />} />
+                          <Button size="small" danger icon={<DeleteOutlined />} style={{ borderRadius: 6 }} />
                         </Popconfirm>
                       </div>
                     </Card>
@@ -1020,27 +1028,29 @@ export default function InvoiceStudio() {
   // ══════════════════════════════════════════════════════════════════════════
   if (screen === 'type-select') {
     return (
-      <div>
+      <div className="page-wrapper">
         <div className="page-header">
-          <div>
-            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('home')}>Back</Button>
-            <Title level={4} style={{ margin: 0, display: 'inline', marginLeft: 8 }}>Select Invoice Type</Title>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('home')} style={{ marginRight: 4 }}>Back</Button>
+            <div className="h2">Select Invoice Type</div>
           </div>
         </div>
-        <Alert message="Select the type of document you want to design. Each type has its own field set and default layout." type="info" showIcon style={{ marginBottom: 16, fontSize: 11 }} />
+        <Alert message="Select the type of document you want to design. Each type has its own field set and default layout." type="info" showIcon style={{ marginBottom: 18, borderRadius: 'var(--radius-sm)' }} />
         {INVOICE_CATEGORIES.filter(cat => !cat.superAdminOnly || isSuperAdmin).map(cat => (
-          <div key={cat.group} style={{ marginBottom: 20 }}>
-            <Text strong style={{ fontSize: 14, color: cat.color }}>{cat.icon} {cat.group}</Text>
-            <Divider style={{ margin: '6px 0 10px' }} />
-            <Row gutter={[10, 10]}>
+          <div key={cat.group} style={{ marginBottom: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 16 }}>{cat.icon}</span>
+              <Text strong style={{ fontSize: 'var(--fs-h4)', color: cat.color }}>{cat.group}</Text>
+            </div>
+            <Row gutter={[12, 12]}>
               {cat.types.map(t => (
                 <Col xs={24} sm={12} md={8} lg={6} key={t.key}>
                   <Card hoverable onClick={() => { setSelectedType(t.key); setScreen('method-select'); }}
-                    style={{ borderRadius: 8, border: `1px solid ${cat.color}33`, cursor: 'pointer' }}
-                    bodyStyle={{ padding: '10px 14px' }}>
-                    <Tag color={cat.color} style={{ marginBottom: 4, fontSize: 10 }}>{cat.group}</Tag>
-                    <br />
-                    <Text strong style={{ fontSize: 13 }}>{t.label}</Text>
+                    className="erp-card-elevated"
+                    style={{ borderRadius: 'var(--radius-md)', borderTop: `3px solid ${cat.color}`, cursor: 'pointer', height: '100%' }}
+                    bodyStyle={{ padding: '12px 16px' }}>
+                    <Tag color={cat.color} style={{ marginBottom: 6, fontSize: 9, borderRadius: 4 }}>{cat.group}</Tag>
+                    <div style={{ fontSize: 'var(--fs-body)', fontWeight: 600, color: 'var(--ink-900)' }}>{t.label}</div>
                   </Card>
                 </Col>
               ))}
@@ -1064,21 +1074,19 @@ export default function InvoiceStudio() {
     ];
 
     return (
-      <div>
+      <div className="page-wrapper">
         <div className="page-header">
-          <div>
-            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('type-select')}>Back</Button>
-            <Title level={4} style={{ margin: 0, display: 'inline', marginLeft: 8 }}>
-              Create {TYPE_LABEL[selectedType]} Template
-            </Title>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('type-select')} style={{ marginRight: 4 }}>Back</Button>
+            <div className="h2">Create {TYPE_LABEL[selectedType]} Template</div>
           </div>
         </div>
 
         {/* Paper size selection */}
-        <Card size="small" style={{ borderRadius: 8, marginBottom: 16 }}>
+        <Card size="small" className="erp-card-elevated" style={{ borderRadius: 'var(--radius-md)', marginBottom: 18 }}>
           <Row gutter={12} align="middle">
-            <Col xs={4}><Text strong style={{ fontSize: 12 }}>Paper Size:</Text></Col>
-            <Col xs={20}>
+            <Col xs={24} sm={4}><Text strong style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-900)' }}>Paper Size:</Text></Col>
+            <Col xs={24} sm={20}>
               <Radio.Group value={paperSize} onChange={e => setPaperSize(e.target.value)}>
                 {Object.entries(PAPER_SIZES).map(([k, v]) => (
                   <Radio.Button key={k} value={k} style={{ fontSize: 11 }}>{v.label}</Radio.Button>
@@ -1088,7 +1096,7 @@ export default function InvoiceStudio() {
           </Row>
         </Card>
 
-        <Row gutter={[14, 14]}>
+        <Row gutter={[16, 16]}>
           {methods.map(m => (
             <Col xs={24} sm={12} lg={8} key={m.key}>
               <Card hoverable
@@ -1098,20 +1106,19 @@ export default function InvoiceStudio() {
                   else if (m.key === 'library') setScreen('library');
                   else if (m.key === 'ai' || m.key === 'img' || m.key === 'pdf') setScreen('upload');
                 }}
-                style={{ borderRadius: 10, border: `2px solid ${m.color}33`, cursor: 'pointer', height: '100%' }}
-                bodyStyle={{ padding: 18 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <span style={{ fontSize: 32 }}>{m.icon}</span>
-                  <Space>
-                    {m.popular && <Tag color="gold" style={{ fontSize: 9 }}>Popular</Tag>}
-                    {m.badge && <Tag color="purple" style={{ fontSize: 9 }}>{m.badge}</Tag>}
+                className="erp-card-elevated"
+                style={{ borderRadius: 'var(--radius-lg)', cursor: 'pointer', height: '100%' }}
+                bodyStyle={{ padding: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                  <div className="icon-badge" style={{ width: 46, height: 46, fontSize: 22, color: m.color, background: `${m.color}1A` }}>{m.icon}</div>
+                  <Space size={4}>
+                    {m.popular && <Tag color="gold" style={{ fontSize: 9, borderRadius: 4 }}>Popular</Tag>}
+                    {m.badge && <Tag color="purple" style={{ fontSize: 9, borderRadius: 4 }}>{m.badge}</Tag>}
                   </Space>
                 </div>
-                <Text strong style={{ color: m.color, fontSize: 14 }}>{m.title}</Text>
-                <br />
-                <Text type="secondary" style={{ fontSize: 12 }}>{m.desc}</Text>
-                <br />
-                <Tag style={{ marginTop: 8, fontSize: 10 }}>⏱ {m.time}</Tag>
+                <Text strong style={{ color: m.color, fontSize: 'var(--fs-h4)' }}>{m.title}</Text>
+                <div style={{ fontSize: 'var(--fs-caption)', color: 'var(--ink-500)', marginTop: 4, minHeight: 32 }}>{m.desc}</div>
+                <Tag style={{ marginTop: 10, fontSize: 10, borderRadius: 4 }}>⏱ {m.time}</Tag>
               </Card>
             </Col>
           ))}
@@ -1125,32 +1132,32 @@ export default function InvoiceStudio() {
   // ══════════════════════════════════════════════════════════════════════════
   if (screen === 'library') {
     return (
-      <div>
+      <div className="page-wrapper">
         <div className="page-header">
-          <div>
-            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('method-select')}>Back</Button>
-            <Title level={4} style={{ margin: 0, display: 'inline', marginLeft: 8 }}>Template Library</Title>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('method-select')} style={{ marginRight: 4 }}>Back</Button>
+            <div className="h2">Template Library</div>
           </div>
         </div>
-        <Alert message="Choose a ready-made template. You can fully customize it after selecting." type="info" showIcon style={{ marginBottom: 16, fontSize: 11 }} />
-        <Row gutter={[14, 14]}>
+        <Alert message="Choose a ready-made template. You can fully customize it after selecting." type="info" showIcon style={{ marginBottom: 18, borderRadius: 'var(--radius-sm)' }} />
+        <Row gutter={[16, 16]}>
           {TEMPLATE_LIBRARY.map(lib => (
             <Col xs={24} sm={12} lg={8} key={lib.id}>
-              <Card hoverable style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid #f0f0f0' }} bodyStyle={{ padding: 0 }}>
+              <Card hoverable className="erp-card-elevated" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }} bodyStyle={{ padding: 0 }}>
                 {/* Preview area */}
-                <div style={{ height: 160, background: `linear-gradient(135deg, ${lib.preview}22, ${lib.preview}44)`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid #f0f0f0' }}>
+                <div style={{ height: 160, background: `linear-gradient(135deg, ${lib.preview}22, ${lib.preview}44)`, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderBottom: '1px solid var(--ink-100)' }}>
                   <div style={{ width: 120, height: 16, background: lib.preview, borderRadius: 2, marginBottom: 8 }} />
                   <div style={{ width: 100, height: 10, background: lib.preview + '88', borderRadius: 2, marginBottom: 4 }} />
                   <div style={{ width: 140, height: 60, border: `1px solid ${lib.preview}`, borderRadius: 2, margin: 4 }} />
                   <div style={{ width: 120, height: 20, background: lib.preview + '44', borderRadius: 2 }} />
                 </div>
-                <div style={{ padding: '12px 14px' }}>
+                <div style={{ padding: '14px 16px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text strong style={{ fontSize: 13 }}>{lib.name}</Text>
-                    {lib.popular && <Tag color="gold" style={{ fontSize: 9 }}>Popular</Tag>}
+                    <Text strong style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-900)' }}>{lib.name}</Text>
+                    {lib.popular && <Tag color="gold" style={{ fontSize: 9, borderRadius: 4 }}>Popular</Tag>}
                   </div>
-                  <Text type="secondary" style={{ fontSize: 11 }}>{lib.desc}</Text>
-                  <Button type="primary" block size="small" style={{ marginTop: 10, background: lib.preview, borderColor: lib.preview }}
+                  <Text className="caption">{lib.desc}</Text>
+                  <Button type="primary" block size="small" style={{ marginTop: 12, background: lib.preview, borderColor: lib.preview, borderRadius: 6, fontWeight: 600 }}
                     onClick={() => startFromLibrary(lib.id)}>
                     Use This Template →
                   </Button>
@@ -1169,13 +1176,11 @@ export default function InvoiceStudio() {
   if (screen === 'upload') {
     const isAI = creationMethod === 'ai';
     return (
-      <div>
+      <div className="page-wrapper">
         <div className="page-header">
-          <div>
-            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('method-select')}>Back</Button>
-            <Title level={4} style={{ margin: 0, display: 'inline', marginLeft: 8 }}>
-              {isAI ? '🤖 AI Invoice Generator' : '📄 Upload Invoice'}
-            </Title>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => setScreen('method-select')} style={{ marginRight: 4 }}>Back</Button>
+            <div className="h2">{isAI ? '🤖 AI Invoice Generator' : '📄 Upload Invoice'}</div>
           </div>
         </div>
 
@@ -1183,61 +1188,61 @@ export default function InvoiceStudio() {
           <Alert
             message={<span><RobotOutlined /> AI-Powered Template Generation</span>}
             description="Upload a JPG, PNG or PDF of your existing invoice. Google Vision API will analyze the layout, detect components (header, table, totals, footer), map ERP fields automatically, and generate an editable template in 5–10 minutes."
-            type="info" showIcon style={{ marginBottom: 16 }} />
+            type="info" showIcon style={{ marginBottom: 18, borderRadius: 'var(--radius-sm)' }} />
         )}
 
-        <Card style={{ borderRadius: 10, maxWidth: 600, margin: '0 auto' }}>
+        <Card className="erp-card-elevated" style={{ borderRadius: 'var(--radius-lg)', maxWidth: 600, margin: '0 auto' }}>
           <Dragger
             accept={creationMethod === 'pdf' ? '.pdf' : '.jpg,.jpeg,.png,.pdf'}
             beforeUpload={(file) => { setAiFile(file); return false; }}
             maxCount={1}
-            style={{ borderRadius: 8, padding: '20px 0' }}>
+            style={{ borderRadius: 'var(--radius-md)', padding: '20px 0', background: 'var(--gold-pale)', border: '1.5px dashed var(--gold)' }}>
             <div style={{ padding: 20 }}>
-              <CloudUploadOutlined style={{ fontSize: 48, color: '#B8860B' }} />
-              <Title level={5} style={{ marginTop: 12 }}>
+              <CloudUploadOutlined style={{ fontSize: 48, color: 'var(--gold)' }} />
+              <div className="h3" style={{ marginTop: 12 }}>
                 {creationMethod === 'pdf'
                   ? 'Drop your invoice PDF here'
                   : 'Drop your invoice image or PDF here'}
-              </Title>
-              <Text type="secondary" style={{ fontSize: 12 }}>
+              </div>
+              <Text className="caption">
                 {creationMethod === 'pdf'
                   ? 'Supported: PDF files'
                   : 'Supported: JPG, PNG, PDF · Max 10MB'}
               </Text>
               <br /><br />
-              <Button icon={<UploadOutlined />} style={{ borderColor: '#B8860B', color: '#B8860B' }}>
+              <Button icon={<UploadOutlined />} style={{ borderColor: 'var(--gold)', color: 'var(--gold)', borderRadius: 6 }}>
                 Browse File
               </Button>
             </div>
           </Dragger>
 
           {aiFile && (
-            <Alert style={{ marginTop: 14 }}
+            <Alert style={{ marginTop: 14, borderRadius: 'var(--radius-sm)' }}
               message={<span>✅ File selected: <Text strong>{aiFile.name}</Text> ({(aiFile.size/1024).toFixed(1)} KB)</span>}
               type="success" showIcon />
           )}
 
           {isAI && (
-            <div style={{ marginTop: 16 }}>
-              <Text strong style={{ fontSize: 12 }}>What AI will detect:</Text>
+            <div style={{ marginTop: 18 }}>
+              <Text strong style={{ fontSize: 'var(--fs-body)', color: 'var(--ink-900)' }}>What AI will detect:</Text>
               <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
                 {['Shop Header & Logo', 'Customer Section', 'Items Table', 'Totals Block', 'GST Breakdown', 'Footer & Terms', 'Signature Line', 'ERP Field Mapping'].map(item => (
                   <Col xs={12} key={item}>
-                    <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 4 }} />
-                    <Text style={{ fontSize: 11 }}>{item}</Text>
+                    <CheckCircleOutlined style={{ color: 'var(--success)', marginRight: 4 }} />
+                    <Text style={{ fontSize: 'var(--fs-caption)', color: 'var(--ink-700)' }}>{item}</Text>
                   </Col>
                 ))}
               </Row>
             </div>
           )}
 
-          <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
+          <div style={{ marginTop: 22, display: 'flex', gap: 10 }}>
             {isAI ? (
               <Button type="primary" block size="large"
                 icon={<RobotOutlined />}
                 disabled={!aiFile}
                 onClick={runAiAnalysis}
-                style={{ background: '#722ed1', borderColor: '#722ed1', fontWeight: 700 }}>
+                style={{ background: '#722ed1', borderColor: '#722ed1', fontWeight: 700, borderRadius: 8 }}>
                 🤖 Start AI Analysis
               </Button>
             ) : (
@@ -1248,7 +1253,7 @@ export default function InvoiceStudio() {
                   setTemplateName(`${TYPE_LABEL[selectedType]} Template`);
                   setScreen('design');
                 }}
-                style={{ background: '#B8860B', borderColor: '#B8860B', fontWeight: 700 }}>
+                style={{ background: 'var(--gold)', borderColor: 'var(--gold)', fontWeight: 700, borderRadius: 8 }}>
                 Continue to Designer →
               </Button>
             )}
@@ -1263,25 +1268,27 @@ export default function InvoiceStudio() {
   // ══════════════════════════════════════════════════════════════════════════
   if (screen === 'ai-processing') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400 }}>
-        <Card style={{ borderRadius: 12, width: 480, textAlign: 'center', padding: '32px 24px' }}>
-          <RobotOutlined style={{ fontSize: 64, color: '#722ed1' }} />
-          <Title level={4} style={{ marginTop: 16, color: '#722ed1' }}>AI Analyzing Your Invoice</Title>
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 440 }}>
+        <Card className="erp-card-elevated" style={{ borderRadius: 'var(--radius-lg)', width: 480, textAlign: 'center', padding: '36px 28px' }}>
+          <div className="icon-badge" style={{ width: 64, height: 64, fontSize: 30, color: '#722ed1', background: '#722ed11A', margin: '0 auto' }}>
+            <RobotOutlined />
+          </div>
+          <div className="h3" style={{ marginTop: 18, color: '#722ed1' }}>AI Analyzing Your Invoice</div>
+          <Text className="caption" style={{ display: 'block', marginBottom: 26, marginTop: 4 }}>
             Using Google Vision API to detect layout, components and map ERP fields
           </Text>
           <Progress percent={aiProgress} strokeColor="#722ed1" style={{ marginBottom: 16 }} />
-          <Text strong style={{ fontSize: 13, color: '#722ed1' }}>{aiStatus}</Text>
-          <div style={{ marginTop: 24, textAlign: 'left' }}>
+          <Text strong style={{ fontSize: 'var(--fs-body)', color: '#722ed1' }}>{aiStatus}</Text>
+          <div style={{ marginTop: 26, textAlign: 'left' }}>
             {['Uploading invoice file', 'Running Vision API layout detection', 'Identifying header, table, footer sections', 'Mapping ERP field variables', 'Generating editable template'].map((step, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', padding: '5px 0' }}>
                 {aiProgress >= (i+1)*20
-                  ? <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 8 }} />
+                  ? <CheckCircleOutlined style={{ color: 'var(--success)', marginRight: 8 }} />
                   : aiProgress >= i*20
                     ? <SyncOutlined spin style={{ color: '#722ed1', marginRight: 8 }} />
-                    : <div style={{ width: 14, height: 14, borderRadius: '50%', border: '1px solid #d9d9d9', marginRight: 8 }} />
+                    : <div style={{ width: 14, height: 14, borderRadius: '50%', border: '1px solid var(--ink-300)', marginRight: 8, flexShrink: 0 }} />
                 }
-                <Text style={{ fontSize: 12, color: aiProgress >= (i+1)*20 ? '#333' : '#999' }}>{step}</Text>
+                <Text style={{ fontSize: 'var(--fs-caption)', color: aiProgress >= (i+1)*20 ? 'var(--ink-900)' : 'var(--ink-500)' }}>{step}</Text>
               </div>
             ))}
           </div>
@@ -1297,32 +1304,32 @@ export default function InvoiceStudio() {
     <div style={{ height: 'calc(100vh - 128px)', display: 'flex', flexDirection: 'column' }}>
 
       {/* ── Top toolbar ─────────────────────────────────────────────────── */}
-      <div style={{ background: '#1a1a1a', padding: '6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 8, marginBottom: 6, flexShrink: 0 }}>
+      <div style={{ background: 'linear-gradient(135deg, var(--dark) 0%, var(--dark-2) 100%)', padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 'var(--radius-md)', marginBottom: 8, flexShrink: 0, boxShadow: 'var(--shadow-sm)' }}>
         <Space size={6}>
           <Button type="text" icon={<ArrowLeftOutlined />} style={{ color: '#aaa' }} onClick={() => { if (isDirty) { Modal.confirm({ title: 'Unsaved changes', content: 'Leave without saving?', onOk: () => setScreen('home') }); } else setScreen('home'); }} />
           <Input value={templateName} onChange={e => { setTemplateName(e.target.value); setIsDirty(true); }}
-            style={{ width: 200, background: '#333', border: 'none', color: '#fff', fontWeight: 600 }} size="small" />
-          <Tag color={TYPE_GROUP_COLOR[selectedType] || 'default'} style={{ fontSize: 10 }}>{TYPE_LABEL[selectedType] || 'Invoice'}</Tag>
+            style={{ width: 200, background: 'rgba(255,255,255,0.08)', border: 'none', color: '#fff', fontWeight: 600, borderRadius: 6 }} size="small" />
+          <Tag color={TYPE_GROUP_COLOR[selectedType] || 'default'} style={{ fontSize: 10, borderRadius: 4 }}>{TYPE_LABEL[selectedType] || 'Invoice'}</Tag>
           <Select value={paperSize} onChange={v => { setPaperSize(v); setIsDirty(true); }} size="small" style={{ width: 140 }}>
             {Object.entries(PAPER_SIZES).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
           </Select>
-          {isDirty && <Tag color="orange" style={{ fontSize: 10 }}>● Unsaved</Tag>}
+          {isDirty && <Tag color="orange" style={{ fontSize: 10, borderRadius: 4 }}>● Unsaved</Tag>}
         </Space>
         <Space size={6}>
           {/* Logo Upload */}
           <Upload beforeUpload={handleLogoUpload} accept=".png,.jpg,.jpeg,.svg" showUploadList={false}>
-            <Button size="small" icon={<UploadOutlined />} style={{ borderColor: '#fa8c16', color: '#fa8c16' }}>
+            <Button size="small" icon={<UploadOutlined />} style={{ borderColor: '#fa8c16', color: '#fa8c16', borderRadius: 6 }}>
               {logoUrl ? 'Change Logo' : 'Upload Logo'}
             </Button>
           </Upload>
-          {logoUrl && <Button size="small" danger onClick={() => { setLogoUrl(''); setBlocks(prev => prev.map(b => b.type==='logo' ? {...b, content:{...b.content, url:''}} : b)); }}>Remove Logo</Button>}
+          {logoUrl && <Button size="small" danger style={{ borderRadius: 6 }} onClick={() => { setLogoUrl(''); setBlocks(prev => prev.map(b => b.type==='logo' ? {...b, content:{...b.content, url:''}} : b)); }}>Remove Logo</Button>}
 
           <Button size="small" icon={<EyeOutlined />}
-            style={{ borderColor: showPreview ? '#52c41a' : '#555', color: showPreview ? '#52c41a' : '#aaa' }}
+            style={{ borderColor: showPreview ? 'var(--success)' : '#555', color: showPreview ? 'var(--success)' : '#aaa', borderRadius: 6 }}
             onClick={() => setShowPreview(p => !p)}>
             {showPreview ? 'Hide Preview' : 'Show Preview'}
           </Button>
-          <Button size="small" icon={<HistoryOutlined />} style={{ color: '#aaa', borderColor: '#555' }} onClick={() => setShowHistory(true)}>History</Button>
+          <Button size="small" icon={<HistoryOutlined />} style={{ color: '#aaa', borderColor: '#555', borderRadius: 6 }} onClick={() => setShowHistory(true)}>History</Button>
           {editingId && (
             (templates || []).find(t => t.Template_ID === editingId)?.Is_Default ? (
               // Already the default — no button to click here at all, since
@@ -1331,15 +1338,15 @@ export default function InvoiceStudio() {
               // Layout_JSON, which the server used to read as "save an
               // empty layout"). Fixed server-side too, but removing the
               // temptation to re-click is the safer fix.
-              <Tag ref={setDefaultRef} color="gold" style={{ margin: 0 }}>★ This is the default</Tag>
+              <Tag ref={setDefaultRef} color="gold" style={{ margin: 0, borderRadius: 4 }}>★ This is the default</Tag>
             ) : (
               <Tooltip title="Set this as the default template for this invoice type — real bills print using this one instead">
-                <Button ref={setDefaultRef} size="small" icon={<StarOutlined />} style={{ borderColor: '#FFD700', color: '#FFD700' }}
+                <Button ref={setDefaultRef} size="small" icon={<StarOutlined />} style={{ borderColor: '#FFD700', color: '#FFD700', borderRadius: 6 }}
                   onClick={() => setAsDefault.mutate(editingId)}>Set Default</Button>
               </Tooltip>
             )
           )}
-          <Button size="small" icon={<PrinterOutlined />} style={{ borderColor: '#52c41a', color: '#52c41a' }}
+          <Button size="small" icon={<PrinterOutlined />} style={{ borderColor: 'var(--success)', color: 'var(--success)', borderRadius: 6 }}
             onClick={() => {
               const win = window.open('', '_blank', 'width=900,height=700');
               const paper_ = PAPER_SIZES[paperSize];
@@ -1350,7 +1357,7 @@ export default function InvoiceStudio() {
             }}>Print</Button>
           <Button ref={saveRef} type="primary" size="small" icon={<SaveOutlined />}
             loading={saveMutation.isPending}
-            style={{ background: '#B8860B', borderColor: '#B8860B', fontWeight: 700 }}
+            style={{ background: 'var(--gold)', borderColor: 'var(--gold)', fontWeight: 700, borderRadius: 6 }}
             onClick={handleSave}>
             Save
           </Button>
@@ -1361,38 +1368,38 @@ export default function InvoiceStudio() {
       <div style={{ flex: 1, display: 'flex', minHeight: 0, gap: 6 }}>
 
         {/* LEFT: Component palette */}
-        <div ref={paletteRef} style={{ width: 185, background: '#fff', borderRadius: 8, overflow: 'auto', padding: 8, flexShrink: 0 }}>
-          <Text strong style={{ fontSize: 11, color: '#888', display: 'block', marginBottom: 4 }}>COMPONENTS</Text>
+        <div ref={paletteRef} className="erp-card-elevated" style={{ width: 190, background: '#fff', borderRadius: 'var(--radius-md)', overflow: 'auto', padding: 10, flexShrink: 0 }}>
+          <Text style={{ fontSize: 10, color: 'var(--ink-500)', fontWeight: 700, letterSpacing: '0.3px', display: 'block', marginBottom: 6 }}>COMPONENTS</Text>
           {COMP_GROUPS.map(group => (
-            <div key={group} style={{ marginBottom: 8 }}>
-              <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>{group.toUpperCase()}</Text>
+            <div key={group} style={{ marginBottom: 10 }}>
+              <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>{group.toUpperCase()}</Text>
               {COMPONENTS.filter(c => c.group === group).map(comp => (
                 <div key={comp.type} onClick={() => addBlock(comp.type)}
-                  style={{ padding: '4px 7px', marginTop: 2, background: '#f8f8f8', borderRadius: 4, cursor: 'pointer', fontSize: 11, border: '1px solid #f0f0f0', userSelect: 'none' }}
-                  onMouseEnter={e => e.currentTarget.style.background = '#FFF8E1'}
-                  onMouseLeave={e => e.currentTarget.style.background = '#f8f8f8'}>
+                  style={{ padding: '5px 8px', marginTop: 3, background: 'var(--ink-100)', borderRadius: 6, cursor: 'pointer', fontSize: 11, border: '1px solid transparent', userSelect: 'none', transition: 'background .12s, border-color .12s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--gold-pale)'; e.currentTarget.style.borderColor = 'var(--gold)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'var(--ink-100)'; e.currentTarget.style.borderColor = 'transparent'; }}>
                   {comp.label}
                 </div>
               ))}
             </div>
           ))}
-          <Divider style={{ margin: '6px 0' }} />
+          <Divider style={{ margin: '8px 0' }} />
           <Button size="small" block icon={<AppstoreOutlined />} onClick={() => setShowVars(true)}
-            style={{ borderColor: '#B8860B', color: '#B8860B', fontSize: 11 }}>
+            style={{ borderColor: 'var(--gold)', color: 'var(--gold)', fontSize: 11, borderRadius: 6 }}>
             {'{{ERP Variables}}'}
           </Button>
           {logoUrl && (
-            <div style={{ marginTop: 8, textAlign: 'center' }}>
-              <img src={logoUrl} alt="logo" style={{ maxWidth: '100%', maxHeight: 50, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 4 }} />
-              <div style={{ fontSize: 9, color: '#888', marginTop: 2 }}>Current Logo</div>
+            <div style={{ marginTop: 10, textAlign: 'center' }}>
+              <img src={logoUrl} alt="logo" style={{ maxWidth: '100%', maxHeight: 50, objectFit: 'contain', border: '1px solid var(--ink-100)', borderRadius: 6 }} />
+              <div className="caption" style={{ marginTop: 3 }}>Current Logo</div>
             </div>
           )}
         </div>
 
         {/* CENTER: Design canvas */}
-        <div ref={canvasRef} style={{ flex: 1, overflow: 'auto', background: '#e0e0e0', borderRadius: 8, padding: 12 }}>
+        <div ref={canvasRef} style={{ flex: 1, overflow: 'auto', background: '#e0e0e0', borderRadius: 'var(--radius-md)', padding: 14 }}>
           <div
-            style={{ width: paper.w * scale, height: paper.h * scale, background: '#fff', position: 'relative', margin: '0 auto', boxShadow: '0 4px 20px rgba(0,0,0,0.2)', borderRadius: 2, transform: `scale(${scale})`, transformOrigin: 'top center' }}
+            style={{ width: paper.w * scale, height: paper.h * scale, background: '#fff', position: 'relative', margin: '0 auto', boxShadow: 'var(--shadow-lg)', borderRadius: 2, transform: `scale(${scale})`, transformOrigin: 'top center' }}
             onClick={() => setSelected(null)}>
             {blocks.map(b => (
               <CanvasBlock key={b.id} block={b} selected={selected === b.id}
@@ -1409,29 +1416,29 @@ export default function InvoiceStudio() {
 
         {/* RIGHT: Live Preview (only when showPreview = true) */}
         {showPreview && (
-          <div style={{ width: 380, background: '#fff', borderRadius: 8, overflow: 'auto', padding: 10, flexShrink: 0 }}>
+          <div className="erp-card-elevated" style={{ width: 380, background: '#fff', borderRadius: 'var(--radius-md)', overflow: 'auto', padding: 12, flexShrink: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <Text strong style={{ fontSize: 11, color: '#52c41a' }}>🟢 LIVE PREVIEW</Text>
-              <Tag color="green" style={{ fontSize: 9 }}>Updates instantly</Tag>
+              <Text strong style={{ fontSize: 11, color: 'var(--success)' }}>🟢 LIVE PREVIEW</Text>
+              <Tag color="green" style={{ fontSize: 9, borderRadius: 4 }}>Updates instantly</Tag>
             </div>
-            <div style={{ background: '#f5f5f5', borderRadius: 6, padding: 8, overflow: 'auto' }}>
+            <div style={{ background: 'var(--ink-100)', borderRadius: 'var(--radius-sm)', padding: 8, overflow: 'auto' }}>
               <LivePreview blocks={blocks} paper={paper} logoUrl={logoUrl} />
             </div>
-            <Alert message="This preview uses sample data. Actual invoices will show real values." type="info" showIcon style={{ marginTop: 8, fontSize: 10 }} />
+            <Alert message="This preview uses sample data. Actual invoices will show real values." type="info" showIcon style={{ marginTop: 8, fontSize: 10, borderRadius: 6 }} />
           </div>
         )}
 
         {/* RIGHT: Properties panel (always shown, but narrower when preview is open) */}
-        <div ref={propertiesRef} style={{ width: showPreview ? 200 : 220, background: '#fff', borderRadius: 8, overflow: 'auto', padding: 10, flexShrink: 0 }}>
-          <Text strong style={{ fontSize: 11, color: '#888', display: 'block', marginBottom: 6 }}>PROPERTIES</Text>
+        <div ref={propertiesRef} className="erp-card-elevated" style={{ width: showPreview ? 200 : 220, background: '#fff', borderRadius: 'var(--radius-md)', overflow: 'auto', padding: 12, flexShrink: 0 }}>
+          <Text style={{ fontSize: 10, color: 'var(--ink-500)', fontWeight: 700, letterSpacing: '0.3px', display: 'block', marginBottom: 8 }}>PROPERTIES</Text>
           {selectedBlock ? (
             <div>
-              <div style={{ background: '#FFF8E1', borderRadius: 6, padding: '5px 8px', marginBottom: 8 }}>
-                <Text strong style={{ fontSize: 11, color: '#B8860B' }}>
+              <div style={{ background: 'var(--gold-pale)', borderRadius: 6, padding: '6px 10px', marginBottom: 10 }}>
+                <Text strong style={{ fontSize: 11, color: 'var(--gold)' }}>
                   {COMPONENTS.find(c => c.type === selectedBlock.type)?.label || selectedBlock.type}
                 </Text>
               </div>
-              <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>POSITION & SIZE</Text>
+              <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>POSITION & SIZE</Text>
               <Row gutter={4} style={{ marginTop: 4, marginBottom: 8 }}>
                 {[['x','X',selectedBlock.x],['y','Y',selectedBlock.y],['w','W',selectedBlock.w],['h','H',selectedBlock.h]].map(([f,l,v]) => (
                   <Col xs={12} key={f}>
@@ -1442,7 +1449,7 @@ export default function InvoiceStudio() {
               </Row>
               {selectedBlock.type === 'text' && (
                 <>
-                  <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>TEXT</Text>
+                  <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>TEXT</Text>
                   <Input.TextArea rows={3} style={{ marginTop: 3, fontSize: 11 }} value={selectedBlock.content?.text}
                     onChange={e => updateBlockContent(selectedBlock.id, { text: e.target.value })} />
                   <Row gutter={4} style={{ marginTop: 4 }}>
@@ -1462,7 +1469,7 @@ export default function InvoiceStudio() {
               )}
               {selectedBlock.type === 'line' && (
                 <>
-                  <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>LINE</Text>
+                  <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>LINE</Text>
                   <div style={{ marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
                     <input type="color" value={selectedBlock.content?.color || '#B8860B'}
                       onChange={e => updateBlockContent(selectedBlock.id, { color: e.target.value })}
@@ -1474,7 +1481,7 @@ export default function InvoiceStudio() {
               )}
               {selectedBlock.type === 'logo' && (
                 <>
-                  <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>LOGO</Text>
+                  <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>LOGO</Text>
                   <Upload beforeUpload={handleLogoUpload} accept=".png,.jpg,.jpeg,.svg" showUploadList={false}>
                     <Button size="small" block icon={<UploadOutlined />} style={{ marginTop: 4 }}>
                       {(selectedBlock.content?.url || logoUrl) ? 'Change Logo' : 'Upload Logo'}
@@ -1487,7 +1494,7 @@ export default function InvoiceStudio() {
               )}
               {selectedBlock.type === 'excel_grid' && (
                 <>
-                  <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>EXCEL-STYLE GRID</Text>
+                  <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>EXCEL-STYLE GRID</Text>
                   <div style={{ fontSize: 11, color: '#666', margin: '4px 0 6px' }}>
                     {selectedBlock.content?.rows?.length || 0} rows × {selectedBlock.content?.numCols || 0} columns
                   </div>
@@ -1499,27 +1506,27 @@ export default function InvoiceStudio() {
               )}
               {(selectedBlock.type === 'shop_header' || selectedBlock.type === 'terms') && (
                 <>
-                  <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>CONTENT</Text>
+                  <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>CONTENT</Text>
                   <Input.TextArea rows={3} style={{ marginTop: 3, fontSize: 11 }} value={selectedBlock.content?.text}
                     onChange={e => updateBlockContent(selectedBlock.id, { text: e.target.value })} />
                 </>
               )}
               <Divider style={{ margin: '8px 0' }} />
-              <Button danger size="small" block icon={<DeleteOutlined />} onClick={() => deleteBlock(selectedBlock.id)}>Remove</Button>
+              <Button danger size="small" block icon={<DeleteOutlined />} style={{ borderRadius: 6 }} onClick={() => deleteBlock(selectedBlock.id)}>Remove</Button>
             </div>
           ) : (
             <>
-              <div style={{ textAlign: 'center', padding: '14px 0', color: '#ccc' }}>
+              <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--ink-300)' }}>
                 <InfoCircleOutlined style={{ fontSize: 24 }} />
-                <div style={{ marginTop: 4, fontSize: 11 }}>Click a block to edit</div>
+                <div className="caption" style={{ marginTop: 6 }}>Click a block to edit</div>
               </div>
               <Divider style={{ margin: '8px 0' }} />
-              <Text style={{ fontSize: 9, color: '#aaa', fontWeight: 700 }}>CANVAS</Text>
+              <Text style={{ fontSize: 9, color: 'var(--ink-500)', fontWeight: 700 }}>CANVAS</Text>
               <Select size="small" style={{ width: '100%', marginTop: 4 }} value={paperSize} onChange={v => { setPaperSize(v); setIsDirty(true); }}>
                 {Object.entries(PAPER_SIZES).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
               </Select>
-              <div style={{ marginTop: 6, fontSize: 10, color: '#888' }}>Blocks: {blocks.length}</div>
-              <Button size="small" block danger style={{ marginTop: 6 }}
+              <div className="caption" style={{ marginTop: 8 }}>Blocks: {blocks.length}</div>
+              <Button size="small" block danger style={{ marginTop: 8, borderRadius: 6 }}
                 onClick={() => Modal.confirm({ title: 'Clear canvas?', onOk: () => { setBlocks([]); setIsDirty(true); } })}>
                 Clear All
               </Button>
