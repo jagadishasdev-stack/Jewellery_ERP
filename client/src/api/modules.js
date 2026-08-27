@@ -207,6 +207,11 @@ export const printerConfigApi = {
   get: (params) => api.get('/printer-config', { params }),
   save: (data) => api.put('/printer-config', data),
   getRoles: () => api.get('/printer-config/roles'),
+  getConnectionTypes: () => api.get('/printer-config/connection-types'),
+  // Terminal/computer-level scoping (spec §18-19)
+  registerTerminal: (data) => api.post('/printer-config/terminal', data),
+  getTerminals: () => api.get('/printer-config/terminals'),
+  updateTerminal: (terminalId, data) => api.put(`/printer-config/terminal/${terminalId}`, data),
 };
 
 // ─── Print History (spec §23 — every real print attempt, incl. Test Print) ────

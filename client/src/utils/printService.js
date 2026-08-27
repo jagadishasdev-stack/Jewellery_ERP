@@ -22,6 +22,7 @@
  */
 import qz from 'qz-tray';
 import { printerConfigApi, printLogApi } from '../api/modules';
+import { getTerminalId } from './terminalIdentity';
 
 // The 9 document-type roles from the Printer Setup spec (§1/§7) — must match
 // server/src/routes/printerConfig.js's ROLES exactly.
@@ -57,6 +58,9 @@ let connectPromise = null;
 // later Branch B in the same session (without a printer-config save
 // happening in between, which is the only thing that used to invalidate it)
 // would silently keep reusing Branch A's printer names. Found via audit.
+// The terminal id is NOT part of this cache key: it never changes within
+// one browser (it's this exact computer's own persisted identity), so
+// there's nothing to invalidate on that axis the way there is for branch.
 const printerCacheByBranch = new Map();
 // Last known outcome per OS printer name — 'connected' after a successful
 // print/test, 'error' after a failed one, absent if never tried. Not a live
@@ -107,7 +111,11 @@ const fetchConfiguredPrinters = async (branchId) => {
   if (printerCacheByBranch.has(cacheKey)) return printerCacheByBranch.get(cacheKey);
   let byRoleNames;
   try {
-    const res = await printerConfigApi.get(branchId ? { branchId } : {});
+    // Always includes this computer's own terminal id — the server-side
+    // cascade (Terminal -> Branch -> Tenant, spec §19) picks the most
+    // specific row that exists; a tenant with no terminal-level config at
+    // all just never has anything more specific than branch/tenant to win.
+    const res = await printerConfigApi.get({ ...(branchId ? { branchId } : {}), terminalId: getTerminalId() });
     const byRole = res.data?.data || {};
     byRoleNames = Object.fromEntries(PRINTER_ROLES.map((r) => [r, byRole[r]?.Printer_Name || null]));
   } catch {
