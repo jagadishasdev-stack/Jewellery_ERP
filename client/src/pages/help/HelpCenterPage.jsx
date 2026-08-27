@@ -103,6 +103,7 @@ const GROUPS = [
     key: 'invoice',
     title: '📄 Invoice Templates',
     icon: <FileTextOutlined style={{ color: '#B8860B' }} />,
+    intro: <InvoiceStudioFlow />,
     items: [
       { title: 'Invoice Studio', desc: 'Drag-and-drop designer for your printed invoice layout.', path: '/invoice/studio' },
       { title: 'Quick Template (legacy)', desc: 'Older editor — not used by real printing. Use Invoice Studio above instead.', path: '/invoice/template' },
@@ -293,6 +294,96 @@ function AccountingPostingFlow() {
   );
 }
 
+// ── Every Invoice Studio document type that's actually wired to real
+// printing right now, and exactly which screen/action uses it — kept in
+// sync by hand with the real print call sites (grep
+// `printFromInvoiceStudio(` across client/src for the source of truth).
+const INVOICE_WIRED = [
+  { type: 'SALES_BILL', usedIn: 'POS checkout, and Sales Bill History → reprint any past bill' },
+  { type: 'ESTIMATE', usedIn: 'Billing Hub → Estimate' },
+  { type: 'ORDER_BOOKING', usedIn: 'Billing Hub → Order Booking' },
+  { type: 'PURCHASE_BILL', usedIn: 'Purchase Hub → Gold / Silver / Diamond / Vendor Purchase' },
+  { type: 'OLD_GOLD_PURCHASE', usedIn: 'Purchase Hub → Old Gold Purchase, Gold Exchange, Silver Exchange' },
+  { type: 'ADVANCE', usedIn: 'Purchase Hub → Advance Receipt, Advance Adjustment' },
+  { type: 'GIFT_VOUCHER', usedIn: 'Purchase Hub → Gift Voucher Bill' },
+  { type: 'SCHEME_RECEIPT', usedIn: 'Purchase Hub → Scheme Receipt, and Savings Club → Collection' },
+  { type: 'SALES_RETURN', usedIn: 'Sales Bill History → Return (issues the credit note)' },
+  { type: 'APPROVAL_ISSUE', usedIn: 'Approval → Issue on Approval, and Non-Tagged Issue' },
+  { type: 'APPROVAL_RECEIVE', usedIn: 'Approval → Receive Against Voucher, and Non-Tagged Receive' },
+  { type: 'KARIGAR_SETTLEMENT', usedIn: 'Karigar → Settlement → Print Bill' },
+  { type: 'REPAIR_RECEIPT', usedIn: 'Repair → Job Card Report → reprint' },
+  { type: 'PLATFORM_SAAS_INVOICE', usedIn: 'Tenants (Super Admin) → "Generate GST Invoice" on any tenant row — isolated, Super Admin only' },
+  { type: 'BARCODE_LABEL', usedIn: 'Every barcode/RFID tag print — designed separately in Label Designer, not this list' },
+];
+const INVOICE_UNWIRED_NOTE = 'Purchase Return, Karigar Issue/Receive (the standalone module, separate from Approval), Pawnbroking, Delivery Note, Stock Transfer/Adjustment/Verification, the Manufacturing types, Scheme Enrollment/Maturity, Digi Gold, the Accounts voucher types, Tax Invoice/Debit Note/Credit Note, and the Reports group';
+
+function InvoiceStudioFlow() {
+  return (
+    <div style={{ background: '#FFFBF0', border: '1px solid #F0E0B0', borderRadius: 8, padding: '16px 20px', marginBottom: 16 }}>
+      <Text strong style={{ fontSize: 14, color: '#8B6914' }}>📄 How to Design an Invoice — and How It Actually Gets Used</Text>
+      <div style={{ marginTop: 4, marginBottom: 12 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          There is no separate "import" step. Designing it and saving it <Text strong>is</Text> what puts it into real use — nothing else to do afterwards.
+        </Text>
+      </div>
+      <Steps
+        direction="vertical" size="small" status="finish"
+        items={[
+          {
+            title: <Text strong style={{ fontSize: 13 }}>1. Design it — Invoice Studio</Text>,
+            description: (
+              <Text style={{ fontSize: 12 }}>
+                Open Invoice Studio (below) → <Text strong>Create New Template</Text> → pick the document type (Sales Bill, Purchase Bill, Estimate, etc. — see the full list below for which ones matter) →
+                choose how to start: <Text strong>Blank</Text>, a <Text strong>Ready-Made</Text> design, <Text strong>Upload</Text> your existing invoice image/PDF, or let <Text strong>AI Generate</Text> a layout from that upload →
+                drag components onto the canvas (Shop Header, Items Table, Totals, GST, Signature, an Excel-style grid for anything custom) → click <Text strong>Save</Text>.
+              </Text>
+            ),
+          },
+          {
+            title: <Text strong style={{ fontSize: 13 }}>2. It goes live automatically — no extra step</Text>,
+            description: (
+              <Text style={{ fontSize: 12 }}>
+                The <Text strong>first</Text> template you save for a document type becomes the one real printing uses immediately — Save already says so ("saved and set as your default"). You only ever need <Text strong>Set Default</Text>
+                if you design a <Text strong>second, alternate</Text> version of the same document type and want to switch which one prints. If the design still doesn't show up when you print, it almost always means the document type
+                you saved under isn't actually wired to that print action yet — check the table below before assuming it's a bug.
+              </Text>
+            ),
+          },
+          {
+            title: <Text strong style={{ fontSize: 13 }}>3. Where each document type is actually used when you print</Text>,
+            description: (
+              <div>
+                <Text style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+                  Invoice Studio lets you design far more document types than are wired to a real print action today. These <Text strong>are</Text> — design one of these and it's used the moment you print from the screen listed:
+                </Text>
+                <div style={{ borderRadius: 6, overflow: 'hidden', border: '1px solid #F0E0B0' }}>
+                  {INVOICE_WIRED.map((row, i) => (
+                    <div key={row.type} style={{
+                      display: 'flex', gap: 10, padding: '6px 10px', fontSize: 11,
+                      background: i % 2 ? '#fff' : '#FFFBF0',
+                    }}>
+                      <Tag color="gold" style={{ minWidth: 150, textAlign: 'center', margin: 0 }}>{row.type}</Tag>
+                      <Text style={{ fontSize: 11 }}>{row.usedIn}</Text>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <Alert
+                    type="warning" showIcon
+                    message="Everything else is designable but not yet wired to a real print action"
+                    description={<Text style={{ fontSize: 11 }}>{INVOICE_UNWIRED_NOTE} — you can design a template for these today, but no screen prints through it yet. Ask for one to be wired up if you need it.</Text>}
+                    style={{ fontSize: 11 }}
+                  />
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
 export default function HelpCenterPage() {
   const navigate = useNavigate();
 
@@ -308,7 +399,7 @@ export default function HelpCenterPage() {
       </div>
 
       <Collapse
-        defaultActiveKey={['billing', 'accounting', 'savings', 'new-modules']}
+        defaultActiveKey={['billing', 'invoice', 'accounting', 'savings', 'new-modules']}
         items={GROUPS.map((g) => ({
           key: g.key,
           label: <Space>{g.icon}<Text strong>{g.title}</Text><Tag color="gold" style={{ marginLeft: 4 }}>{g.items.length}</Tag></Space>,

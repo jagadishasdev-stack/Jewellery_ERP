@@ -13,6 +13,7 @@
  * - Print / PDF / WhatsApp / Email ready
  */
 import React, { useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Layout, Select, Button, Space, Typography, Form, Input,
   InputNumber, Switch, Tooltip, Tag, message, Modal,
@@ -26,7 +27,7 @@ import {
   StarOutlined, AppstoreOutlined, ArrowLeftOutlined, CheckCircleOutlined,
   CloudUploadOutlined, EditOutlined, SyncOutlined, DownloadOutlined,
   ShareAltOutlined, WarningOutlined, InfoCircleOutlined, BgColorsOutlined,
-  UserOutlined,
+  UserOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '../../store/authStore';
@@ -523,6 +524,7 @@ function CanvasBlock({ block, selected, onSelect, onMove, paperW }) {
 export default function InvoiceStudio() {
   const { user } = useAuthStore();
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   // Super Admin can design/import an invoice template on behalf of a
   // specific tenant client (the "we design it for them through our master
@@ -886,12 +888,18 @@ export default function InvoiceStudio() {
               <Text className="caption">Design, manage and deploy invoice templates — no coding required</Text>
             </div>
           </div>
-          <Button type="primary" icon={<PlusOutlined />}
-            style={{ background: 'var(--gold)', borderColor: 'var(--gold)', fontWeight: 700, borderRadius: 'var(--radius-sm)' }}
-            onClick={() => setScreen('type-select')}
-            disabled={isSuperAdmin && !managedTenantId}>
-            Create New Template
-          </Button>
+          <Space>
+            <Button icon={<QuestionCircleOutlined />} style={{ borderRadius: 'var(--radius-sm)' }}
+              onClick={() => navigate('/help')}>
+              How does this work?
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />}
+              style={{ background: 'var(--gold)', borderColor: 'var(--gold)', fontWeight: 700, borderRadius: 'var(--radius-sm)' }}
+              onClick={() => setScreen('type-select')}
+              disabled={isSuperAdmin && !managedTenantId}>
+              Create New Template
+            </Button>
+          </Space>
         </div>
 
         {/* Super Admin only: design/import a specific tenant's invoices through the master login */}
