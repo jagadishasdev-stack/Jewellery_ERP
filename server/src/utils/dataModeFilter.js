@@ -51,12 +51,26 @@ const modeFilter = (req) => ({ Data_Mode: modeVal(req) });
  * listings/reports) — never for transactional tables (sales, purchases,
  * transfers, etc.), which must keep using modeVal/withMode/modeFilter above.
  */
-const applyStockVisibility = (qb, req, alias = '') => {
+// `opts.includeHidden` — for the one legitimate exception to "Official mode
+// never sees hidden stock": billing itself. The whole point of Special/
+// Hidden stock (Stock_Classification) is that it's still real, sellable
+// inventory — it can be billed from either screen and is included in GST
+// — only kept OUT of casual browsing/listing and Official reports. A
+// barcode/search lookup used to add an item to a bill must still find it;
+// callers that are genuinely just browsing/listing stock (Stock
+// Management, reports) omit this and get the original hide-it behavior.
+// Is_On_Approval is never overridden by this flag — an item currently out
+// with a customer isn't "hidden," it's physically not in the shop to sell.
+const applyStockVisibility = (qb, req, alias = '', opts = {}) => {
   const p = alias ? `${alias}.` : '';
   const mode = modeVal(req);
   if (mode === 2) return qb.whereIn(`${p}Data_Mode`, [2, 3]);
-  if (mode === 1) return qb.where(`${p}Data_Mode`, 1).where(`${p}Is_Hidden`, false).where(`${p}Is_On_Approval`, false);
-  return qb.where(`${p}Data_Mode`, 3).where(`${p}Is_Hidden`, false).where(`${p}Is_On_Approval`, false);
+  if (mode === 1) {
+    qb = qb.where(`${p}Data_Mode`, 1).where(`${p}Is_On_Approval`, false);
+    return opts.includeHidden ? qb : qb.where(`${p}Is_Hidden`, false);
+  }
+  qb = qb.where(`${p}Data_Mode`, 3).where(`${p}Is_On_Approval`, false);
+  return opts.includeHidden ? qb : qb.where(`${p}Is_Hidden`, false);
 };
 
 /**

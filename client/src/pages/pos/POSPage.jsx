@@ -338,11 +338,16 @@ export default function POSPage() {
     if (!searchInput.trim()) return;
     try {
       let ornament = null;
+      // Billing must be able to find and sell Hidden/Special stock — it's
+      // real, GST-included inventory, only kept out of casual browsing and
+      // Official reports (see applyStockVisibility's own comment). Without
+      // this, scanning a hidden item's barcode at the counter fails with
+      // "not found" even though it's genuinely in stock.
       if (searchType === 'barcode' || searchType === 'article') {
-        const res = await ornamentsApi.getByBarcode(searchInput.trim());
+        const res = await ornamentsApi.getByBarcode(searchInput.trim(), { includeHidden: true });
         ornament = res.data.data;
       } else {
-        const res = await ornamentsApi.getAll({ search: searchInput.trim(), limit: 1 });
+        const res = await ornamentsApi.getAll({ search: searchInput.trim(), limit: 1, includeHidden: true });
         ornament = res.data.data?.items?.[0];
       }
       if (!ornament) { message.error('Item not found'); return; }

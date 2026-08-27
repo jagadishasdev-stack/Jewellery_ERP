@@ -49,7 +49,12 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
         // gemstone's Price_Per_Carat if this doesn't match reality.
         db.raw('ROUND((o."Total_Stone_Carat" * COALESCE(g."Price_Per_Carat", 0))::numeric, 2) as "Stone_Value_Estimate"')
       );
-    qb = applyStockVisibility(qb, req, 'o');
+    // Same POS-billing exception as the barcode route above — a text
+    // search used to add an item to a bill must still find Hidden/Special
+    // stock; the normal browse/report callers of this same list endpoint
+    // never send this and keep the original hide-it behavior.
+    const stockVisOpts = { includeHidden: req.query.includeHidden === 'true' };
+    qb = applyStockVisibility(qb, req, 'o', stockVisOpts);
     qb = withBranch(qb, req, 'o.Branch_ID');
 
     if (typeId) qb = qb.where('o.Type_ID', typeId);
@@ -78,7 +83,7 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
     // Count using clean base query
     let countBase = db('tbl_ornament_master').where('Is_Active', true);
-    countBase = applyStockVisibility(countBase, req);
+    countBase = applyStockVisibility(countBase, req, '', stockVisOpts);
     countBase = withBranch(countBase, req);
     if (req.user.roleName !== 'Super Admin') countBase.where('Tenant_ID', req.user.tenantId);
     if (typeId) countBase.where('Type_ID', typeId);
@@ -109,7 +114,11 @@ router.get('/barcode/:code', authenticate, async (req, res) => {
       .where('o.Article_Number', req.params.code)
       .where('o.Tenant_ID', req.user.tenantId)
       .select('o.*', 't.Type_Name', 'p.Purity_Code', 'd.Design_Name');
-    const ornament = await applyStockVisibility(qb, req, 'o').first();
+    // POS scans a barcode to ADD it to a bill — Hidden/Special stock must
+    // still be findable here (it's real, billable inventory, just kept
+    // out of casual browsing/reports), so callers doing that pass
+    // ?includeHidden=true. See applyStockVisibility's own comment.
+    const ornament = await applyStockVisibility(qb, req, 'o', { includeHidden: req.query.includeHidden === 'true' }).first();
 
     if (!ornament) return sendError(res, 404, 'Ornament not found for this barcode.');
     return sendSuccess(res, ornament);
