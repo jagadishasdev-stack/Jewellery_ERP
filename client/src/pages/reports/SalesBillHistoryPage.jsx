@@ -7,16 +7,17 @@
 import React, { useState, useRef } from 'react';
 import {
   Card, Table, Input, DatePicker, Select, Space, Tag, Button, Typography,
-  Drawer, Descriptions, Divider, message, Row, Col, Modal, Form, Radio, Alert,
+  Drawer, message, Col, Modal, Form, Radio, Alert, Grid,
 } from 'antd';
 import { SearchOutlined, EyeOutlined, FileTextOutlined, StopOutlined, RollbackOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { salesApi, bankChequeApi } from '../../api/modules';
 import { useAuthStore } from '../../store/authStore';
-import { formatCurrency, formatWeight } from '../../utils/calculations';
+import { formatCurrency } from '../../utils/calculations';
 import { printThermalReceipt } from '../../utils/thermalReceipt';
 import PrinterOverrideButton from '../../components/PrinterOverrideButton';
 import PageTour from '../../components/PageTour';
+import SalesBillDetail from './SalesBillDetail';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;
@@ -27,6 +28,7 @@ const STATUS_COLOR = { Paid: 'green', Partial: 'orange', Pending: 'red', Cancell
 export default function SalesBillHistoryPage() {
   const { user } = useAuthStore();
   const qc = useQueryClient();
+  const screens = Grid.useBreakpoint();
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState('');
@@ -187,46 +189,11 @@ export default function SalesBillHistoryPage() {
       </Card>
 
       <Drawer
-        title={detail?.sale?.Invoice_Number || 'Bill Detail'}
-        placement="right" width={520} open={!!detailId} onClose={() => setDetailId(null)} loading={detailLoading}
+        title={detail?.sale?.Invoice_Number || 'Sales Bill'}
+        placement="right" width={screens.md ? 880 : '100%'} open={!!detailId} onClose={() => setDetailId(null)} loading={detailLoading}
         extra={detail && <PrinterOverrideButton label="Reprint" size="middle" loading={reprintingId === detail?.sale?.Sale_ID} onPrint={(printerName) => reprint(detail.sale.Sale_ID, printerName)} />}
       >
-        {detail && (
-          <>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="Date">{dayjs(detail.sale.Sale_Date).format('DD-MMM-YYYY HH:mm')}</Descriptions.Item>
-              <Descriptions.Item label="Customer">{detail.sale.Customer_Name} {detail.sale.Customer_Mobile && `(${detail.sale.Customer_Mobile})`}</Descriptions.Item>
-              <Descriptions.Item label="Status"><Tag color={STATUS_COLOR[detail.sale.Payment_Status] || 'default'}>{detail.sale.Payment_Status}</Tag></Descriptions.Item>
-              <Descriptions.Item label="Counter">{detail.sale.Counter_Name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="Billed By">{detail.sale.Operator_Name || '-'}</Descriptions.Item>
-            </Descriptions>
-
-            <Divider orientation="left" style={{ fontSize: 12 }}>Items</Divider>
-            {(detail.items || []).map((item) => (
-              <div key={item.Detail_ID} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-                <Text strong style={{ fontSize: 13 }}>{item.Item_Type_Name}</Text>
-                <div style={{ fontSize: 11, color: '#888' }}>
-                  {item.Article_Number} · {item.Purity_Code} · {formatWeight(item.Gross_Weight)}
-                </div>
-                <Text style={{ fontSize: 12, color: '#B8860B', fontWeight: 600 }}>{formatCurrency(item.Total_Line_Price)}</Text>
-              </div>
-            ))}
-
-            <Divider orientation="left" style={{ fontSize: 12 }}>Payments</Divider>
-            {(detail.payments || []).map((p) => (
-              <div key={p.Payment_ID} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '4px 0' }}>
-                <Text>{p.Payment_Mode} {p.Reference ? `(${p.Reference})` : ''}</Text>
-                <Text strong>{formatCurrency(p.Amount)}</Text>
-              </div>
-            ))}
-
-            <Divider style={{ margin: '10px 0' }} />
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <Text strong style={{ fontSize: 15 }}>NET PAYABLE</Text>
-              <Text strong style={{ fontSize: 16, color: '#B8860B' }}>{formatCurrency(detail.sale.Net_Payable_Amount)}</Text>
-            </div>
-          </>
-        )}
+        {detail && <SalesBillDetail detail={detail} statusColor={STATUS_COLOR} />}
       </Drawer>
 
       {/* Cancel — for a Pending/Partial sale that never left the counter fully paid. */}
