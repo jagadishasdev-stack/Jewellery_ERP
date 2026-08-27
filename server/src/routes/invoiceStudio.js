@@ -32,9 +32,23 @@ const resolveTenantId = (req) => {
 // Printer Settings, etc.) — a lower-privilege role like Billing Operator
 // still can't touch it.
 const canManageLabel = (req) => isSuperAdmin(req) || req.user?.permissions?.tenant_management === true;
+
+// PLATFORM_SAAS_INVOICE — the ERP provider's own GST invoice TO a tenant
+// (software/subscription billing), completely isolated from every
+// tenant-facing document type: strictly Super Admin only (no permission-
+// based exception like the label check above — a tenant must never be
+// able to view, resolve, or print this even with Tenant Management
+// rights), and always stored with Tenant_ID = null (see POST /templates
+// below) so it can never live inside — or be mistaken for — any tenant's
+// own template set.
+const isPlatformOnlyDocType = (documentType) => documentType === 'PLATFORM_SAAS_INVOICE';
 const requireSuperAdminForLabel = (documentType, req, res) => {
   if (documentType === 'BARCODE_LABEL' && !canManageLabel(req)) {
     sendError(res, 403, 'You need Tenant Management permission to edit label templates.');
+    return true;
+  }
+  if (isPlatformOnlyDocType(documentType) && !isSuperAdmin(req)) {
+    sendError(res, 403, 'This is a platform-only document type — Super Admin access required.');
     return true;
   }
   return false;
@@ -99,6 +113,15 @@ router.get('/template/:id', authenticate, async (req, res) => {
 // Returns the active template for a doc type (tenant > global)
 router.get('/resolve/:docType', authenticate, async (req, res) => {
   const { docType } = req.params;
+  // Without this, a regular tenant resolving this doc type would fall
+  // through to the Tenant_ID IS NULL branch below (the same fallback
+  // that legitimately serves every tenant the shared global default for
+  // every OTHER doc type) and get back the platform's own billing
+  // template — the one leak point worth calling out explicitly, since
+  // every other doc type's global-default fallback is intentional.
+  if (isPlatformOnlyDocType(docType) && !isSuperAdmin(req)) {
+    return sendError(res, 404, `No template for ${docType}`);
+  }
   const tenantId = resolveTenantId(req);
   try {
     let template = await db('tbl_invoice_studio_templates')
@@ -413,8 +436,11 @@ router.post('/templates', authenticate, async (req, res) => {
   try {
     const { Template_Name, Document_Type, Paper_Size, Layout_JSON, Is_Default, Template_Version } = req.body;
     if (requireSuperAdminForLabel(Document_Type, req, res)) return;
-    const tenantId = resolveTenantId(req);
     const docType = Document_Type || 'SALES_BILL';
+    // Always global for the platform's own billing template — never "on
+    // behalf of a tenant" the way resolveTenantId's ?tenantId= override
+    // works for the Label Designer, regardless of what a client sends.
+    const tenantId = isPlatformOnlyDocType(docType) ? null : resolveTenantId(req);
     const layoutStr = typeof Layout_JSON === 'string' ? Layout_JSON : JSON.stringify(Layout_JSON || []);
 
     // The client's own "Save" action always sends Is_Default: false (only

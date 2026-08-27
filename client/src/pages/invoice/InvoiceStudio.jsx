@@ -124,6 +124,21 @@ const INVOICE_CATEGORIES = [
       { key: 'OUTSTANDING_REPORT', label: 'Outstanding Report' },
     ],
   },
+  // Isolated from every tenant-facing category above — this is for
+  // billing a TENANT (the ERP provider's own client), not for a tenant to
+  // bill their own customers. Server-side, Document_Type PLATFORM_SAAS_
+  // INVOICE is hard-gated to Super Admin only (see invoiceStudio.js's
+  // requireSuperAdminForLabel and the /resolve/:docType check) and always
+  // saved with Tenant_ID = null — it can never appear in, be resolved by,
+  // or be mistaken for any tenant's own template list. `superAdminOnly`
+  // below is just the matching UI-side filter (see the Type Select
+  // screen) so a regular tenant admin never even sees the category exist.
+  {
+    group: 'Platform Billing — Super Admin Only', color: '#000000', icon: '🏢', superAdminOnly: true,
+    types: [
+      { key: 'PLATFORM_SAAS_INVOICE', label: 'Software / SaaS GST Invoice (JewelNexus → Tenant)' },
+    ],
+  },
 ];
 
 const ALL_TYPES = INVOICE_CATEGORIES.flatMap(c => c.types);
@@ -581,6 +596,17 @@ export default function InvoiceStudio() {
     enabled: !!editingId && showHistory,
   });
 
+  // Platform Billing (PLATFORM_SAAS_INVOICE) is never "on behalf of a
+  // tenant" — it has no managedTenantId concept at all, unlike every
+  // other Super-Admin-managed template above — so it gets its own
+  // always-on query (explicitly the global set, `tenantId: 'null'`) that
+  // doesn't wait on canLoadTemplates/managedTenantId being picked.
+  const { data: platformTemplates } = useQuery({
+    queryKey: ['invoice-studio-templates-platform'],
+    queryFn: () => invoiceStudioApi.getTemplates({ tenantId: 'null', docType: 'PLATFORM_SAAS_INVOICE' }).then(r => r.data.data || []),
+    enabled: isSuperAdmin,
+  });
+
   // ── Mutations ──────────────────────────────────────────────────────────────
   const saveMutation = useMutation({
     mutationFn: (data) => editingId
@@ -885,6 +911,32 @@ export default function InvoiceStudio() {
           </div>
         )}
 
+        {/* Platform Billing — isolated from the "Designing for" picker above
+            on purpose: this is JewelNexus's own template for billing a
+            tenant, not something designed on behalf of one, so it doesn't
+            wait on a managed-tenant pick the way everything below does. */}
+        {isSuperAdmin && (
+          <Card size="small" style={{ borderRadius: 8, marginBottom: 16, border: '1px solid #00000022', background: '#fafafa' }}
+            title={<Space><span>🏢</span><Text strong style={{ fontSize: 12 }}>Platform Billing — JewelNexus → Tenant (Super Admin Only)</Text></Space>}>
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 8 }}>
+              The GST invoice YOU send a tenant for their software/subscription — isolated from every tenant-facing template above, never mixed with what a tenant designs for their own customers.
+            </Text>
+            <Space wrap size={6}>
+              {(platformTemplates || []).map(t => (
+                <Tag key={t.Template_ID} color={t.Is_Default ? 'green' : 'default'}
+                  style={{ cursor: 'pointer', padding: '4px 10px', fontSize: 11 }}
+                  onClick={() => openExistingTemplate(t)}>
+                  {t.Template_Name}{t.Is_Default ? ' ★ Default' : ''}
+                </Tag>
+              ))}
+              <Button size="small" style={{ borderColor: '#000', color: '#000' }}
+                onClick={() => { setSelectedType('PLATFORM_SAAS_INVOICE'); setScreen('method-select'); }}>
+                + {platformTemplates?.length ? 'New Design' : 'Design Platform Invoice'}
+              </Button>
+            </Space>
+          </Card>
+        )}
+
         {isSuperAdmin && !managedTenantId ? (
           <Card style={{ borderRadius: 8 }}>
             <Empty description="Pick a customer above to design or manage their invoice templates." />
@@ -976,7 +1028,7 @@ export default function InvoiceStudio() {
           </div>
         </div>
         <Alert message="Select the type of document you want to design. Each type has its own field set and default layout." type="info" showIcon style={{ marginBottom: 16, fontSize: 11 }} />
-        {INVOICE_CATEGORIES.map(cat => (
+        {INVOICE_CATEGORIES.filter(cat => !cat.superAdminOnly || isSuperAdmin).map(cat => (
           <div key={cat.group} style={{ marginBottom: 20 }}>
             <Text strong style={{ fontSize: 14, color: cat.color }}>{cat.icon} {cat.group}</Text>
             <Divider style={{ margin: '6px 0 10px' }} />

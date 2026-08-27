@@ -10,16 +10,19 @@ import React, { useState, useRef } from 'react';
 import {
   Table, Button, Card, Typography, Tag, Space, Modal, Form,
   Input, DatePicker, InputNumber, message, Descriptions, Select,
-  Row, Col, Alert, Switch, Divider, Tooltip, Popconfirm, Badge, Steps, Avatar,
+  Row, Col, Alert, Switch, Divider, Tooltip, Popconfirm, Badge, Steps, Avatar, Radio,
 } from 'antd';
 import {
   PlusOutlined, EyeOutlined, EditOutlined, DeleteOutlined,
   ApiOutlined, CheckCircleOutlined, InfoCircleOutlined,
   TeamOutlined, KeyOutlined, UserOutlined, LockOutlined, UnlockOutlined,
   ControlOutlined, ApartmentOutlined, MessageOutlined, BellOutlined, CreditCardOutlined,
+  FileTextOutlined, MinusCircleOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tenantApi, superAdminApi, smsApi, pushApi } from '../../api/modules';
+import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
+import { printHTML } from '../../utils/printService';
 import PageTour from '../../components/PageTour';
 import { STANDARD_ACTIONS, ACTION_LABELS, DEFAULT_SHORTCUTS } from '../../utils/shortcuts';
 import dayjs from 'dayjs';
@@ -122,6 +125,17 @@ export default function TenantManagePage() {
   const [payGateway, setPayGateway] = useState(null);
   const [payLoading, setPayLoading] = useState(false);
   const [payForm] = Form.useForm();
+
+  // Platform Billing — YOU (the ERP provider) billing a tenant for the
+  // software/subscription, product-wise, GST-compliant. Deliberately
+  // isolated from every tenant-facing invoice flow elsewhere in the app:
+  // separate state, separate form, separate Document_Type
+  // (PLATFORM_SAAS_INVOICE, Super-Admin-only and always Tenant_ID=null —
+  // see invoiceStudio.js) so it can never be confused with, or leak into,
+  // what a tenant designs/prints for their own customers.
+  const [billTenant, setBillTenant] = useState(null);
+  const [billForm] = Form.useForm();
+  const [billPrinting, setBillPrinting] = useState(false);
 
   // Create wizard state — 3 separate Form instances, data merged on submit
   const [wizardStep,  setWizardStep]  = useState(0);
@@ -472,6 +486,109 @@ export default function TenantManagePage() {
     onError: (err) => message.error(err.response?.data?.message || 'Failed to save payment gateway config.'),
   });
 
+  // ── Platform Billing — Generate GST Invoice for this tenant ──────────────
+  const openBillTenant = (tenant) => {
+    setBillTenant(tenant);
+    billForm.setFieldsValue({
+      issuer_name: 'JewelNexus Software Solution LLP',
+      issuer_gst: '', issuer_pan: '', issuer_address: '', issuer_phone: '', issuer_email: '',
+      client_company: tenant.Company_Name, client_gst: tenant.GST_No || '',
+      client_address: [tenant.Address_Line1, tenant.Address_Line2, tenant.City, tenant.State, tenant.Pincode].filter(Boolean).join(', '),
+      client_phone: tenant.Phone || '', client_email: tenant.Email || '',
+      invoice_no: `JNS/${dayjs().format('YYYYMM')}/${tenant.Tenant_ID}`,
+      invoice_date: dayjs(), gst_type: 'CGST_SGST', gst_percent: 18,
+      items: [{ description: 'Jewellery ERP — Software Subscription', hsn: '997331', qty: 1, rate: undefined }],
+    });
+  };
+
+  const closeBillTenant = () => { setBillTenant(null); billForm.resetFields(); };
+
+  const generateTenantInvoice = async (values) => {
+    setBillPrinting(true);
+    try {
+      const items = (values.items || []).map((it) => {
+        const qty = parseFloat(it.qty || 0);
+        const rate = parseFloat(it.rate || 0);
+        const amount = Math.round((qty * rate + Number.EPSILON) * 100) / 100;
+        const gstAmt = Math.round((amount * (parseFloat(values.gst_percent) || 0) / 100 + Number.EPSILON) * 100) / 100;
+        return {
+          // Keys doubled up deliberately: item_name/rate/amount/gst_amount
+          // match the Items Table block's built-in jewellery-labeled
+          // columns (Item/Rate/GST/Amount) if reused as-is; Qty/HSN-SAC/
+          // GST % match a custom column typed with those exact headers —
+          // whichever vocabulary the template's designer used, it resolves.
+          item_name: it.description, rate, amount, gst_amount: gstAmt,
+          Qty: qty, 'HSN/SAC': it.hsn || '', 'GST %': values.gst_percent,
+        };
+      });
+      const subtotal = Math.round((items.reduce((s, i) => s + i.amount, 0) + Number.EPSILON) * 100) / 100;
+      const gstAmount = Math.round((items.reduce((s, i) => s + i.gst_amount, 0) + Number.EPSILON) * 100) / 100;
+      const isIgst = values.gst_type === 'IGST';
+      const netPayable = Math.round((subtotal + gstAmount + Number.EPSILON) * 100) / 100;
+
+      const studioData = {
+        shop_name: values.issuer_name, shop_address: values.issuer_address,
+        shop_gst: values.issuer_gst, shop_phone: values.issuer_phone, shop_email: values.issuer_email,
+        shop_pan: values.issuer_pan,
+        invoice_no: values.invoice_no, invoice_date: values.invoice_date?.format('DD-MMM-YYYY') || dayjs().format('DD-MMM-YYYY'),
+        invoice_type: 'Software / SaaS GST Invoice',
+        customer_name: values.client_company, customer_address: values.client_address,
+        customer_gst: values.client_gst, customer_mobile: values.client_phone,
+        items,
+        subtotal, gst_amt: gstAmount,
+        cgst: isIgst ? 0 : Math.round((gstAmount / 2 + Number.EPSILON) * 100) / 100,
+        sgst: isIgst ? 0 : Math.round((gstAmount / 2 + Number.EPSILON) * 100) / 100,
+        igst: isIgst ? gstAmount : 0,
+        net_payable: netPayable, payment_mode: 'Bank Transfer',
+      };
+
+      const studioAttempt = await printFromInvoiceStudio('PLATFORM_SAAS_INVOICE', studioData, values.invoice_no);
+      if (studioAttempt.printed) { message.success('Invoice generated.'); closeBillTenant(); return; }
+
+      // No template designed in Invoice Studio yet (Platform Billing
+      // section, Super Admin only) — falls back to a plain but real GST
+      // invoice rather than a dead end.
+      const itemRows = items.map((it, idx) => `
+        <tr><td>${idx + 1}</td><td>${it.item_name}</td><td>${it['HSN/SAC']}</td><td>${it.Qty}</td>
+        <td>₹${it.rate.toLocaleString('en-IN')}</td><td>${it['GST %']}%</td><td>₹${it.amount.toLocaleString('en-IN')}</td></tr>`).join('');
+      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+        body{font-family:Arial,sans-serif;padding:24px;font-size:11pt;color:#1a1a1a}
+        h2{color:#000;margin-bottom:2px}.sub{color:#666;font-size:10pt;margin-bottom:14px}
+        .line{border-top:2px solid #000;margin:10px 0}
+        table{width:100%;border-collapse:collapse;margin:10px 0}
+        th{background:#000;color:#fff;padding:6px 8px;text-align:left;font-size:10pt}
+        td{padding:5px 8px;border-bottom:1px solid #eee;font-size:10pt}
+        .row{display:flex;justify-content:space-between;padding:3px 0}
+        .label{color:#888}.val{font-weight:bold}.total{font-size:14pt;font-weight:bold}
+        @media print{body{padding:6mm}}
+      </style></head><body>
+        <h2>${values.issuer_name}</h2>
+        <div class="sub">${[values.issuer_address, values.issuer_gst && `GSTIN: ${values.issuer_gst}`, values.issuer_phone].filter(Boolean).join(' | ')}</div>
+        <div class="line"></div>
+        <div class="row"><span class="label">Invoice No</span><span class="val">${values.invoice_no}</span></div>
+        <div class="row"><span class="label">Date</span><span class="val">${studioData.invoice_date}</span></div>
+        <div class="row"><span class="label">Bill To</span><span class="val">${values.client_company}${values.client_gst ? ` (GSTIN: ${values.client_gst})` : ''}</span></div>
+        ${values.client_address ? `<div class="row"><span class="label">Address</span><span class="val">${values.client_address}</span></div>` : ''}
+        <table><thead><tr><th>#</th><th>Description</th><th>HSN/SAC</th><th>Qty</th><th>Rate</th><th>GST</th><th>Amount</th></tr></thead>
+          <tbody>${itemRows}</tbody></table>
+        <div class="line"></div>
+        <div class="row"><span class="label">Subtotal</span><span class="val">₹${subtotal.toLocaleString('en-IN')}</span></div>
+        ${isIgst
+          ? `<div class="row"><span class="label">IGST</span><span class="val">₹${gstAmount.toLocaleString('en-IN')}</span></div>`
+          : `<div class="row"><span class="label">CGST</span><span class="val">₹${studioData.cgst.toLocaleString('en-IN')}</span></div>
+             <div class="row"><span class="label">SGST</span><span class="val">₹${studioData.sgst.toLocaleString('en-IN')}</span></div>`}
+        <div class="row"><span class="total">TOTAL: ₹${netPayable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+      </body></html>`;
+      await printHTML('other', html, { windowSize: 'width=650,height=750', docType: 'Platform SaaS Invoice', docNumber: values.invoice_no });
+      message.success('Invoice generated (plain layout — design one in Invoice Studio → Platform Billing for your own branded format).');
+      closeBillTenant();
+    } catch (err) {
+      message.error('Failed to generate invoice: ' + (err.message || 'Unknown error'));
+    } finally {
+      setBillPrinting(false);
+    }
+  };
+
   const fetchUsers = async (tenant) => {
     setUsersTenant(tenant);
     setTenantUsersLoading(true);
@@ -561,7 +678,7 @@ export default function TenantManagePage() {
     { title: 'Users', dataIndex: 'Max_Users', width: 65, render: v => <Tag>{v}</Tag> },
     { title: 'Status', dataIndex: 'Is_Active', width: 90,
       render: v => <Badge status={v ? 'success' : 'error'} text={v ? 'Active' : 'Inactive'} /> },
-    { title: 'Actions', fixed: 'right', width: 388,
+    { title: 'Actions', fixed: 'right', width: 424,
       render: (_, r) => (
         <Space size={4}>
           <Tooltip title="View"><Button size="small" icon={<EyeOutlined />} onClick={() => setDetailTenant(r)} /></Tooltip>
@@ -580,6 +697,9 @@ export default function TenantManagePage() {
           </Tooltip>
           <Tooltip title="Payment Gateway (Razorpay)">
             <Button size="small" icon={<CreditCardOutlined />} style={{ borderColor: '#52c41a', color: '#52c41a' }} onClick={() => fetchPayGateway(r)} />
+          </Tooltip>
+          <Tooltip title="Generate GST Invoice (Platform Billing — you bill this tenant)">
+            <Button size="small" icon={<FileTextOutlined />} style={{ borderColor: '#000', color: '#000' }} onClick={() => openBillTenant(r)} />
           </Tooltip>
           <Tooltip title="Keyboard Shortcuts">
             <Button size="small" icon={<ControlOutlined />} style={{ borderColor: '#13c2c2', color: '#13c2c2' }} onClick={() => openShortcuts(r)} />
@@ -1334,6 +1454,81 @@ export default function TenantManagePage() {
           loading={savePayGatewayMutation.isPending}>
           Save Webhook Secret
         </Button>
+      </Modal>
+
+      {/* ── Platform Billing — Generate GST Invoice for this tenant ──────
+          Isolated from the tenant's own invoice/billing entirely: this is
+          YOU billing THEM, using a Document_Type (PLATFORM_SAAS_INVOICE)
+          only Super Admin can even see in Invoice Studio. */}
+      <Modal title={`🧾 Generate GST Invoice — ${billTenant?.Company_Name}`} open={!!billTenant}
+        onCancel={closeBillTenant} footer={null} width={760} destroyOnClose>
+        <Alert type="info" showIcon style={{ marginBottom: 14, fontSize: 12 }}
+          message="This bills the tenant for your software — completely separate from anything they design or print for their own customers."
+          description={<>Design your own branded layout once under <b>Invoice Studio → Platform Billing (Super Admin Only)</b> and it's used automatically here — until then this generates a plain but real GST invoice.</>} />
+        <Form form={billForm} layout="vertical" onFinish={generateTenantInvoice}>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Typography.Title level={5} style={{ marginTop: 0 }}>From (Your Company)</Typography.Title>
+              <Form.Item name="issuer_name" label="Company Name" rules={[{ required: true }]}>
+                <Input />
+              </Form.Item>
+              <Row gutter={8}>
+                <Col xs={12}><Form.Item name="issuer_gst" label="GSTIN"><Input placeholder="Add when registered" /></Form.Item></Col>
+                <Col xs={12}><Form.Item name="issuer_pan" label="PAN"><Input placeholder="Add when registered" /></Form.Item></Col>
+              </Row>
+              <Form.Item name="issuer_address" label="Address"><Input.TextArea rows={2} placeholder="Add later" /></Form.Item>
+              <Row gutter={8}>
+                <Col xs={12}><Form.Item name="issuer_phone" label="Phone"><Input /></Form.Item></Col>
+                <Col xs={12}><Form.Item name="issuer_email" label="Email"><Input /></Form.Item></Col>
+              </Row>
+            </Col>
+            <Col xs={24} md={12}>
+              <Typography.Title level={5} style={{ marginTop: 0 }}>Bill To (Tenant)</Typography.Title>
+              <Form.Item name="client_company" label="Company Name" rules={[{ required: true }]}>
+                <Input />
+              </Form.Item>
+              <Form.Item name="client_gst" label="GSTIN"><Input /></Form.Item>
+              <Form.Item name="client_address" label="Address"><Input.TextArea rows={2} /></Form.Item>
+              <Row gutter={8}>
+                <Col xs={12}><Form.Item name="client_phone" label="Phone"><Input /></Form.Item></Col>
+                <Col xs={12}><Form.Item name="client_email" label="Email"><Input /></Form.Item></Col>
+              </Row>
+            </Col>
+          </Row>
+
+          <Divider style={{ margin: '8px 0 14px' }} />
+
+          <Row gutter={16}>
+            <Col xs={12} md={8}><Form.Item name="invoice_no" label="Invoice No" rules={[{ required: true }]}><Input /></Form.Item></Col>
+            <Col xs={12} md={8}><Form.Item name="invoice_date" label="Date" rules={[{ required: true }]}><DatePicker style={{ width: '100%' }} format="DD-MMM-YYYY" /></Form.Item></Col>
+            <Col xs={12} md={4}><Form.Item name="gst_type" label="GST Type"><Radio.Group optionType="button" size="small"><Radio.Button value="CGST_SGST">CGST+SGST</Radio.Button><Radio.Button value="IGST">IGST</Radio.Button></Radio.Group></Form.Item></Col>
+            <Col xs={12} md={4}><Form.Item name="gst_percent" label="GST %" rules={[{ required: true }]}><InputNumber min={0} max={28} style={{ width: '100%' }} /></Form.Item></Col>
+          </Row>
+
+          <Typography.Title level={5}>Products / Modules (product-wise billing)</Typography.Title>
+          <Form.List name="items">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map(({ key, name, ...restField }) => (
+                  <Row gutter={6} key={key} align="middle" style={{ marginBottom: 4 }}>
+                    <Col flex="auto"><Form.Item {...restField} name={[name, 'description']} rules={[{ required: true, message: 'Required' }]} style={{ marginBottom: 4 }}><Input placeholder="Product / Module — e.g. Jewellery ERP Subscription, Invoice Studio Add-on" /></Form.Item></Col>
+                    <Col style={{ width: 110 }}><Form.Item {...restField} name={[name, 'hsn']} style={{ marginBottom: 4 }}><Input placeholder="HSN/SAC" /></Form.Item></Col>
+                    <Col style={{ width: 70 }}><Form.Item {...restField} name={[name, 'qty']} rules={[{ required: true, message: 'Qty' }]} style={{ marginBottom: 4 }}><InputNumber min={0} style={{ width: '100%' }} placeholder="Qty" /></Form.Item></Col>
+                    <Col style={{ width: 110 }}><Form.Item {...restField} name={[name, 'rate']} rules={[{ required: true, message: 'Rate' }]} style={{ marginBottom: 4 }}><InputNumber min={0} style={{ width: '100%' }} placeholder="Rate ₹" /></Form.Item></Col>
+                    <Col><Button danger type="text" size="small" icon={<MinusCircleOutlined />} onClick={() => remove(name)} /></Col>
+                  </Row>
+                ))}
+                <Button size="small" icon={<PlusOutlined />} onClick={() => add({ qty: 1 })}>Add Product / Module</Button>
+              </>
+            )}
+          </Form.List>
+
+          <Divider style={{ margin: '14px 0' }} />
+          <Button type="primary" htmlType="submit" block loading={billPrinting}
+            style={{ background: '#000', borderColor: '#000', fontWeight: 700 }}>
+            Generate &amp; Print Invoice
+          </Button>
+        </Form>
       </Modal>
 
       {/* ── Detail Modal ───────────────────────────────────────────────── */}
