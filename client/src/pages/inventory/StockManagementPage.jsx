@@ -15,7 +15,8 @@ import {
   PlusOutlined, SearchOutlined, BarcodeOutlined, EditOutlined,
   EyeOutlined, DeleteOutlined, SwapOutlined, UploadOutlined,
   FilterOutlined, DownloadOutlined, PrinterOutlined, QrcodeOutlined,
-  EyeInvisibleOutlined, StarOutlined,
+  EyeInvisibleOutlined, StarOutlined, AppstoreOutlined, TagOutlined,
+  DollarOutlined, GoldOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -30,6 +31,8 @@ import OrnamentDetailDrawer from './OrnamentDetailDrawer';
 import ImageUploadPanel from '../catalog/ImageUploadPanel';
 import FloorCounterTraySelect from '../../components/FloorCounterTraySelect';
 import PageTour from '../../components/PageTour';
+import EmptyState from '../../components/states/EmptyState';
+import KPICard from '../../components/KPICard';
 import dayjs from 'dayjs';
 import { METAL_TYPES, METAL_TYPE_COLORS } from '../../utils/metalTypes';
 
@@ -386,9 +389,14 @@ export default function StockManagementPage() {
     keepPreviousData: true,
   });
 
+  // Metal-scoped by the same filters.metalType the table itself uses (via
+  // the metal tabs below) — reportsApi.inventoryValue already accepts a
+  // metalType param (existing API, unchanged), so the summary cards and
+  // the table are always looking at the same metal, per Section 10's
+  // "Do not mix metal data" rule.
   const { data: inventoryReport } = useQuery({
-    queryKey: ['inventory-value'],
-    queryFn: () => reportsApi.inventoryValue().then(r => r.data.data),
+    queryKey: ['inventory-value', filters.metalType],
+    queryFn: () => reportsApi.inventoryValue(filters.metalType ? { metalType: filters.metalType } : {}).then(r => r.data.data),
   });
 
   // ── Batch-fetch images for every row on the current page in ONE request,
@@ -574,10 +582,11 @@ export default function StockManagementPage() {
   ];
 
   const summaryCards = [
-    { label: 'Total Items', value: inventoryData?.total || 0, color: '#B8860B' },
-    { label: 'Available', value: (inventoryData?.items||[]).filter(i=>!i.Is_Sold && i.Is_Stock_Available).length, color: '#52c41a' },
-    { label: 'Sold', value: (inventoryData?.items||[]).filter(i=>i.Is_Sold).length, color: '#ff4d4f' },
-    { label: 'Total MRP', value: parseFloat(inventoryReport?.overall?.total_mrp||0), formatter: formatCurrency, color: '#1890ff' },
+    { label: 'Total Items', value: inventoryData?.total || 0, color: '#B8860B', icon: <AppstoreOutlined /> },
+    { label: 'Available (this page)', value: (inventoryData?.items||[]).filter(i=>!i.Is_Sold && i.Is_Stock_Available).length, color: '#52c41a', icon: <EyeOutlined /> },
+    { label: 'Sold (this page)', value: (inventoryData?.items||[]).filter(i=>i.Is_Sold).length, color: '#ff4d4f', icon: <TagOutlined /> },
+    { label: 'Gross Weight', value: parseFloat(inventoryReport?.overall?.total_weight||0), formatter: formatWeight, color: '#fa8c16', icon: <GoldOutlined /> },
+    { label: 'Stock Value (MRP)', value: parseFloat(inventoryReport?.overall?.total_mrp||0), formatter: formatCurrency, color: '#1890ff', icon: <DollarOutlined /> },
   ];
 
   const entryTypes = [
@@ -611,25 +620,43 @@ export default function StockManagementPage() {
         </Space>
       </div>
 
-      {/* Summary cards — 2 per row mobile, 4 per row desktop */}
+      {/* Summary cards — same KPICard used on the Dashboard, so every
+          screen's stat cards look and behave the same way (Section 32) */}
       <Row gutter={[10, 10]} style={{ marginBottom: 14 }}>
         {summaryCards.map((s, i) => (
-          <Col xs={12} sm={6} key={i}>
-            <Card
-              className="kpi-card"
-              bodyStyle={{ padding: '12px 14px' }}
-              style={{ borderRadius: 10, border: 'none', boxShadow: '0 1px 4px rgba(0,0,0,0.07)', borderTop: `3px solid ${s.color}` }}
-            >
-              <Statistic
-                title={<Text style={{ fontSize: 11, color: '#888' }}>{s.label}</Text>}
-                value={s.value}
-                formatter={s.formatter ? v => s.formatter(v) : undefined}
-                valueStyle={{ color: s.color, fontSize: 17, fontWeight: 700 }}
-              />
-            </Card>
-          </Col>
+          <KPICard key={i} title={s.label} value={s.value} formatter={s.formatter} color={s.color} icon={s.icon}
+            span={{ xs: 12, sm: 8, md: 6, lg: 24 / summaryCards.length }} />
         ))}
       </Row>
+
+      {/* Metal tabs (Section 10) — "Do not mix metal data": selecting a
+          metal filters the table AND the summary cards above together
+          (both key off the same filters.metalType). Same underlying
+          filter this Select used to set, just surfaced as the primary
+          structural control the spec asks for instead of buried in the
+          filter row. */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        {['', ...METAL_TYPES].map((m) => {
+          const active = (filters.metalType || '') === m;
+          return (
+            <button
+              key={m || 'ALL'}
+              onClick={() => setFilters(f => ({ ...f, metalType: m, page: 1 }))}
+              style={{
+                border: 'none', cursor: 'pointer',
+                padding: '8px 18px', borderRadius: 999,
+                fontSize: 13, fontWeight: 700, letterSpacing: '0.2px',
+                background: active ? 'linear-gradient(135deg, var(--gold), var(--gold-light))' : '#fff',
+                color: active ? '#fff' : 'var(--ink-700)',
+                boxShadow: active ? '0 2px 8px rgba(184,134,11,.35)' : 'var(--shadow-sm)',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {m || 'All Metals'}
+            </button>
+          );
+        })}
+      </div>
 
       {/* Barcode scan + filters — wraps on mobile */}
       <Card className="erp-card" style={{ marginBottom: 10 }} bodyStyle={{ padding: '12px 16px' }}>
@@ -652,9 +679,6 @@ export default function StockManagementPage() {
           </Select>
           <Select placeholder="Purity" style={{ minWidth: 100 }} allowClear onChange={v => setFilters(f => ({ ...f, purityId: v || '', page: 1 }))}>
             {(purities||[]).map(p => <Option key={p.Purity_ID} value={p.Purity_ID}>{p.Purity_Code}</Option>)}
-          </Select>
-          <Select placeholder="Metal Type" style={{ minWidth: 120 }} allowClear onChange={v => setFilters(f => ({ ...f, metalType: v || '', page: 1 }))}>
-            {METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}
           </Select>
           <Tooltip title="Defaults to Normal Stock — clear or switch to see Special Stock here too. The full breakdown always lives on the Special Stock screen (Inventory menu).">
             <Select value={filters.classification || undefined} placeholder="All Stock" style={{ minWidth: 130 }} allowClear
@@ -728,11 +752,21 @@ export default function StockManagementPage() {
         </Card>
       )}
 
-      <Card style={{borderRadius:8,border:'none'}} bodyStyle={{padding:0}}>
+      <Card className="erp-card" style={{borderRadius:8,border:'none'}} bodyStyle={{padding:0}}>
         <Table
+            className="erp-table"
             scroll={{ x: "max-content" }} columns={columns} dataSource={inventoryData?.items||[]} loading={isLoading}
           rowKey="Ornament_ID" size="small"
           rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
+          locale={{ emptyText: (
+            <EmptyState
+              icon={<GoldOutlined />}
+              title={filters.metalType ? `No ${filters.metalType} stock found` : 'No stock found'}
+              hint="Try a different metal tab, clear the filters, or add new stock."
+              actionLabel="Add Stock"
+              onAction={() => setEntryModal('Purchase')}
+            />
+          ) }}
           pagination={{ total:inventoryData?.total||0, pageSize:filters.limit, current:filters.page,
             onChange:p=>setFilters(f=>({...f,page:p})), showTotal:t=>`${t} items`, showSizeChanger:false }} />
       </Card>

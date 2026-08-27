@@ -1,17 +1,18 @@
 import React from 'react';
 import {
-  Drawer, Descriptions, Tag, Button, Space, Typography,
-  Divider, Row, Col, message,
+  Drawer, Descriptions, Tag, Space, Typography,
+  Divider, Image, Empty,
 } from 'antd';
-import { BarcodeOutlined } from '@ant-design/icons';
+import { BarcodeOutlined, PictureOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { ornamentsApi } from '../../api/modules';
+import { ornamentsApi, catalogApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { METAL_TYPE_COLORS } from '../../utils/metalTypes';
 import BarcodeLabel from '../../components/BarcodeLabel';
+import { SkeletonCard } from '../../components/states/Skeletons';
 import dayjs from 'dayjs';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 export default function OrnamentDetailDrawer({ ornamentId, open, onClose }) {
   const { data: ornament, isLoading } = useQuery({
@@ -20,6 +21,23 @@ export default function OrnamentDetailDrawer({ ornamentId, open, onClose }) {
     enabled: !!ornamentId && open,
   });
 
+  // Real product photos (Section 12) — the same catalog/images API the
+  // Stock table's image-upload panel already uses, just scoped to this
+  // one item. No new endpoint, no mock imagery.
+  const { data: images } = useQuery({
+    queryKey: ['ornament-images', ornamentId],
+    queryFn: () => catalogApi.getImages({ ornament_ids: ornamentId }).then((r) => r.data.data || []),
+    enabled: !!ornamentId && open,
+  });
+  const primaryImage = (images || []).find((i) => i.Is_Primary) || (images || [])[0];
+
+  if (isLoading) {
+    return (
+      <Drawer open={open} onClose={onClose} width={520} title="Loading...">
+        <SkeletonCard rows={8} height={500} />
+      </Drawer>
+    );
+  }
   if (!ornament) return null;
 
   const statusColor = ornament.Is_Sold ? 'red' : ornament.Is_Reserved ? 'blue' : 'green';
@@ -38,6 +56,25 @@ export default function OrnamentDetailDrawer({ ornamentId, open, onClose }) {
       onClose={onClose}
       width={520}
     >
+      {/* Product photo */}
+      <div style={{
+        textAlign: 'center', marginBottom: 16, background: 'var(--ink-100)',
+        borderRadius: 'var(--radius-md)', padding: primaryImage ? 8 : 24,
+      }}>
+        {primaryImage ? (
+          <Image
+            src={primaryImage.Image_URL}
+            alt={ornament.Article_Number}
+            style={{ maxHeight: 220, objectFit: 'contain', borderRadius: 8 }}
+          />
+        ) : (
+          <Empty
+            image={<PictureOutlined style={{ fontSize: 32, color: 'var(--ink-300)' }} />}
+            description={<Text className="caption">No photo uploaded for this item yet</Text>}
+          />
+        )}
+      </div>
+
       {/* QR label */}
       <div style={{ textAlign: 'center', marginBottom: 20 }}>
         <BarcodeLabel ornament={ornament} showPrint />
@@ -58,8 +95,15 @@ export default function OrnamentDetailDrawer({ ornamentId, open, onClose }) {
         <Descriptions.Item label="Purity">
           <Tag color="gold">{ornament.Purity_Code || '-'}</Tag>
         </Descriptions.Item>
-        <Descriptions.Item label="Location">{ornament.Physical_Location || '-'}</Descriptions.Item>
         <Descriptions.Item label="Hallmark">{ornament.Hallmark_Certificate_No || '-'}</Descriptions.Item>
+      </Descriptions>
+
+      {/* Location — Floor_Name is real, joined server-side; Counter/Tray
+          aren't currently joined into this response, so only what's
+          actually returned is shown here rather than a fabricated label. */}
+      <Descriptions title="Current Location" size="small" column={2} bordered style={{ marginBottom: 16 }}>
+        <Descriptions.Item label="Floor">{ornament.Floor_Name || '-'}</Descriptions.Item>
+        <Descriptions.Item label="Location">{ornament.Physical_Location || '-'}</Descriptions.Item>
       </Descriptions>
 
       {/* Weight */}
@@ -75,6 +119,17 @@ export default function OrnamentDetailDrawer({ ornamentId, open, onClose }) {
           </>
         )}
       </Descriptions>
+
+      {/* Purchase Information — Supplier_Name/Code are real, already
+          joined server-side but weren't surfaced here before. */}
+      {(ornament.Supplier_Name || ornament.Purchase_Cost) && (
+        <Descriptions title="Purchase Information" size="small" column={2} bordered style={{ marginBottom: 16 }}>
+          <Descriptions.Item label="Supplier" span={2}>
+            {ornament.Supplier_Name ? `${ornament.Supplier_Name}${ornament.Supplier_Code ? ` (${ornament.Supplier_Code})` : ''}` : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Purchase Cost">{formatCurrency(ornament.Purchase_Cost)}</Descriptions.Item>
+        </Descriptions>
+      )}
 
       {/* Pricing */}
       <Descriptions title="Pricing" size="small" column={2} bordered style={{ marginBottom: 16 }}>
