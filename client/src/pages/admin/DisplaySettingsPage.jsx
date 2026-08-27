@@ -11,9 +11,11 @@ import {
   AppstoreOutlined, TeamOutlined, SaveOutlined, EyeOutlined,
   PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined,
   PrinterOutlined, DownloadOutlined, ShareAltOutlined,
+  MenuOutlined, LayoutOutlined, CheckCircleFilled,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tenantApi } from '../../api/modules';
+import { useNavLayoutStore } from '../../store/navLayoutStore';
 import PageTour from '../../components/PageTour';
 
 const { Title, Text } = Typography;
@@ -91,6 +93,72 @@ const fullAccess = () => Object.fromEntries(
 const readOnly = () => Object.fromEntries(
   ALL_SCREENS.map(s => [s, { View: true, Add: false, Edit: false, Delete: false, Approve: false, Print: true, Export: false }])
 );
+
+// ── Navigation Layout — sidebar vs top header, same menu either way ────────────
+// A small CSS mockup (not a screenshot) so the difference is obvious at a
+// glance without needing real screen space.
+function LayoutPreviewCard({ mode, selected, onSelect }) {
+  const isSidebar = mode === 'sidebar';
+  return (
+    <Card
+      hoverable
+      onClick={onSelect}
+      style={{
+        borderRadius: 10, cursor: 'pointer', width: 220,
+        border: selected ? '2px solid #B8860B' : '1px solid #eee',
+        boxShadow: selected ? '0 4px 14px rgba(184,134,11,.18)' : '0 1px 4px rgba(0,0,0,.06)',
+      }}
+      bodyStyle={{ padding: 14 }}
+    >
+      {/* Mockup */}
+      <div style={{ display: 'flex', flexDirection: isSidebar ? 'row' : 'column', height: 100, borderRadius: 6, overflow: 'hidden', border: '1px solid #e8e8e8', marginBottom: 10 }}>
+        {isSidebar ? (
+          <>
+            <div style={{ width: 26, background: '#1A1A1A' }} />
+            <div style={{ flex: 1, background: '#F4F5F7' }}>
+              <div style={{ height: 14, background: '#fff', borderBottom: '1px solid #eee' }} />
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ height: 16, background: '#1A1A1A' }} />
+            <div style={{ height: 12, background: '#1A1A1A', opacity: 0.7 }} />
+            <div style={{ flex: 1, background: '#F4F5F7' }} />
+          </>
+        )}
+      </div>
+      <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+        <Text strong style={{ fontSize: 13 }}>
+          {isSidebar ? <Space size={4}><MenuOutlined />Sidebar</Space> : <Space size={4}><LayoutOutlined />Top Header</Space>}
+        </Text>
+        {selected && <CheckCircleFilled style={{ color: '#B8860B' }} />}
+      </Space>
+      <Text type="secondary" style={{ fontSize: 11 }}>
+        {isSidebar ? 'Menu on the left, collapsible.' : 'Menu as a bar across the top.'}
+      </Text>
+    </Card>
+  );
+}
+
+function NavLayoutTab() {
+  const { layout, setLayout } = useNavLayoutStore();
+  return (
+    <Card size="small" style={{ borderRadius: 8, marginBottom: 12 }}>
+      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 14 }}>
+        Choose how the menu appears on this computer. Same pages, same access — just a different layout.
+        This is a personal preference, saved on this device only, so different staff can each pick what they like.
+      </Text>
+      <Space size={16} wrap>
+        <LayoutPreviewCard mode="sidebar" selected={layout === 'sidebar'} onSelect={() => setLayout('sidebar')} />
+        <LayoutPreviewCard mode="header" selected={layout === 'header'} onSelect={() => setLayout('header')} />
+      </Space>
+      <Alert
+        type="info" showIcon style={{ marginTop: 16, borderRadius: 8 }}
+        message="Takes effect immediately — no save button needed. On phones/tablets, the menu always opens from the corner regardless of this choice."
+      />
+    </Card>
+  );
+}
 
 export default function DisplaySettingsPage() {
   const qc = useQueryClient();
@@ -301,6 +369,10 @@ export default function DisplaySettingsPage() {
         </>
       ),
     },
+    {
+      key: 'nav-layout', label: <span><LayoutOutlined /> Navigation Layout</span>,
+      children: <NavLayoutTab />,
+    },
   ];
 
   return (
@@ -326,7 +398,7 @@ export default function DisplaySettingsPage() {
         type="card" items={tabItems} />
       </div>
 
-      {(selectedRole || selectedUser) && (
+      {activeTab !== 'nav-layout' && (selectedRole || selectedUser) && (
         <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 8, marginTop: 12 }}>
           <Table
             columns={cols}

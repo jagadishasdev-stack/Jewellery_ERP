@@ -34,6 +34,8 @@ import GoldRateBar from '../GoldRateBar';
 import RecentWindows from '../RecentWindows';
 import { useRecentWindowsStore } from '../../store/recentWindowsStore';
 import { useUiThemeStore } from '../../store/uiThemeStore';
+import { useNavLayoutStore } from '../../store/navLayoutStore';
+import SplashGate from '../SplashGate';
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
@@ -494,8 +496,10 @@ const BOTTOM_NAV = [
 ];
 
 // ── Sidebar content ────────────────────────────────────────────────────────────
-function SidebarContent({ collapsed, onNavigate, currentPath, permissions, isEnabled, isUnofficial }) {
-  const menuItems = buildMenuItems(permissions, isEnabled, isUnofficial);
+// menuItems is computed once by the caller (MainLayout) and shared with the
+// horizontal header-mode Menu below — both render the exact same items,
+// just in different Ant Design Menu `mode`s.
+function SidebarContent({ collapsed, onNavigate, currentPath, menuItems }) {
   const theme = useUiThemeStore((s) => s.theme);
   const logoUrl = theme?.Logo_URL || '/logo.png';
   const logoScale = (theme?.Logo_Size || 100) / 100;
@@ -558,9 +562,16 @@ export default function MainLayout() {
   const { isEnabled, businessType } = useModules();
   const { config: modeConfig, isOfficial, isDummy, isUnofficial } = useDataMode();
   const screens = useBreakpoint();
+  const navLayout = useNavLayoutStore((s) => s.layout);
+  const uiTheme = useUiThemeStore((s) => s.theme);
+  const headerLogoUrl = uiTheme?.Logo_URL || '/logo.png';
 
   const isMobile = !screens.md;  // <768px
   const isTablet = screens.md && !screens.lg; // 768–1024px
+  // Header-mode navigation only applies on desktop/tablet — mobile always
+  // keeps its own drawer + bottom nav regardless of this preference, same
+  // as before this feature existed.
+  const isHeaderLayout = !isMobile && navLayout === 'header';
 
   // Auto-collapse on tablet
   useEffect(() => {
@@ -593,10 +604,18 @@ export default function MainLayout() {
     setMobileDrawerOpen(false);
   };
 
+  // Computed once and shared by the sidebar Menu (mode="inline"), the
+  // header-layout Menu (mode="horizontal"), and global search below —
+  // all three are the exact same items, just three different views of them.
+  const menuItems = useMemo(
+    () => buildMenuItems(user?.permissions || {}, isEnabled, isUnofficial),
+    [user?.permissions, isEnabled, isUnofficial]
+  );
+
   // ── Global search — flattened list of every page this user can see ─────────
   const searchableItems = useMemo(
-    () => flattenMenuItems(buildMenuItems(user?.permissions || {}, isEnabled, isUnofficial)),
-    [user?.permissions, isEnabled, isUnofficial]
+    () => flattenMenuItems(menuItems),
+    [menuItems]
   );
 
   // ── Record this visit for the Recent Windows panel ──────────────────────────
@@ -639,13 +658,15 @@ export default function MainLayout() {
   // ── Sidebar width ─────────────────────────────────────────────────────────────
   const siderWidth    = 240;
   const collapsedWidth = 72;
-  const effectiveWidth = isMobile ? 0 : (siderCollapsed ? collapsedWidth : siderWidth);
+  // No fixed sidebar reserves space in header-layout mode — the horizontal
+  // Menu sits inline in the content flow instead (see below).
+  const effectiveWidth = isMobile || isHeaderLayout ? 0 : (siderCollapsed ? collapsedWidth : siderWidth);
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
 
-      {/* ── Desktop / Tablet Sidebar ─────────────────────────────────────────── */}
-      {!isMobile && (
+      {/* ── Desktop / Tablet Sidebar (only in sidebar-layout mode) ──────────── */}
+      {!isMobile && !isHeaderLayout && (
         <Sider
           collapsible
           collapsed={siderCollapsed}
@@ -667,14 +688,13 @@ export default function MainLayout() {
             collapsed={siderCollapsed}
             onNavigate={handleNavigate}
             currentPath={currentFullPath}
-            permissions={user?.permissions || {}}
-            isEnabled={isEnabled}
-            isUnofficial={isUnofficial}
+            menuItems={menuItems}
           />
         </Sider>
       )}
 
-      {/* ── Mobile Drawer Sidebar ────────────────────────────────────────────── */}
+      {/* ── Mobile Drawer Sidebar — always the drawer on mobile, regardless
+           of the sidebar/header preference (that preference is desktop-only) ── */}
       {isMobile && (
         <Drawer
           placement="left"
@@ -688,9 +708,7 @@ export default function MainLayout() {
             collapsed={false}
             onNavigate={handleNavigate}
             currentPath={currentFullPath}
-            permissions={user?.permissions || {}}
-            isEnabled={isEnabled}
-            isUnofficial={isUnofficial}
+            menuItems={menuItems}
           />
         </Drawer>
       )}
@@ -737,17 +755,21 @@ export default function MainLayout() {
           boxShadow:     '0 1px 4px rgba(0,0,0,.06)',
           gap:           8,
         }}>
-          {/* Left: toggle button */}
+          {/* Left: toggle button (sidebar mode) or logo (header mode) */}
           <Space size={8}>
-            <Button
-              type="text"
-              icon={isMobile
-                ? (mobileDrawerOpen ? <CloseOutlined /> : <MenuOutlined />)
-                : (siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)
-              }
-              onClick={() => isMobile ? setMobileDrawerOpen(v => !v) : setSiderCollapsed(v => !v)}
-              style={{ fontSize: 18, color: '#555', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            />
+            {isHeaderLayout ? (
+              <img src={headerLogoUrl} alt="Logo" style={{ height: 32, width: 'auto', maxWidth: 140, objectFit: 'contain' }} />
+            ) : (
+              <Button
+                type="text"
+                icon={isMobile
+                  ? (mobileDrawerOpen ? <CloseOutlined /> : <MenuOutlined />)
+                  : (siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)
+                }
+                onClick={() => isMobile ? setMobileDrawerOpen(v => !v) : setSiderCollapsed(v => !v)}
+                style={{ fontSize: 18, color: '#555', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              />
+            )}
             {/* Company name on desktop */}
             {!isMobile && (
               <Text style={{ fontSize: 13, color: '#888', fontWeight: 500 }}>
@@ -805,13 +827,30 @@ export default function MainLayout() {
           </Space>
         </Header>
 
+        {/* ── Header-layout mode: the same menu items as the sidebar, just
+             as a horizontal bar instead. Ant Design's horizontal Menu
+             collapses overflow items into a "More" (…) submenu on its own —
+             no extra work needed for the large item count here. ──────────── */}
+        {isHeaderLayout && (
+          <div style={{ background: '#1A1A1A', position: 'sticky', top: 60, zIndex: 140, boxShadow: '0 1px 4px rgba(0,0,0,.1)' }}>
+            <Menu
+              theme="dark"
+              mode="horizontal"
+              selectedKeys={[currentFullPath]}
+              items={menuItems}
+              onClick={({ key }) => { if (!key.includes('-group') && !key.includes('-div')) handleNavigate(key); }}
+              style={{ background: '#1A1A1A', borderBottom: 0 }}
+            />
+          </div>
+        )}
+
         {/* Content */}
         <Content
           className="erp-content"
           style={{
             padding:    isMobile ? '12px' : '20px 24px',
             background: isOfficial ? '#F4F5F7' : modeConfig.headerBg,
-            minHeight:  'calc(100vh - 60px)',
+            minHeight:  isHeaderLayout ? 'calc(100vh - 106px)' : 'calc(100vh - 60px)',
             // Extra bottom padding on mobile for bottom nav
             paddingBottom: isMobile ? 'calc(70px + env(safe-area-inset-bottom, 0px))' : undefined,
           }}
@@ -858,6 +897,11 @@ export default function MainLayout() {
 
       {/* ── Recent Windows — right-edge tab, jump back to any recent page ──── */}
       <RecentWindows />
+
+      {/* ── Post-login splash + "press any key" welcome gate ─────────────────
+           Only ever shows right after a real login (authStore.justLoggedIn),
+           never on a plain page refresh. Renders null otherwise. ──────────── */}
+      <SplashGate />
 
       {/* ── Change Password (self-service, any logged-in user) ──────────────── */}
       <Modal

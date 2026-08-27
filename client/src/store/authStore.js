@@ -11,6 +11,13 @@ export const useAuthStore = create(
       refreshToken: null,
       sessionId: null,
       isAuthenticated: false,
+      // Deliberately NOT in partialize below — set true only by a real
+      // login() call, so it resets to false on every page refresh/rehydrate
+      // rather than persisting. This is what tells SplashGate.jsx to show
+      // the post-login splash/welcome screen once per actual login, not
+      // every time the app reloads.
+      justLoggedIn: false,
+      dismissSplash: () => set({ justLoggedIn: false }),
 
       initAuth: () => {
         const { token, user } = get();
@@ -25,7 +32,7 @@ export const useAuthStore = create(
         if (data.success) {
           const { token, refreshToken, sessionId, user } = data.data;
           api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-          set({ token, refreshToken, sessionId, user, isAuthenticated: true });
+          set({ token, refreshToken, sessionId, user, isAuthenticated: true, justLoggedIn: true });
           return data.data;
         }
         throw new Error(data.message);
