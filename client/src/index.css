@@ -21,6 +21,34 @@
   --shadow-md:    0 4px 12px rgba(0,0,0,.1),  0 2px 4px rgba(0,0,0,.06);
   --shadow-lg:    0 10px 30px rgba(0,0,0,.12), 0 4px 8px rgba(0,0,0,.08);
 
+  /* ── Design system — semantic + neutral scale ──────────────────────────────
+     Section 32: one shared vocabulary every screen draws from, rather than
+     each page inventing its own greens/reds/greys inline. Existing --gold
+     tokens above stay the brand primary; these fill in what was missing. */
+  --success:      #16a34a;
+  --success-bg:   #f0fdf4;
+  --danger:       #dc2626;
+  --danger-bg:    #fef2f2;
+  --warning:      #d97706;
+  --warning-bg:   #fffbeb;
+  --info:         #2563eb;
+  --info-bg:      #eff6ff;
+
+  --ink-900:      #111827; /* headings */
+  --ink-700:      #374151; /* body text */
+  --ink-500:      #6b7280; /* secondary/caption */
+  --ink-300:      #d1d5db; /* borders/dividers */
+  --ink-100:      #f3f4f6; /* subtle backgrounds */
+
+  /* Typography scale — used by the .h1-.caption utility classes below,
+     kept as rem multiples of the 14px base so it scales with html{font-size}. */
+  --fs-h1: 1.71rem;   /* 24px  — page-level, rare (report titles, empty-state headlines) */
+  --fs-h2: 1.43rem;   /* 20px  — section headers */
+  --fs-h3: 1.14rem;   /* 16px  — card titles */
+  --fs-h4: 1rem;      /* 14px  — sub-headings, page-header-title */
+  --fs-body: 0.93rem; /* 13px  — table cells, form labels */
+  --fs-caption: 0.79rem; /* 11px — captions, secondary metadata */
+
   /* Tenant-wide theme — overridden at runtime by uiThemeStore.js once the
      admin's saved theme (tbl_tenant_ui_theme) loads. These are just the
      pre-load defaults, matching the original hardcoded look. */
@@ -364,6 +392,43 @@ body *:not(input):not(textarea) { text-transform: inherit; }
 .gap-8      { gap: 8px; }
 .gap-12     { gap: 12px; }
 .truncate   { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Typography scale (Section 32) ──────────────────────────────────────────── */
+.h1 { font-size: var(--fs-h1); font-weight: 700; color: var(--ink-900); line-height: 1.3; margin: 0; }
+.h2 { font-size: var(--fs-h2); font-weight: 700; color: var(--ink-900); line-height: 1.3; margin: 0; }
+.h3 { font-size: var(--fs-h3); font-weight: 600; color: var(--ink-900); line-height: 1.35; margin: 0; }
+.h4 { font-size: var(--fs-h4); font-weight: 600; color: var(--ink-900); line-height: 1.4;  margin: 0; }
+.body-text { font-size: var(--fs-body); color: var(--ink-700); line-height: 1.5; }
+.caption   { font-size: var(--fs-caption); color: var(--ink-500); line-height: 1.4; }
+
+/* ── Elevated card — a slightly more premium alternative to .erp-card for
+   showcase surfaces (dashboard KPIs, detail panels) ────────────────────────── */
+.erp-card-elevated {
+  background: white;
+  border-radius: var(--radius-lg) !important;
+  border: 1px solid var(--ink-100) !important;
+  box-shadow: var(--shadow-sm) !important;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.erp-card-elevated:hover { box-shadow: var(--shadow-lg) !important; transform: translateY(-1px); }
+
+/* ── Comparison badge — "↑ 12.5% vs yesterday" pattern used across KPI cards ── */
+.stat-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: var(--fs-caption); font-weight: 700;
+  padding: 1px 7px; border-radius: 999px;
+}
+.stat-badge.up   { color: var(--success); background: var(--success-bg); }
+.stat-badge.down { color: var(--danger);  background: var(--danger-bg); }
+.stat-badge.flat { color: var(--ink-500); background: var(--ink-100); }
+
+/* ── Icon badge — soft circular background behind a card's icon, replaces a
+   bare colored icon floating on white for a more finished look ───────────── */
+.icon-badge {
+  width: 40px; height: 40px; border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; flex-shrink: 0;
+}
 
 /* ── Loading shimmer (skeleton improvement) ──────────────────────────────────── */
 @keyframes shimmer {

@@ -25,48 +25,27 @@ import { formatCurrency } from '../utils/calculations';
 import MetalRateDashboard from '../components/MetalRateDashboard';
 import ClosingStockTodayWidget from '../components/ClosingStockTodayWidget';
 import PageTour from '../components/PageTour';
+import KPICard from '../components/KPICard';
+import EmptyState from '../components/states/EmptyState';
+import { SkeletonKPIRow } from '../components/states/Skeletons';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
 
-// ── Responsive KPI card ───────────────────────────────────────────────────────
-// Mobile: 2 per row | Tablet: 3 per row | Desktop: 4-6 per row
-function KPI({ title, value, formatter, icon, color, suffix, onClick }) {
-  return (
-    <Col xs={12} sm={8} md={6} lg={4} className="kpi-col">
-      <Card
-        className="kpi-card"
-        bodyStyle={{ padding: '14px 16px' }}
-        onClick={onClick}
-        style={{
-          borderRadius: 10,
-          border:       'none',
-          boxShadow:    '0 1px 4px rgba(0,0,0,.07)',
-          borderTop:    `3px solid ${color}`,
-          cursor:       onClick ? 'pointer' : 'default',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <Statistic
-            title={<Text style={{ fontSize: 11, color: '#888', lineHeight: 1.3 }}>{title}</Text>}
-            value={value}
-            formatter={formatter ? v => formatter(v) : undefined}
-            suffix={suffix}
-            valueStyle={{ color, fontSize: 17, fontWeight: 700 }}
-          />
-          <div style={{ color, fontSize: 20, opacity: 0.5, marginTop: 2 }}>{icon}</div>
-        </div>
-      </Card>
-    </Col>
-  );
-}
+/** value >0 -> yesterday, computes a percent change; guards div-by-zero. */
+const pctChange = (today, yesterday) => {
+  const t = parseFloat(today || 0), y = parseFloat(yesterday || 0);
+  if (y === 0) return null; // nothing meaningful to compare against
+  return ((t - y) / y) * 100;
+};
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
   const { businessType, isEnabled } = useModules();
   const navigate = useNavigate();
   const today = dayjs().format('YYYY-MM-DD');
+  const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
   const monthStart = dayjs().startOf('month').format('YYYY-MM-DD');
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
@@ -88,9 +67,18 @@ export default function DashboardPage() {
     refetchInterval: 60000,
   });
 
-  const { data: dailySales } = useQuery({
+  const { data: dailySales, isLoading: dailySalesLoading } = useQuery({
     queryKey: ['daily-sales', today],
     queryFn: () => salesApi.dailyReport(today).then(r => r.data.data),
+    enabled: isEnabled('retail_sales') || isEnabled('wholesale_sales'),
+  });
+
+  // Same existing endpoint, just yesterday's date — purely for the KPI
+  // cards' "vs yesterday" comparison badge (Section 5's own example).
+  // No new API, no backend change.
+  const { data: yesterdaySales } = useQuery({
+    queryKey: ['daily-sales', yesterday],
+    queryFn: () => salesApi.dailyReport(yesterday).then(r => r.data.data),
     enabled: isEnabled('retail_sales') || isEnabled('wholesale_sales'),
   });
 
@@ -130,9 +118,15 @@ export default function DashboardPage() {
   });
 
   const ds = dailySales?.summary || {};
+  const ys = yesterdaySales?.summary || {};
   const ms = monthlySales?.summary || {};
   const inv = inventory?.overall || {};
   const sch = schemeDash || {};
+
+  const revenueChange = pctChange(ds.total_revenue, ys.total_revenue);
+  const billsChange = pctChange(ds.total_bills, ys.total_bills);
+  const revenueComparison = revenueChange !== null ? { value: revenueChange, label: 'vs yesterday' } : undefined;
+  const billsComparison = billsChange !== null ? { value: billsChange, label: 'vs yesterday' } : undefined;
 
   // ── Business-type header colours ──────────────────────────────────────────
   const BT_CONFIG = {
@@ -147,12 +141,12 @@ export default function DashboardPage() {
   const RetailerSection = () => (
     <>
       <Row ref={kpiRef} gutter={[10, 10]} style={{ marginBottom: 14 }}>
-        <KPI title="Today's Bills"    value={parseInt(ds.total_bills||0)}    color="#B8860B" icon={<ShoppingCartOutlined />} suffix="bills" onClick={() => navigate('/pos')} />
-        <KPI title="Today's Revenue"  value={parseFloat(ds.total_revenue||0)} formatter={formatCurrency} color="#52c41a" icon={<RiseOutlined />} onClick={() => navigate('/reports/sales-reports')} />
-        <KPI title="Month Revenue"    value={parseFloat(ms.total_revenue||0)} formatter={formatCurrency} color="#1890ff" icon={<BarChartOutlined />} />
-        <KPI title="GST Collected"    value={parseFloat(ds.total_gst||0)}    formatter={formatCurrency} color="#722ed1" icon={<SafetyOutlined />} />
-        <KPI title="Stock (MRP)"      value={parseFloat(inv.total_mrp||0)}   formatter={formatCurrency} color="#fa8c16" icon={<GoldOutlined />} onClick={() => navigate('/inventory')} />
-        <KPI title="Total Pieces"     value={parseInt(inv.total_pieces||0)}  color="#888" icon={<AppstoreOutlined />} suffix="pcs" />
+        <KPICard title="Today's Bills"    value={parseInt(ds.total_bills||0)}    color="#B8860B" icon={<ShoppingCartOutlined />} suffix="bills" comparison={billsComparison} onClick={() => navigate('/pos')} />
+        <KPICard title="Today's Revenue"  value={parseFloat(ds.total_revenue||0)} formatter={formatCurrency} color="#52c41a" icon={<RiseOutlined />} comparison={revenueComparison} onClick={() => navigate('/reports/sales-reports')} />
+        <KPICard title="Month Revenue"    value={parseFloat(ms.total_revenue||0)} formatter={formatCurrency} color="#1890ff" icon={<BarChartOutlined />} />
+        <KPICard title="GST Collected"    value={parseFloat(ds.total_gst||0)}    formatter={formatCurrency} color="#722ed1" icon={<SafetyOutlined />} />
+        <KPICard title="Stock (MRP)"      value={parseFloat(inv.total_mrp||0)}   formatter={formatCurrency} color="#fa8c16" icon={<GoldOutlined />} onClick={() => navigate('/inventory')} />
+        <KPICard title="Total Pieces"     value={parseInt(inv.total_pieces||0)}  color="#888" icon={<AppstoreOutlined />} suffix="pcs" />
       </Row>
 
       <Row ref={detailRef} gutter={[14, 14]}>
@@ -161,7 +155,7 @@ export default function DashboardPage() {
           <Card title="🛒 Counter Performance — Today" bodyStyle={{ padding: 0 }} style={{ borderRadius: 8 }}
             extra={<Button type="link" size="small" onClick={() => navigate('/pos')}>Open POS →</Button>}>
             {(counterToday?.counterStats || []).length === 0
-              ? <Alert message="No sales today. Open POS to start billing." type="info" showIcon style={{ margin: 16 }} />
+              ? <EmptyState icon={<ShoppingCartOutlined />} title="No sales today" hint="Open POS to start billing — today's counter performance will show here." actionLabel="Open POS" onAction={() => navigate('/pos')} compact />
               : <Table
             scroll={{ x: "max-content" }} size="small" dataSource={counterToday?.counterStats || []} rowKey="counter" pagination={false}
                   columns={[
@@ -238,12 +232,12 @@ export default function DashboardPage() {
   const WholesalerSection = () => (
     <>
       <Row ref={kpiRef} gutter={[10, 10]} style={{ marginBottom: 14 }}>
-        <KPI title="Month Revenue"   value={parseFloat(ms.total_revenue||0)} formatter={formatCurrency} color="#1890ff" icon={<RiseOutlined />} />
-        <KPI title="Today's Bills"   value={parseInt(ds.total_bills||0)}     color="#B8860B" icon={<ShoppingCartOutlined />} suffix="bills" />
-        <KPI title="Total Stock"     value={parseInt(inv.total_pieces||0)}   color="#52c41a" icon={<AppstoreOutlined />} suffix="pcs" />
-        <KPI title="Stock Value"     value={parseFloat(inv.total_mrp||0)}    formatter={formatCurrency} color="#fa8c16" icon={<GoldOutlined />} />
-        <KPI title="Pending Collect" value={parseFloat(ms.total_pending||0)} formatter={formatCurrency} color="#ff4d4f" icon={<ClockCircleOutlined />} />
-        <KPI title="GST Collected"   value={parseFloat(ds.total_gst||0)}     formatter={formatCurrency} color="#722ed1" icon={<SafetyOutlined />} />
+        <KPICard title="Month Revenue"   value={parseFloat(ms.total_revenue||0)} formatter={formatCurrency} color="#1890ff" icon={<RiseOutlined />} />
+        <KPICard title="Today's Bills"   value={parseInt(ds.total_bills||0)}     color="#B8860B" icon={<ShoppingCartOutlined />} suffix="bills" comparison={billsComparison} />
+        <KPICard title="Total Stock"     value={parseInt(inv.total_pieces||0)}   color="#52c41a" icon={<AppstoreOutlined />} suffix="pcs" />
+        <KPICard title="Stock Value"     value={parseFloat(inv.total_mrp||0)}    formatter={formatCurrency} color="#fa8c16" icon={<GoldOutlined />} />
+        <KPICard title="Pending Collect" value={parseFloat(ms.total_pending||0)} formatter={formatCurrency} color="#ff4d4f" icon={<ClockCircleOutlined />} />
+        <KPICard title="GST Collected"   value={parseFloat(ds.total_gst||0)}     formatter={formatCurrency} color="#722ed1" icon={<SafetyOutlined />} />
       </Row>
       <Row ref={detailRef} gutter={[14, 14]}>
         <Col xs={24} lg={12}>
@@ -281,12 +275,12 @@ export default function DashboardPage() {
     return (
       <>
         <Row ref={kpiRef} gutter={[10, 10]} style={{ marginBottom: 14 }}>
-          <KPI title="Gold Issued"      value={`${issued.toFixed(3)}g`}   color="#fa8c16" icon={<GoldOutlined />} />
-          <KPI title="Gold Returned"    value={`${returned.toFixed(3)}g`} color="#52c41a" icon={<RiseOutlined />} />
-          <KPI title="Pending w/Karigar"value={`${pending.toFixed(3)}g`}  color="#ff4d4f" icon={<ClockCircleOutlined />} />
-          <KPI title="Active Karigars"  value={(karigarData||[]).filter(r => r.Status !== 'Completed').length} color="#1890ff" icon={<TeamOutlined />} suffix="working" />
-          <KPI title="Stock Value"      value={parseFloat(inv.total_mrp||0)} formatter={formatCurrency} color="#B8860B" icon={<GoldFilled />} />
-          <KPI title="Total Pieces"     value={parseInt(inv.total_pieces||0)} color="#888" icon={<AppstoreOutlined />} suffix="pcs" />
+          <KPICard title="Gold Issued"      value={`${issued.toFixed(3)}g`}   color="#fa8c16" icon={<GoldOutlined />} />
+          <KPICard title="Gold Returned"    value={`${returned.toFixed(3)}g`} color="#52c41a" icon={<RiseOutlined />} />
+          <KPICard title="Pending w/Karigar"value={`${pending.toFixed(3)}g`}  color="#ff4d4f" icon={<ClockCircleOutlined />} />
+          <KPICard title="Active Karigars"  value={(karigarData||[]).filter(r => r.Status !== 'Completed').length} color="#1890ff" icon={<TeamOutlined />} suffix="working" />
+          <KPICard title="Stock Value"      value={parseFloat(inv.total_mrp||0)} formatter={formatCurrency} color="#B8860B" icon={<GoldFilled />} />
+          <KPICard title="Total Pieces"     value={parseInt(inv.total_pieces||0)} color="#888" icon={<AppstoreOutlined />} suffix="pcs" />
         </Row>
         <Row ref={detailRef} gutter={[14, 14]}>
           <Col xs={24} lg={14}>
@@ -323,14 +317,14 @@ export default function DashboardPage() {
   const HybridSection = () => (
     <>
       <Row ref={kpiRef} gutter={[10, 10]} style={{ marginBottom: 14 }}>
-        <KPI title="Today's Revenue"  value={parseFloat(ds.total_revenue||0)}  formatter={formatCurrency} color="#B8860B" icon={<RiseOutlined />} onClick={() => navigate('/reports/sales-reports')} />
-        <KPI title="Today's Bills"    value={parseInt(ds.total_bills||0)}       color="#1890ff" icon={<ShoppingCartOutlined />} suffix="bills" onClick={() => navigate('/pos')} />
-        <KPI title="Month Revenue"    value={parseFloat(ms.total_revenue||0)}   formatter={formatCurrency} color="#52c41a" icon={<BarChartOutlined />} />
-        <KPI title="Stock (MRP)"      value={parseFloat(inv.total_mrp||0)}      formatter={formatCurrency} color="#fa8c16" icon={<GoldOutlined />} onClick={() => navigate('/inventory')} />
-        <KPI title="Scheme Members"   value={parseInt(sch.active_members||0)}   color="#722ed1" icon={<TeamOutlined />} suffix="active" onClick={() => navigate('/savings')} />
-        {isEnabled('goldsmith') && <KPI title="Gold w/Karigar" value={`${((karigarData||[]).reduce((s,r)=>s+parseFloat(r.total_issued||0),0) - (karigarData||[]).reduce((s,r)=>s+parseFloat(r.total_returned||0),0)).toFixed(2)}g`} color="#ff4d4f" icon={<GoldOutlined />} />}
-        <KPI title="Total Pieces"     value={parseInt(inv.total_pieces||0)}     color="#888" icon={<AppstoreOutlined />} suffix="pcs" onClick={() => navigate('/inventory')} />
-        <KPI title="GST Collected"    value={parseFloat(ds.total_gst||0)}       formatter={formatCurrency} color="#13c2c2" icon={<SafetyOutlined />} />
+        <KPICard title="Today's Revenue"  value={parseFloat(ds.total_revenue||0)}  formatter={formatCurrency} color="#B8860B" icon={<RiseOutlined />} comparison={revenueComparison} onClick={() => navigate('/reports/sales-reports')} />
+        <KPICard title="Today's Bills"    value={parseInt(ds.total_bills||0)}       color="#1890ff" icon={<ShoppingCartOutlined />} suffix="bills" comparison={billsComparison} onClick={() => navigate('/pos')} />
+        <KPICard title="Month Revenue"    value={parseFloat(ms.total_revenue||0)}   formatter={formatCurrency} color="#52c41a" icon={<BarChartOutlined />} />
+        <KPICard title="Stock (MRP)"      value={parseFloat(inv.total_mrp||0)}      formatter={formatCurrency} color="#fa8c16" icon={<GoldOutlined />} onClick={() => navigate('/inventory')} />
+        <KPICard title="Scheme Members"   value={parseInt(sch.active_members||0)}   color="#722ed1" icon={<TeamOutlined />} suffix="active" onClick={() => navigate('/savings')} />
+        {isEnabled('goldsmith') && <KPICard title="Gold w/Karigar" value={`${((karigarData||[]).reduce((s,r)=>s+parseFloat(r.total_issued||0),0) - (karigarData||[]).reduce((s,r)=>s+parseFloat(r.total_returned||0),0)).toFixed(2)}g`} color="#ff4d4f" icon={<GoldOutlined />} />}
+        <KPICard title="Total Pieces"     value={parseInt(inv.total_pieces||0)}     color="#888" icon={<AppstoreOutlined />} suffix="pcs" onClick={() => navigate('/inventory')} />
+        <KPICard title="GST Collected"    value={parseFloat(ds.total_gst||0)}       formatter={formatCurrency} color="#13c2c2" icon={<SafetyOutlined />} />
       </Row>
 
       <Row ref={detailRef} gutter={[14, 14]}>
@@ -339,7 +333,7 @@ export default function DashboardPage() {
           <Card title="🛒 Counter Performance — Today" bodyStyle={{ padding: 0 }} style={{ borderRadius: 8 }}
             extra={<Button type="link" size="small" onClick={() => navigate('/pos')}>Open POS →</Button>}>
             {(counterToday?.counterStats||[]).length === 0
-              ? <Alert message="No sales today. Open POS to start." type="info" showIcon style={{ margin: 12 }} />
+              ? <EmptyState icon={<ShoppingCartOutlined />} title="No sales today" hint="Open POS to start billing — today's counter performance will show here." actionLabel="Open POS" onAction={() => navigate('/pos')} compact />
               : <Table
             scroll={{ x: "max-content" }} size="small" dataSource={counterToday?.counterStats||[]} rowKey="counter" pagination={false}
                   columns={[
@@ -458,7 +452,7 @@ export default function DashboardPage() {
         <MetalRateDashboard />
       </div>
       <ClosingStockTodayWidget />
-      <SectionComponent />
+      {dailySalesLoading ? <SkeletonKPIRow /> : <SectionComponent />}
 
       <PageTour steps={tourSteps} />
     </div>
