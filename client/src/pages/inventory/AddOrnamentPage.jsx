@@ -59,20 +59,6 @@ export default function AddOrnamentPage() {
   const purityLookup = useF2Lookup();
   const metalTypeLookup = useF2Lookup();
 
-  // Prefill for edit
-  useEffect(() => {
-    if (editId) {
-      ornamentsApi.getById(editId).then((r) => {
-        form.setFieldsValue(r.data.data);
-      });
-    }
-  }, [editId]);
-
-  // Auto-fill gold rate
-  useEffect(() => {
-    if (!editId) form.setFieldValue('Current_Gold_Rate', goldRate);
-  }, [goldRate]);
-
   const recalculate = () => {
     const v = form.getFieldsValue();
     if (!v.Net_Gold_Weight || !v.Current_Gold_Rate || !v.Base_Making_Charge_Per_Gram) return;
@@ -86,6 +72,36 @@ export default function AddOrnamentPage() {
     });
     setPriceCalc(result);
   };
+
+  // Prefill for edit — form.setFieldsValue() is a PROGRAMMATIC update, which
+  // Ant Design deliberately does not route through onValuesChange (that only
+  // fires on real user input). Without the explicit recalculate() call here,
+  // the Price Calculator panel would keep showing its "fill in the fields"
+  // placeholder even though every field is actually populated from the
+  // fetched ornament, until the user happened to touch a field by hand.
+  useEffect(() => {
+    if (editId) {
+      ornamentsApi.getById(editId).then((r) => {
+        form.setFieldsValue(r.data.data);
+        recalculate();
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId]);
+
+  // Auto-fill gold rate — same programmatic-update gotcha as above: if the
+  // live gold rate loads AFTER the user has already typed weight and making
+  // charge, this field's value updates on screen but the calculator never
+  // re-runs to notice, since setFieldValue() doesn't trigger onValuesChange
+  // either. The explicit recalculate() call is what makes the calculator
+  // actually reflect the auto-filled rate instead of silently going stale.
+  useEffect(() => {
+    if (!editId) {
+      form.setFieldValue('Current_Gold_Rate', goldRate);
+      recalculate();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goldRate]);
 
   const saveMutation = useMutation({
     mutationFn: (data) => editId ? ornamentsApi.update(editId, data) : ornamentsApi.create(data),
