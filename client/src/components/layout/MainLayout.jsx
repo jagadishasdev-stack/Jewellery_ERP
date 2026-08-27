@@ -316,6 +316,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
       adminChildren.push({ key: '/admin/display', label: '🖥️ Display Settings' });
       adminChildren.push({ key: '/admin/policies', label: '📜 Policies' });
       adminChildren.push({ key: '/admin/printer-settings', label: '🖨️ Printer Settings' });
+      adminChildren.push({ key: '/admin/print-history', label: '🧾 Print History' });
       adminChildren.push({ key: '/admin/excel-import', label: '📊 Excel Bulk Import' });
       adminChildren.push({ key: '/admin/theme-settings', label: '🎨 Theme Settings' });
       // Every tenant now designs their own barcode tag here — moved out of

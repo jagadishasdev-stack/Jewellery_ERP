@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { Button, Typography } from 'antd';
+import { Button, Typography, message } from 'antd';
 import { PrinterOutlined } from '@ant-design/icons';
 import { formatCurrency } from '../utils/calculations';
 import { useAuthStore } from '../store/authStore';
@@ -15,7 +15,7 @@ const { Text } = Typography;
  * but is faster and more reliable to scan from an angle or at a distance.
  * Printing delegates to utils/thermalReceipt.js's printBarcodeLabel(), which
  * uses the tenant's saved Label Designer template and the shared
- * 'thermal_label' printer role (silent via QZ Tray if configured).
+ * 'barcode' printer role (silent via QZ Tray if configured).
  */
 export default function BarcodeLabel({ ornament, showPrint = true }) {
   const { user } = useAuthStore();
@@ -24,7 +24,9 @@ export default function BarcodeLabel({ ornament, showPrint = true }) {
   const containerRef = useRef(null);
 
   const handlePrint = () => {
-    printBarcodeLabel(ornament, user?.companyName);
+    printBarcodeLabel(ornament, user?.companyName).then((result) => {
+      if (!result?.success) message.warning('Label sent to the fallback print dialog — the configured barcode printer may be offline.');
+    });
   };
 
   if (!ornament) return null;

@@ -206,6 +206,13 @@ export const transferApi = {
 export const printerConfigApi = {
   get: (params) => api.get('/printer-config', { params }),
   save: (data) => api.put('/printer-config', data),
+  getRoles: () => api.get('/printer-config/roles'),
+};
+
+// ─── Print History (spec §23 — every real print attempt, incl. Test Print) ────
+export const printLogApi = {
+  record: (data) => api.post('/print-log', data),
+  getHistory: (params) => api.get('/print-log', { params }),
 };
 
 // ─── Invoice Studio (custom invoice/label template designer) ──────────────────

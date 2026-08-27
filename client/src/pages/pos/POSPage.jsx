@@ -35,6 +35,7 @@ import { useGoldRate } from '../../hooks/useGoldRate';
 import { formatCurrency, formatWeight, calculateOldGoldExchange } from '../../utils/calculations';
 import CustomerSearchModal from './CustomerSearchModal';
 import { printThermalReceipt } from '../../utils/thermalReceipt';
+import PrinterOverrideButton from '../../components/PrinterOverrideButton';
 import PageTour from '../../components/PageTour';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
 import dayjs from 'dayjs';
@@ -94,13 +95,17 @@ export default function POSPage() {
     queryFn: () => salesApi.list({ limit: 10 }).then((r) => r.data.data.items),
     enabled: recentBillsOpen,
   });
-  const reprintBill = async (saleId) => {
+  // printerNameOverride (spec §16) — set when the user picks a specific
+  // printer from the Recent Bills dropdown arrow instead of the plain
+  // reprint click; undefined means "use the configured Sales Bill default."
+  const reprintBill = async (saleId, printerNameOverride) => {
     setReprintingId(saleId);
     try {
       const res = await salesApi.getById(saleId);
       const { sale, items: saleItems } = res.data.data;
-      await printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo });
-      message.success('Reprinted.');
+      const printResult = await printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo }, printerNameOverride);
+      if (printResult?.success) message.success('Reprinted.');
+      else message.warning('Reprint sent to the fallback print dialog — the configured printer may be offline.');
     } catch {
       message.error('Failed to reprint this bill.');
     } finally {
@@ -379,7 +384,16 @@ export default function POSPage() {
       const { sale, items: saleItems } = res.data.data;
       message.success(`✅ Invoice ${sale.Invoice_Number} created!`);
       emitCheckoutComplete(sale);
-      printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo });
+      // Fire-and-forget by design (checkout must not block on printing) —
+      // but a failed print (spec §26) still needs to be distinct from "the
+      // sale itself failed," which it never is: the invoice above already
+      // saved successfully regardless of what happens here.
+      printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo })
+        .then((printResult) => {
+          if (!printResult?.success) {
+            message.warning(`Invoice ${sale.Invoice_Number} saved, but printing failed — check the printer and reprint from Recent Bills.`);
+          }
+        });
       clearCart();
       setPaymentSplits([{ mode: 'Cash', amount: 0, reference: '' }]);
       setOldGoldEntry({ weight: 0, purity: 91.67, meltDeduct: 2, rate: goldRate || 0, value: 0, applied: false, exchangeId: null, voucherNumber: null });
@@ -1080,8 +1094,9 @@ export default function POSPage() {
           renderItem={(bill) => (
             <List.Item
               actions={[
-                <Button key="reprint" type="text" size="small" icon={<PrinterOutlined />}
-                  loading={reprintingId === bill.Sale_ID} onClick={() => reprintBill(bill.Sale_ID)} />,
+                <PrinterOverrideButton key="reprint"
+                  loading={reprintingId === bill.Sale_ID}
+                  onPrint={(printerName) => reprintBill(bill.Sale_ID, printerName)} />,
               ]}
             >
               <List.Item.Meta

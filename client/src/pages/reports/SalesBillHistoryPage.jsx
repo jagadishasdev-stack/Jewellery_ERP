@@ -9,12 +9,13 @@ import {
   Card, Table, Input, DatePicker, Select, Space, Tag, Button, Typography,
   Drawer, Descriptions, Divider, message, Row, Col, Modal, Form, Radio, Alert,
 } from 'antd';
-import { SearchOutlined, EyeOutlined, PrinterOutlined, FileTextOutlined, StopOutlined, RollbackOutlined } from '@ant-design/icons';
+import { SearchOutlined, EyeOutlined, FileTextOutlined, StopOutlined, RollbackOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { salesApi, bankChequeApi } from '../../api/modules';
 import { useAuthStore } from '../../store/authStore';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { printThermalReceipt } from '../../utils/thermalReceipt';
+import PrinterOverrideButton from '../../components/PrinterOverrideButton';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
 
@@ -88,13 +89,14 @@ export default function SalesBillHistoryPage() {
     enabled: !!detailId,
   });
 
-  const reprint = async (saleId) => {
+  const reprint = async (saleId, printerNameOverride) => {
     setReprintingId(saleId);
     try {
       const res = await salesApi.getById(saleId);
       const { sale, items } = res.data.data;
-      await printThermalReceipt(sale, items, { Company_Name: user?.companyName, GST_No: user?.gstNo });
-      message.success('Reprinted.');
+      const printResult = await printThermalReceipt(sale, items, { Company_Name: user?.companyName, GST_No: user?.gstNo }, printerNameOverride);
+      if (printResult?.success) message.success('Reprinted.');
+      else message.warning('Reprint sent to the fallback print dialog — the configured printer may be offline.');
     } catch {
       message.error('Failed to reprint this bill.');
     } finally {
@@ -125,7 +127,7 @@ export default function SalesBillHistoryPage() {
       render: (_, r) => (
         <Space size={4}>
           <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => setDetailId(r.Sale_ID)} />
-          <Button type="text" size="small" icon={<PrinterOutlined />} loading={reprintingId === r.Sale_ID} onClick={() => reprint(r.Sale_ID)} />
+          <PrinterOverrideButton loading={reprintingId === r.Sale_ID} onPrint={(printerName) => reprint(r.Sale_ID, printerName)} />
           {['Pending', 'Partial'].includes(r.Payment_Status) && (
             <Button type="text" size="small" danger icon={<StopOutlined />} title="Cancel" onClick={() => setCancelModal(r)} />
           )}
@@ -187,7 +189,7 @@ export default function SalesBillHistoryPage() {
       <Drawer
         title={detail?.sale?.Invoice_Number || 'Bill Detail'}
         placement="right" width={520} open={!!detailId} onClose={() => setDetailId(null)} loading={detailLoading}
-        extra={detail && <Button icon={<PrinterOutlined />} onClick={() => reprint(detail.sale.Sale_ID)} loading={reprintingId === detail?.sale?.Sale_ID}>Reprint</Button>}
+        extra={detail && <PrinterOverrideButton label="Reprint" size="middle" loading={reprintingId === detail?.sale?.Sale_ID} onPrint={(printerName) => reprint(detail.sale.Sale_ID, printerName)} />}
       >
         {detail && (
           <>

@@ -1,12 +1,18 @@
 /**
  * printService — routes every print job in the app through QZ Tray (a small
  * free local bridge app: https://qz.io) when it's installed and running, so
- * jobs go silently to the printer assigned for that role (thermal_label,
- * thermal_receipt, or regular) with no OS print dialog and no manual picking.
+ * jobs go silently to the printer assigned for that document type (one of
+ * the 9 roles in PRINTER_ROLES below) with no OS print dialog and no manual
+ * picking. QZ Tray itself runs identically on macOS and Windows (it's a
+ * cross-platform Java bridge, not a browser API) — nothing here is
+ * OS-specific; `qz.printers.find()` just returns whatever's registered with
+ * the local OS's print system on either platform.
  *
  * If QZ Tray isn't installed/running, every call falls back to exactly the
  * app's original behavior — window.open() + document.write() + window.print()
- * — so nothing breaks for a shop that hasn't installed QZ Tray yet.
+ * — so nothing breaks for a shop that hasn't installed QZ Tray yet, and that
+ * fallback (the plain browser print dialog) also behaves identically on Mac
+ * and Windows since it's standard browser/OS printing, not custom code.
  *
  * QZ Tray runs unsigned/self-signed here (fine for an internal LAN tool): it
  * will show a one-time "unknown website" trust prompt in the tray icon the
@@ -15,10 +21,50 @@
  * this today.
  */
 import qz from 'qz-tray';
-import { printerConfigApi } from '../api/modules';
+import { printerConfigApi, printLogApi } from '../api/modules';
+
+// The 9 document-type roles from the Printer Setup spec (§1/§7) — must match
+// server/src/routes/printerConfig.js's ROLES exactly.
+export const PRINTER_ROLES = ['quotation', 'sales_bill', 'purchase_bill', 'barcode', 'receipt', 'credit_note', 'debit_note', 'reports', 'other'];
+
+/**
+ * Maps an Invoice Studio Document_Type (or any other doc-type string this
+ * app uses) to the printer role that should handle it. Anything not listed
+ * falls through to 'other' — a shop that hasn't configured a printer for
+ * every single niche document type still gets *a* printer, not nothing.
+ */
+const DOC_TYPE_TO_ROLE = {
+  // 'SALES' is Invoice Studio's canonical Document_Type (ALL_DOC_TYPES in
+  // routes/invoiceStudio.js); 'SALES_BILL' is a separate, older doc-type
+  // string the AI-analyze upload flow in InvoiceStudio.jsx still uses
+  // consistently for its own save+resolve — both map here so printing
+  // never falls through to 'other' just because two doc-type vocabularies
+  // exist in the codebase.
+  SALES: 'sales_bill', SALES_BILL: 'sales_bill', GST_INVOICE: 'sales_bill',
+  PURCHASE: 'purchase_bill', OLD_GOLD_PURCHASE: 'purchase_bill',
+  QUOTATION: 'quotation', ESTIMATE: 'quotation',
+  SALES_RETURN: 'credit_note',
+  PURCHASE_RETURN: 'debit_note',
+  BARCODE_LABEL: 'barcode',
+  REPAIR_RECEIPT: 'receipt', CUSTOMER_RECEIPT: 'receipt', CUSTOMER_PAYMENT: 'receipt', SCHEME_RECEIPT: 'receipt',
+  SCHEME_LEDGER: 'reports',
+};
+export const docTypeToPrinterRole = (docType) => DOC_TYPE_TO_ROLE[docType] || 'other';
 
 let connectPromise = null;
-let printerCache = null; // { thermal_label, thermal_receipt, regular } -> printer name
+// Keyed by branchId (or the literal string 'null' for "no branch context") —
+// was a single shared object before, which meant printing for Branch A then
+// later Branch B in the same session (without a printer-config save
+// happening in between, which is the only thing that used to invalidate it)
+// would silently keep reusing Branch A's printer names. Found via audit.
+const printerCacheByBranch = new Map();
+// Last known outcome per OS printer name — 'connected' after a successful
+// print/test, 'error' after a failed one, absent if never tried. Not a live
+// poll (QZ's printers.getStatus/callback API isn't used here — that's a
+// meaningfully bigger subscription-management piece) but enough to satisfy
+// "don't assume a printer works just because it was configured once."
+const printerStatus = new Map();
+export const getPrinterStatus = (printerName) => printerStatus.get(printerName) || 'unknown';
 
 // QZ Tray requires a certificate/signature promise pair even in unsigned mode.
 qz.security.setCertificatePromise((resolve) => resolve());
@@ -57,23 +103,22 @@ export const listPrinters = async () => {
 };
 
 const fetchConfiguredPrinters = async (branchId) => {
-  if (printerCache) return printerCache;
+  const cacheKey = branchId || 'null';
+  if (printerCacheByBranch.has(cacheKey)) return printerCacheByBranch.get(cacheKey);
+  let byRoleNames;
   try {
     const res = await printerConfigApi.get(branchId ? { branchId } : {});
     const byRole = res.data?.data || {};
-    printerCache = {
-      thermal_label: byRole.thermal_label?.Printer_Name || null,
-      thermal_receipt: byRole.thermal_receipt?.Printer_Name || null,
-      regular: byRole.regular?.Printer_Name || null,
-    };
+    byRoleNames = Object.fromEntries(PRINTER_ROLES.map((r) => [r, byRole[r]?.Printer_Name || null]));
   } catch {
-    printerCache = { thermal_label: null, thermal_receipt: null, regular: null };
+    byRoleNames = Object.fromEntries(PRINTER_ROLES.map((r) => [r, null]));
   }
-  return printerCache;
+  printerCacheByBranch.set(cacheKey, byRoleNames);
+  return byRoleNames;
 };
 
 /** Call after saving printer config so the next print picks up the new choice. */
-export const invalidatePrinterCache = () => { printerCache = null; };
+export const invalidatePrinterCache = () => { printerCacheByBranch.clear(); };
 
 /**
  * Opens a blank print window right now, synchronously. Use this from a click
@@ -108,6 +153,15 @@ const fallbackPrint = (html, windowSize) => writeAndPrint(openPrintWindow(window
  */
 export const initPrintService = () => { connectQZ(); };
 
+// Best-effort — a flaky log write must never be treated as the print itself
+// having failed, so this never throws into the caller.
+const logPrintAttempt = ({ role, docType, docNumber, printerName, status, error, branchId }) => {
+  printLogApi.record({
+    printerRole: role, documentType: docType || null, documentNumber: docNumber || null,
+    printerName, status, errorMessage: error, branchId,
+  }).catch(() => {});
+};
+
 /**
  * Prints a fully-formed HTML document (the same string every print call in
  * this app already builds) to the printer assigned to `role` — silently via
@@ -115,16 +169,31 @@ export const initPrintService = () => { connectQZ(); };
  * Synchronous up front (see initPrintService's note on popup blockers) — call
  * this directly from a click handler, don't await a prior async step first.
  *
- * @param {'thermal_label'|'thermal_receipt'|'regular'} role
+ * Returns a Promise the caller MAY await to react to failure (spec §26 —
+ * "invoice saved, but printing failed" should be a distinct, visible
+ * message, not silence) — but doesn't have to; a fire-and-forget call
+ * behaves exactly as before.
+ *
+ * @param {typeof PRINTER_ROLES[number]} role
  * @param {string} html - complete <html>...</html> document string
- * @param {{ branchId?: string, windowSize?: string }} [options]
+ * @param {{ branchId?: string, windowSize?: string, docType?: string, docNumber?: string, printerNameOverride?: string }} [options]
+ *   printerNameOverride (§16 manual/temporary override) — send THIS print
+ *   job to a specific OS printer without touching the saved default.
+ * @returns {Promise<{ success: boolean, usedFallback: boolean, printerName?: string, error?: string }>}
  */
 export const printHTML = (role, html, options = {}) => {
+  if (options.printerNameOverride) {
+    if (!isConnected()) {
+      fallbackPrint(html, options.windowSize);
+      return Promise.resolve({ success: false, usedFallback: true, error: 'QZ Tray is not connected — cannot reach a specific printer.' });
+    }
+    return printToNamedPrinter(options.printerNameOverride, html, options, { role, docType: options.docType, docNumber: options.docNumber });
+  }
   if (!isConnected()) {
     fallbackPrint(html, options.windowSize);
-    return;
+    return Promise.resolve({ success: true, usedFallback: true });
   }
-  printViaQZ(role, html, options);
+  return printViaQZ(role, html, options);
 };
 
 const printViaQZ = async (role, html, options) => {
@@ -134,13 +203,57 @@ const printViaQZ = async (role, html, options) => {
     // QZ is running but no printer has been assigned to this role yet — the
     // window wasn't pre-opened in this branch, so open fresh for the dialog.
     fallbackPrint(html, options.windowSize);
-    return;
+    return { success: true, usedFallback: true };
   }
+  return printToNamedPrinter(printerName, html, options, { role, docType: options.docType, docNumber: options.docNumber });
+};
+
+const printToNamedPrinter = async (printerName, html, options, logMeta) => {
   try {
     const config = qz.configs.create(printerName);
     await qz.print(config, [{ type: 'pixel', format: 'html', flavor: 'plain', data: html }]);
+    printerStatus.set(printerName, 'connected');
+    logPrintAttempt({ ...logMeta, printerName, status: 'Success', branchId: options.branchId });
+    return { success: true, usedFallback: false, printerName };
   } catch (err) {
     console.error('QZ print failed, falling back to browser print dialog:', err);
+    printerStatus.set(printerName, 'error');
+    logPrintAttempt({ ...logMeta, printerName, status: 'Failed', error: err?.message || String(err), branchId: options.branchId });
     fallbackPrint(html, options.windowSize);
+    return { success: false, usedFallback: true, printerName, error: err?.message || String(err) };
+  }
+};
+
+/**
+ * Test Print (spec §13) — sends a small, throwaway test document directly to
+ * `printerName` (bypassing role/config resolution — this tests one specific
+ * OS printer, whatever role it's assigned to, or none yet), and reports back
+ * exactly what the spec asks for: a clear success/failure outcome, not a
+ * silent fallback. Also updates getPrinterStatus() and writes a Print
+ * History row (Document_Type 'Test Print', no document number) so a test
+ * print is auditable the same way a real one is.
+ *
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+export const testPrint = async (printerName, role = 'other') => {
+  const connected = await connectQZ();
+  if (!connected) return { success: false, error: 'QZ Tray is not connected — install/start it, then try again.' };
+  const testHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:sans-serif;padding:20px;">
+    <h3>Jewellery ERP — Test Print</h3>
+    <p>Printer: ${printerName}</p>
+    <p>${new Date().toLocaleString()}</p>
+    <p>If you can read this, the printer is connected and working.</p>
+  </body></html>`;
+  try {
+    const config = qz.configs.create(printerName);
+    await qz.print(config, [{ type: 'pixel', format: 'html', flavor: 'plain', data: testHtml }]);
+    printerStatus.set(printerName, 'connected');
+    logPrintAttempt({ role, docType: 'Test Print', printerName, status: 'Success' });
+    return { success: true };
+  } catch (err) {
+    printerStatus.set(printerName, 'error');
+    const message = err?.message || String(err);
+    logPrintAttempt({ role, docType: 'Test Print', printerName, status: 'Failed', error: message });
+    return { success: false, error: message };
   }
 };

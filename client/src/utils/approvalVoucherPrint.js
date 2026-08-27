@@ -1,8 +1,9 @@
 /**
  * Plain on-screen voucher print for Approval Issue/Receive (tagged + non-tag).
- * Phase-1 stopgap — routed through the same 'regular' printer role as other
- * A4 documents (silent via QZ Tray if configured, browser print dialog
- * otherwise). No Invoice Studio template involved yet.
+ * Phase-1 stopgap — routed through the 'other' printer role (the spec's
+ * catch-all for documents with no more specific role of their own; silent
+ * via QZ Tray if configured, browser print dialog otherwise). No Invoice
+ * Studio template involved yet.
  */
 import { printHTML } from './printService';
 import { formatCurrency, formatWeight } from './calculations';
@@ -66,7 +67,7 @@ export const printTaggedIssueVoucher = (issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('regular', voucherShell('Approval Issue', issue.Voucher_Number, body));
+  printHTML('other', voucherShell('Approval Issue', issue.Voucher_Number, body), { docType: 'Approval Issue', docNumber: issue.Voucher_Number });
 };
 
 export const printTaggedReceiveVoucher = (receive, issue, items) => {
@@ -86,7 +87,7 @@ export const printTaggedReceiveVoucher = (receive, issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('regular', voucherShell('Approval Receive', receive.Voucher_Number, body));
+  printHTML('other', voucherShell('Approval Receive', receive.Voucher_Number, body), { docType: 'Approval Receive', docNumber: receive.Voucher_Number });
 };
 
 export const printNonTagIssueVoucher = (issue, items) => {
@@ -107,7 +108,7 @@ export const printNonTagIssueVoucher = (issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('regular', voucherShell('Non-Tagged Approval Issue', issue.Voucher_Number, body));
+  printHTML('other', voucherShell('Non-Tagged Approval Issue', issue.Voucher_Number, body), { docType: 'Non-Tagged Approval Issue', docNumber: issue.Voucher_Number });
 };
 
 export const printNonTagReceiveVoucher = (receive, issue, items) => {
@@ -127,5 +128,5 @@ export const printNonTagReceiveVoucher = (receive, issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('regular', voucherShell('Non-Tagged Approval Receive', receive.Voucher_Number, body));
+  printHTML('other', voucherShell('Non-Tagged Approval Receive', receive.Voucher_Number, body), { docType: 'Non-Tagged Approval Receive', docNumber: receive.Voucher_Number });
 };

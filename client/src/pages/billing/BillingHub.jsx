@@ -135,8 +135,11 @@ export default function BillingHub() {
       customer_name: values.customer_name || 'Walk-in', customer_mobile: values.mobile,
       items: studioItems, net_payable: values.total_estimate,
     };
-    if (await printFromInvoiceStudio('ESTIMATE', studioData)) {
-      setActiveModal(null); form.resetFields(); message.success('Estimate printed!');
+    const studioAttempt = await printFromInvoiceStudio('ESTIMATE', studioData, estimateNo);
+    if (studioAttempt.printed) {
+      setActiveModal(null); form.resetFields();
+      if (studioAttempt.result?.success) message.success('Estimate printed!');
+      else message.warning('Estimate saved, but printing failed — check the printer and reprint from here if needed.');
       return;
     }
 
@@ -166,10 +169,11 @@ export default function BillingHub() {
       * Valid for: ${values.valid_days || 7} days from today (${dayjs().add(values.valid_days||7,'day').format('DD-MMM-YYYY')})</p>
       <div class="footer">Thank you for visiting us! 💎</div>
     </body></html>`;
-    printHTML('regular', html, { windowSize: 'width=700,height=600' });
+    const printResult = await printHTML('quotation', html, { windowSize: 'width=700,height=600', docType: 'Quotation', docNumber: estimateNo });
     setActiveModal(null);
     form.resetFields();
-    message.success('Estimate printed!');
+    if (printResult.success) message.success('Estimate printed!');
+    else message.warning('Estimate saved, but printing failed — check the printer and reprint from here if needed.');
   };
 
   // ── Order Booking ────────────────────────────────────────────────────────
@@ -216,8 +220,10 @@ export default function BillingHub() {
       net_payable: values.estimated_total, amount_paid: values.advance_amount, balance,
       payment_mode: values.advance_mode || 'Cash',
     };
-    if (await printFromInvoiceStudio('ORDER_BOOKING', studioData)) {
-      message.success('Order card printed!');
+    const studioAttempt = await printFromInvoiceStudio('ORDER_BOOKING', studioData, orderNo);
+    if (studioAttempt.printed) {
+      if (studioAttempt.result?.success) message.success('Order card printed!');
+      else message.warning('Order saved, but printing failed — check the printer and reprint if needed.');
       return;
     }
 
@@ -242,8 +248,9 @@ export default function BillingHub() {
       <div class="line"></div>
       <div class="footer">Customer Signature: _______________</div>
     </body></html>`;
-    printHTML('regular', html, { windowSize: 'width=600,height=500' });
-    message.success('Order card printed!');
+    const printResult = await printHTML('other', html, { windowSize: 'width=600,height=500', docType: 'Order Booking', docNumber: orderNo });
+    if (printResult.success) message.success('Order card printed!');
+    else message.warning('Order saved, but printing failed — check the printer and reprint if needed.');
   };
 
   return (

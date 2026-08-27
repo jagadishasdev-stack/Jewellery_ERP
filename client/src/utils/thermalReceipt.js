@@ -1,5 +1,5 @@
 import { formatCurrency, formatWeight } from './calculations';
-import { printHTML, isQZConnected, openPrintWindow, writeAndPrint } from './printService';
+import { printHTML, isQZConnected, openPrintWindow, writeAndPrint, docTypeToPrinterRole } from './printService';
 import { buildDefaultLabelBlocks, buildLabelPrintDocument, resolveQrDataUrls } from './labelRenderer';
 import { PAPER_SIZES, buildInvoicePrintDocument, resolveInvoiceQrDataUrls } from './invoiceRenderer';
 import { invoiceStudioApi } from '../api/modules';
@@ -8,11 +8,28 @@ import dayjs from 'dayjs';
 /**
  * Resolves the tenant's active Invoice Studio template for `docType` (e.g.
  * 'SALES_BILL', 'ESTIMATE', 'ORDER_BOOKING') and, if one exists, prints
- * `data` through it via invoiceRenderer.js. Returns true if it printed
- * (caller should skip its own hardcoded fallback), false if no template is
- * set up for this tenant/document type yet (caller should fall back).
+ * `data` through it via invoiceRenderer.js.
+ *
+ * Returns { printed, result }:
+ *   - printed: whether a template exists and was used at all — this is
+ *     what callers check to decide "skip my own hardcoded fallback layout"
+ *     vs "no template designed yet, build the fallback." It does NOT mean
+ *     the print job itself succeeded — printed=true, result.success=false
+ *     is a real, distinct case (template existed, QZ send failed).
+ *   - result: printHTML()'s own { success, usedFallback, error? }, or null
+ *     when printed=false (nothing was ever sent to print).
+ *
+ * The printer ROLE is derived from `docType` (docTypeToPrinterRole) — a
+ * Quotation always goes to the Quotation printer, a Sales Bill always to
+ * the Sales Bill printer, regardless of what paper size that document
+ * happens to be designed for. Paper size (A4 vs 80mm/58mm thermal) only
+ * decides the print WINDOW/layout dimensions used when QZ Tray isn't
+ * connected and the browser dialog opens instead — it used to also pick
+ * the printer role, which meant every A4-formatted document (quotations,
+ * purchase bills, credit notes...) collapsed onto one shared 'regular'
+ * printer no matter its actual document type.
  */
-export const printFromInvoiceStudio = async (docType, data) => {
+export const printFromInvoiceStudio = async (docType, data, docNumber, printerNameOverride) => {
   let blocks = null, paperKey = 'A4';
   try {
     const res = await invoiceStudioApi.resolve(docType);
@@ -25,31 +42,40 @@ export const printFromInvoiceStudio = async (docType, data) => {
   } catch {
     // No active template for this tenant/document type — caller falls back.
   }
-  if (!blocks) return false;
+  if (!blocks) return { printed: false, result: null };
 
   const paper = PAPER_SIZES[paperKey] || PAPER_SIZES.A4;
-  const role = paperKey === 'THERMAL_80' || paperKey === 'THERMAL_58' ? 'thermal_receipt' : 'regular';
+  const role = docTypeToPrinterRole(docType);
   const connected = isQZConnected();
   const printWindow = connected ? null : openPrintWindow('width=500,height=700');
 
   const qrDataUrls = await resolveInvoiceQrDataUrls(blocks, data);
   const html = buildInvoicePrintDocument(blocks, paper.w, paper.h, data, qrDataUrls);
 
-  if (connected) printHTML(role, html);
-  else writeAndPrint(printWindow, html);
-  return true;
+  if (connected) {
+    const result = await printHTML(role, html, { docType, docNumber, printerNameOverride });
+    return { printed: true, result };
+  }
+  writeAndPrint(printWindow, html);
+  return { printed: true, result: { success: true, usedFallback: true } };
 };
 
 /**
  * Generates and prints a thermal receipt (80mm) for a sale — routed through
- * the 'thermal_receipt' printer role (silent via QZ Tray if configured, or
- * the standard print dialog otherwise).
+ * the 'receipt' printer role (silent via QZ Tray if configured, or the
+ * standard print dialog otherwise).
  *
  * If the tenant has an active Invoice Studio template for SALES_BILL, that
  * design is used instead (with real sale data) — this hardcoded plain-text
  * layout only runs as the fallback for tenants who haven't designed one yet.
+ *
+ * Returns { success, usedFallback, error? } (spec §26) — the sale itself is
+ * already saved by the time this is called; a failed print here must never
+ * be confused with a failed sale. Callers that care (POS, reprint) should
+ * await this and show a distinct "saved, but printing failed" message
+ * rather than assuming print always succeeds.
  */
-export const printThermalReceipt = async (sale, items, tenant) => {
+export const printThermalReceipt = async (sale, items, tenant, printerNameOverride) => {
   const studioData = {
     shop_name: tenant?.Company_Name, shop_address: tenant?.Address, shop_city: tenant?.City,
     shop_phone: tenant?.Phone, shop_gst: tenant?.GST_No,
@@ -69,7 +95,8 @@ export const printThermalReceipt = async (sale, items, tenant) => {
     payment_mode: sale.Payment_Mode, payment_ref: sale.Payment_Reference,
     amount_paid: sale.Amount_Paid, balance: sale.Balance_Amount,
   };
-  if (await printFromInvoiceStudio('SALES_BILL', studioData)) return;
+  const studioAttempt = await printFromInvoiceStudio('SALES_BILL', studioData, sale.Invoice_Number, printerNameOverride);
+  if (studioAttempt.printed) return studioAttempt.result;
 
   const MAX_CHARS = 48;
   const divider = '-'.repeat(MAX_CHARS);
@@ -175,7 +202,7 @@ export const printThermalReceipt = async (sale, items, tenant) => {
     <body>${lines.join('\n')}</body>
     </html>
   `;
-  await printHTML('thermal_receipt', html, { windowSize: 'width=400,height=600' });
+  return printHTML('receipt', html, { windowSize: 'width=400,height=600', docType: 'Sales Bill', docNumber: sale.Invoice_Number, printerNameOverride });
 };
 
 // Fallback layout used only if the tenant hasn't designed/saved a label in
@@ -186,12 +213,16 @@ const DEFAULT_LABEL_HEIGHT_MM = 40;
 /**
  * Prints a barcode/RFID label for an ornament, using the tenant's saved
  * Label Designer template (falls back to a built-in default layout if none
- * has been saved yet) — routed through the 'thermal_label' printer role
+ * has been saved yet) — routed through the 'barcode' printer role
  * (silent via QZ Tray if configured, or the standard print dialog otherwise).
  * The QR encodes the Article_Number — scans into the same barcode/search
  * fields a CODE128 barcode would, just faster and more scan-tolerant.
+ *
+ * Returns { success, usedFallback, error? } (spec §26), same contract as
+ * printThermalReceipt — a failed label print never means the ornament
+ * itself wasn't saved.
  */
-export const printBarcodeLabel = async (ornament, shopName) => {
+export const printBarcodeLabel = async (ornament, shopName, printerNameOverride) => {
   // If QZ Tray isn't connected, open the window synchronously now — same
   // tick as the click — so popup blockers don't treat the later async
   // template/QR work as an untrusted, non-gesture action. If QZ IS
@@ -218,6 +249,7 @@ export const printBarcodeLabel = async (ornament, shopName) => {
   const qrDataUrls = await resolveQrDataUrls(blocks, data);
   const html = buildLabelPrintDocument(blocks, widthMm, heightMm, data, qrDataUrls);
 
-  if (connected) printHTML('thermal_label', html);
-  else writeAndPrint(printWindow, html);
+  if (connected) return printHTML('barcode', html, { docType: 'Barcode', docNumber: ornament?.Article_Number, printerNameOverride });
+  writeAndPrint(printWindow, html);
+  return { success: true, usedFallback: true };
 };

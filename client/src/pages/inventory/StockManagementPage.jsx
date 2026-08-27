@@ -458,7 +458,9 @@ export default function StockManagementPage() {
     setBarcodeSearch('');
   };
 
-  const printLabel = (ornament) => printBarcodeLabel(ornament, user?.companyName);
+  const printLabel = (ornament) => printBarcodeLabel(ornament, user?.companyName).then((result) => {
+    if (!result?.success) message.warning('Label sent to the fallback print dialog — the configured barcode printer may be offline.');
+  });
 
   const exportCSV = () => {
     const items = inventoryData?.items || [];

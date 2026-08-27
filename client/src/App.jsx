@@ -55,6 +55,7 @@ import FloorsPage from './pages/floors/FloorsPage';
 import HiddenStockPage from './pages/floors/HiddenStockPage';
 import SpecialStockPage from './pages/inventory/SpecialStockPage';
 import PrinterSettingsPage from './pages/admin/PrinterSettingsPage';
+import PrintHistoryPage from './pages/admin/PrintHistoryPage';
 import ThemeSettingsPage from './pages/admin/ThemeSettingsPage';
 import LabelDesignerPage from './pages/admin/LabelDesignerPage';
 import TransferPage from './pages/transfer/TransferPage';
@@ -198,6 +199,7 @@ function App() {
         <Route path="/admin/policies" element={<ProtectedRoute permission="tenant_management"><PoliciesPage /></ProtectedRoute>} />
         <Route path="/admin/excel-import" element={<ProtectedRoute permission="tenant_management"><ExcelImportPage /></ProtectedRoute>} />
         <Route path="/admin/printer-settings" element={<ProtectedRoute permission="tenant_management"><PrinterSettingsPage /></ProtectedRoute>} />
+        <Route path="/admin/print-history" element={<ProtectedRoute permission="tenant_management"><PrintHistoryPage /></ProtectedRoute>} />
         <Route path="/admin/theme-settings" element={<ProtectedRoute permission="tenant_management"><ThemeSettingsPage /></ProtectedRoute>} />
         {/* tenant_management, not global_master — every tenant admin designs their own tag now, not just Super Admin (who has both permissions anyway) */}
         <Route path="/admin/label-designer" element={<ProtectedRoute permission="tenant_management"><LabelDesignerPage /></ProtectedRoute>} />
