@@ -295,7 +295,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
 
   if (permissions.edit_invoice_template && isEnabled('invoice_studio')) {
     items.push({ key: '/invoice/studio', icon: <FileTextOutlined />, label: '💎 Invoice Studio' });
-    items.push({ key: '/invoice/template', icon: <FileTextOutlined />, label: 'Quick Template' });
+    items.push({ key: '/invoice/template', icon: <FileTextOutlined />, label: 'Quick Template (legacy)' });
   }
 
   if (permissions.global_master || permissions.tenant_management) {

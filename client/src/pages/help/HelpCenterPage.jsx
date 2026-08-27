@@ -105,7 +105,7 @@ const GROUPS = [
     icon: <FileTextOutlined style={{ color: '#B8860B' }} />,
     items: [
       { title: 'Invoice Studio', desc: 'Drag-and-drop designer for your printed invoice layout.', path: '/invoice/studio' },
-      { title: 'Quick Template', desc: 'Simpler, faster invoice template editor.', path: '/invoice/template' },
+      { title: 'Quick Template (legacy)', desc: 'Older editor — not used by real printing. Use Invoice Studio above instead.', path: '/invoice/template' },
     ],
   },
   {

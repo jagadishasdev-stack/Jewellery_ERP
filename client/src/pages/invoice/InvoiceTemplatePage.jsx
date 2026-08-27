@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Row, Col, Card, Form, Input, Select, Switch, Button,
-  Typography, Space, Divider, message, Tabs,
+  Typography, Space, Divider, message, Tabs, Alert,
 } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { invoiceApi } from '../../api/modules';
 import PageTour from '../../components/PageTour';
@@ -21,6 +22,7 @@ const DOC_TYPES = [
 ];
 
 export default function InvoiceTemplatePage() {
+  const navigate = useNavigate();
   const [form] = Form.useForm();
   const [docType, setDocType] = useState('SALES');
 
@@ -79,6 +81,25 @@ export default function InvoiceTemplatePage() {
 
   return (
     <div className="page-wrapper">
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="This editor doesn't print real bills"
+        description={
+          <>
+            Templates saved here are stored separately and are not used when a Sales Bill, Estimate, or any other
+            document actually prints — that's controlled by <b>Invoice Studio</b>, which supports every document
+            type, drag-and-drop layout, and is what real printing reads from. Use Invoice Studio to design the
+            template that customers actually see.
+          </>
+        }
+        action={
+          <Button size="small" type="primary" style={{ background: '#B8860B', borderColor: '#B8860B' }} onClick={() => navigate('/invoice/studio')}>
+            Open Invoice Studio
+          </Button>
+        }
+      />
       <div className="page-header">
         <Title level={4} style={{ margin: 0 }}>Invoice Template Designer</Title>
         <Space>

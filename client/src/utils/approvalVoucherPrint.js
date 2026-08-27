@@ -1,11 +1,16 @@
 /**
- * Plain on-screen voucher print for Approval Issue/Receive (tagged + non-tag).
- * Phase-1 stopgap — routed through the 'other' printer role (the spec's
- * catch-all for documents with no more specific role of their own; silent
- * via QZ Tray if configured, browser print dialog otherwise). No Invoice
- * Studio template involved yet.
+ * Approval Issue/Receive (tagged + non-tag) voucher printing.
+ *
+ * If the tenant has designed an Invoice Studio template for APPROVAL_ISSUE
+ * or APPROVAL_RECEIVE, that design is used (with real voucher data) —
+ * voucherShell()'s plain layout below only runs as the fallback for
+ * tenants who haven't designed one yet, same pattern as printThermalReceipt
+ * for Sales Bill. Routed through the 'other' printer role for the fallback
+ * (the spec's catch-all for documents with no more specific role of their
+ * own — silent via QZ Tray if configured, browser print dialog otherwise).
  */
 import { printHTML } from './printService';
+import { printFromInvoiceStudio } from './thermalReceipt';
 import { formatCurrency, formatWeight } from './calculations';
 import dayjs from 'dayjs';
 
@@ -49,7 +54,17 @@ const signatureBlock = () => `
     <div class="sig-box">Received By / Party Signature</div>
   </div>`;
 
-export const printTaggedIssueVoucher = (issue, items) => {
+// Shared studioData shape for all 4 voucher kinds — tagged items carry
+// Article_Number/Purity_Code, non-tag items carry Item_Type/Design_Type
+// instead; both share weight/value, so both are included and a template
+// designer just uses whichever fields apply to the kind they're designing.
+const buildStudioItems = (items) => items.map((i) => ({
+  article_number: i.Article_Number, item_type: i.Item_Type,
+  purity: i.Purity_Code, design_type: i.Design_Type,
+  gross_weight: i.Gross_Weight, value: i.Approx_Value,
+}));
+
+export const printTaggedIssueVoucher = async (issue, items) => {
   const rows = items.map(i => `
     <tr>
       <td>${i.Article_Number}</td>
@@ -59,6 +74,16 @@ export const printTaggedIssueVoucher = (issue, items) => {
     </tr>`).join('');
   const totalWeight = items.reduce((s, i) => s + parseFloat(i.Gross_Weight || 0), 0);
   const totalValue = items.reduce((s, i) => s + parseFloat(i.Approx_Value || 0), 0);
+
+  const studioData = {
+    voucher_number: issue.Voucher_Number, party_name: issue.Party_Name || 'Walk-in / Unregistered',
+    shop_name: issue.Shop_Name, party_mobile: issue.Party_Mobile,
+    issue_date: fmtDate(issue.Issue_Date), expected_return_date: fmtDate(issue.Expected_Return_Date),
+    items: buildStudioItems(items), total_weight: totalWeight, total_value: totalValue,
+  };
+  const studioAttempt = await printFromInvoiceStudio('APPROVAL_ISSUE', studioData, issue.Voucher_Number);
+  if (studioAttempt.printed) return studioAttempt.result;
+
   const body = `
     ${metaBlock('Party', `${issue.Party_Name || 'Walk-in / Unregistered'}${issue.Shop_Name ? ` — ${issue.Shop_Name}` : ''}${issue.Party_Mobile ? `<br/>${issue.Party_Mobile}` : ''}`,
       'Issue Date', `${fmtDate(issue.Issue_Date)}${issue.Expected_Return_Date ? `<br/>Expected Return: ${fmtDate(issue.Expected_Return_Date)}` : ''}`)}
@@ -67,10 +92,10 @@ export const printTaggedIssueVoucher = (issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('other', voucherShell('Approval Issue', issue.Voucher_Number, body), { docType: 'Approval Issue', docNumber: issue.Voucher_Number });
+  return printHTML('other', voucherShell('Approval Issue', issue.Voucher_Number, body), { docType: 'Approval Issue', docNumber: issue.Voucher_Number });
 };
 
-export const printTaggedReceiveVoucher = (receive, issue, items) => {
+export const printTaggedReceiveVoucher = async (receive, issue, items) => {
   const rows = items.map(i => `
     <tr>
       <td>${i.Article_Number}</td>
@@ -80,6 +105,15 @@ export const printTaggedReceiveVoucher = (receive, issue, items) => {
     </tr>`).join('');
   const totalWeight = items.reduce((s, i) => s + parseFloat(i.Gross_Weight || 0), 0);
   const totalValue = items.reduce((s, i) => s + parseFloat(i.Approx_Value || 0), 0);
+
+  const studioData = {
+    voucher_number: receive.Voucher_Number, against_issue_voucher: issue?.Voucher_Number || '—',
+    receive_date: fmtDate(receive.Receive_Date),
+    items: buildStudioItems(items), total_weight: totalWeight, total_value: totalValue,
+  };
+  const studioAttempt = await printFromInvoiceStudio('APPROVAL_RECEIVE', studioData, receive.Voucher_Number);
+  if (studioAttempt.printed) return studioAttempt.result;
+
   const body = `
     ${metaBlock('Against Issue Voucher', issue?.Voucher_Number || '—', 'Receive Date', fmtDate(receive.Receive_Date))}
     <table><thead><tr><th>Article No</th><th>Purity</th><th>Gross Wt</th><th>Value</th></tr></thead>
@@ -87,10 +121,10 @@ export const printTaggedReceiveVoucher = (receive, issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('other', voucherShell('Approval Receive', receive.Voucher_Number, body), { docType: 'Approval Receive', docNumber: receive.Voucher_Number });
+  return printHTML('other', voucherShell('Approval Receive', receive.Voucher_Number, body), { docType: 'Approval Receive', docNumber: receive.Voucher_Number });
 };
 
-export const printNonTagIssueVoucher = (issue, items) => {
+export const printNonTagIssueVoucher = async (issue, items) => {
   const rows = items.map(i => `
     <tr>
       <td>${i.Item_Type}</td>
@@ -100,6 +134,16 @@ export const printNonTagIssueVoucher = (issue, items) => {
     </tr>`).join('');
   const totalWeight = items.reduce((s, i) => s + parseFloat(i.Gross_Weight || 0), 0);
   const totalValue = items.reduce((s, i) => s + parseFloat(i.Approx_Value || 0), 0);
+
+  const studioData = {
+    voucher_number: issue.Voucher_Number, party_name: issue.Party_Name || 'Walk-in / Unregistered',
+    shop_name: issue.Shop_Name, party_mobile: issue.Party_Mobile,
+    issue_date: fmtDate(issue.Issue_Date), expected_return_date: fmtDate(issue.Expected_Return_Date),
+    items: buildStudioItems(items), total_weight: totalWeight, total_value: totalValue,
+  };
+  const studioAttempt = await printFromInvoiceStudio('APPROVAL_ISSUE', studioData, issue.Voucher_Number);
+  if (studioAttempt.printed) return studioAttempt.result;
+
   const body = `
     ${metaBlock('Party', `${issue.Party_Name || 'Walk-in / Unregistered'}${issue.Shop_Name ? ` — ${issue.Shop_Name}` : ''}${issue.Party_Mobile ? `<br/>${issue.Party_Mobile}` : ''}`,
       'Issue Date', `${fmtDate(issue.Issue_Date)}${issue.Expected_Return_Date ? `<br/>Expected Return: ${fmtDate(issue.Expected_Return_Date)}` : ''}`)}
@@ -108,10 +152,10 @@ export const printNonTagIssueVoucher = (issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('other', voucherShell('Non-Tagged Approval Issue', issue.Voucher_Number, body), { docType: 'Non-Tagged Approval Issue', docNumber: issue.Voucher_Number });
+  return printHTML('other', voucherShell('Non-Tagged Approval Issue', issue.Voucher_Number, body), { docType: 'Non-Tagged Approval Issue', docNumber: issue.Voucher_Number });
 };
 
-export const printNonTagReceiveVoucher = (receive, issue, items) => {
+export const printNonTagReceiveVoucher = async (receive, issue, items) => {
   const rows = items.map(i => `
     <tr>
       <td>${i.Item_Type}</td>
@@ -121,6 +165,15 @@ export const printNonTagReceiveVoucher = (receive, issue, items) => {
     </tr>`).join('');
   const totalWeight = items.reduce((s, i) => s + parseFloat(i.Gross_Weight || 0), 0);
   const totalValue = items.reduce((s, i) => s + parseFloat(i.Approx_Value || 0), 0);
+
+  const studioData = {
+    voucher_number: receive.Voucher_Number, against_issue_voucher: issue?.Voucher_Number || '—',
+    receive_date: fmtDate(receive.Receive_Date),
+    items: buildStudioItems(items), total_weight: totalWeight, total_value: totalValue,
+  };
+  const studioAttempt = await printFromInvoiceStudio('APPROVAL_RECEIVE', studioData, receive.Voucher_Number);
+  if (studioAttempt.printed) return studioAttempt.result;
+
   const body = `
     ${metaBlock('Against Issue Voucher', issue?.Voucher_Number || '—', 'Receive Date', fmtDate(receive.Receive_Date))}
     <table><thead><tr><th>Item Type</th><th>Design</th><th>Gross Wt</th><th>Value</th></tr></thead>
@@ -128,5 +181,5 @@ export const printNonTagReceiveVoucher = (receive, issue, items) => {
       <tfoot><tr><td colspan="2">Total (${items.length} items)</td><td>${formatWeight(totalWeight)}</td><td>${formatCurrency(totalValue)}</td></tr></tfoot>
     </table>
     ${signatureBlock()}`;
-  printHTML('other', voucherShell('Non-Tagged Approval Receive', receive.Voucher_Number, body), { docType: 'Non-Tagged Approval Receive', docNumber: receive.Voucher_Number });
+  return printHTML('other', voucherShell('Non-Tagged Approval Receive', receive.Voucher_Number, body), { docType: 'Non-Tagged Approval Receive', docNumber: receive.Voucher_Number });
 };

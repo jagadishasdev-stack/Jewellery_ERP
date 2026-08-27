@@ -17,6 +17,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchaseApi, karigarApi, masterApi, dayCloseApi, savingsApi, customersApi, customerAdvanceApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
+import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
 import { useGoldRate } from '../../hooks/useGoldRate';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
@@ -82,6 +83,22 @@ const printBill = (title, rows, footer = '') => {
   </body></html>`);
   win.document.close();
   setTimeout(() => { win.print(); win.close(); }, 400);
+};
+
+// If the tenant has designed an Invoice Studio template for `docType`,
+// that design is used (with real transaction data) instead of the
+// hardcoded printBill() layout above — same fallback pattern as
+// printThermalReceipt for Sales Bill. `docType` may be null (no Invoice
+// Studio doc type applies yet, e.g. Advance Adjustment's payout receipt)
+// — in that case it always falls straight to printBill().
+const printBillOrStudio = async (docType, docNumber, studioData, title, rows, footer) => {
+  if (docType) {
+    try {
+      const studioAttempt = await printFromInvoiceStudio(docType, studioData, docNumber);
+      if (studioAttempt.printed) return;
+    } catch { /* fall through to the hardcoded layout below */ }
+  }
+  printBill(title, rows, footer);
 };
 
 export default function PurchaseHub() {
@@ -283,7 +300,15 @@ export default function PurchaseHub() {
       <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
     const footer = `<div class="row"><span class="total">NET PAYABLE: ₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
       <div style="margin-top:20px">Customer Signature: ___________________________</div>`;
-    printBill(titleMap[activeModal], rows, footer);
+    const docNumber = `EXCH-${Date.now().toString().slice(-7)}`;
+    const studioData = {
+      title: titleMap[activeModal], receipt_number: docNumber, date: dayjs().format('DD-MMM-YYYY HH:mm'),
+      customer_name: values.customer_name || 'Walk-in', customer_mobile: values.mobile,
+      item_desc: values.item_desc, gross_weight: w, purity: values.purity_label || `${values.purity_pct || 91.67}%`,
+      pure_weight: pureWt, melt_deduct_pct: values.melt_deduct || 2, net_weight: netWt,
+      gold_rate: rate, payment_mode: values.payment_mode || 'Cash', net_payable: value,
+    };
+    await printBillOrStudio('OLD_GOLD_PURCHASE', docNumber, studioData, titleMap[activeModal], rows, footer);
     message.success(`${titleMap[activeModal]} saved & receipt printed!`);
     closeModal();
   };
@@ -298,10 +323,15 @@ export default function PurchaseHub() {
       advance_receipt: 'ADVANCE RECEIPT', advance_adj: 'ADVANCE ADJUSTMENT',
       gift_voucher: 'GIFT VOUCHER', scheme_receipt: 'SCHEME INSTALLMENT RECEIPT',
     };
+    const docTypeMap = {
+      advance_receipt: 'ADVANCE', advance_adj: 'ADVANCE',
+      gift_voucher: 'GIFT_VOUCHER', scheme_receipt: 'SCHEME_RECEIPT',
+    };
     const title = titleMap[activeModal] || 'RECEIPT';
     let rows = `<div class="row"><span class="label">Customer Name</span><span class="val">${values.customer_label || values.customer_name || 'Walk-in'}</span></div>
       <div class="dline"></div>`;
     let voucherCode = values.voucher_code;
+    let studioExtra = {};
 
     if (activeModal === 'advance_receipt') {
       if (!values.Customer_ID) { message.error('Search and select a customer first.'); return; }
@@ -316,6 +346,7 @@ export default function PurchaseHub() {
       }
       rows += `<div class="row"><span class="label">Purpose</span><span class="val">${values.purpose || 'Advance'}</span></div>
         <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
+      studioExtra = { purpose: values.purpose || 'Advance', payment_mode: values.payment_mode || 'Cash' };
     } else if (activeModal === 'advance_adj') {
       if (!values.Customer_ID) { message.error('Search and select a customer first.'); return; }
       let applyResult;
@@ -330,6 +361,10 @@ export default function PurchaseHub() {
         <div class="row"><span class="label">Applied To Invoice</span><span class="val">₹${applyResult.applied_to_invoice.toLocaleString('en-IN')}</span></div>
         ${applyResult.refund_amount > 0 ? `<div class="row"><span class="label">Refunded (bill already covered)</span><span class="val">₹${applyResult.refund_amount.toLocaleString('en-IN')}</span></div>` : ''}
         <div class="row"><span class="label">Invoice Balance Remaining</span><span class="val">₹${applyResult.invoice_balance_remaining.toLocaleString('en-IN')}</span></div>`;
+      studioExtra = {
+        invoice_no: values.invoice_no, applied_to_invoice: applyResult.applied_to_invoice,
+        refund_amount: applyResult.refund_amount, invoice_balance_remaining: applyResult.invoice_balance_remaining,
+      };
     } else if (activeModal === 'gift_voucher') {
       // Best-effort link to an existing customer by mobile — the voucher
       // still issues fine (Issued_To_Customer_ID is nullable) if nothing
@@ -355,6 +390,10 @@ export default function PurchaseHub() {
       rows += `<div class="row"><span class="label">Voucher Code</span><span class="val">${voucherCode}</span></div>
         <div class="row"><span class="label">Valid Till</span><span class="val">${values.valid_till?.format('DD-MMM-YYYY') || 'No expiry'}</span></div>
         <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
+      studioExtra = {
+        voucher_code: voucherCode, valid_till: values.valid_till?.format('DD-MMM-YYYY') || 'No expiry',
+        payment_mode: values.payment_mode || 'Cash',
+      };
     } else if (activeModal === 'scheme_receipt') {
       if (!values.Member_ID) { message.error('Search and select a scheme member first.'); return; }
       try {
@@ -365,11 +404,17 @@ export default function PurchaseHub() {
       }
       rows += `<div class="row"><span class="label">Member</span><span class="val">${values.member_label || '-'}</span></div>
         <div class="row"><span class="label">Payment Mode</span><span class="val">${values.payment_mode || 'Cash'}</span></div>`;
+      studioExtra = { member_name: values.member_label || '-', payment_mode: values.payment_mode || 'Cash' };
     }
 
     const net = parseFloat(values.amount || values.advance_amount || values.voucher_amount || 0);
     const footer = `<div class="row"><span class="total">AMOUNT: ₹${net.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>`;
-    printBill(title, rows, footer);
+    const docNumber = `RCP-${Date.now().toString().slice(-7)}`;
+    const studioData = {
+      title, receipt_number: docNumber, date: dayjs().format('DD-MMM-YYYY HH:mm'),
+      customer_name: values.customer_label || values.customer_name || 'Walk-in', amount: net, ...studioExtra,
+    };
+    await printBillOrStudio(docTypeMap[activeModal], docNumber, studioData, title, rows, footer);
     message.success(`${title} saved & printed!`);
     closeModal();
   };

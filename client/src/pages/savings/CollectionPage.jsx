@@ -8,6 +8,7 @@ import { DollarOutlined, PlusOutlined, PrinterOutlined } from '@ant-design/icons
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { savingsApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
+import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
 
@@ -67,7 +68,21 @@ export default function CollectionPage() {
   const cashTotal = (collections || []).filter(r => r.Payment_Mode === 'Cash').reduce((s, r) => s + parseFloat(r.Net_Amount || 0), 0);
   const upiTotal = (collections || []).filter(r => r.Payment_Mode === 'UPI').reduce((s, r) => s + parseFloat(r.Net_Amount || 0), 0);
 
-  const printReceipt = (r) => {
+  // If the tenant has designed an Invoice Studio template for
+  // SCHEME_RECEIPT, that design is used (with real collection data)
+  // instead of the hardcoded monospace layout below — same fallback
+  // pattern as printThermalReceipt for Sales Bill.
+  const printReceipt = async (r) => {
+    const studioData = {
+      receipt_number: r.receipt_number || r.Receipt_Number,
+      date: dayjs(r.Payment_Date).format('DD-MMM-YYYY HH:mm'),
+      member_name: r.member?.Member_Name || r.Member_Name, member_number: r.member?.Member_Number || r.Member_Number,
+      installment_no: r.Installment_No, amount: r.Net_Amount, payment_mode: r.Payment_Mode,
+      is_complete: !!r.is_complete,
+    };
+    const studioAttempt = await printFromInvoiceStudio('SCHEME_RECEIPT', studioData, studioData.receipt_number);
+    if (studioAttempt.printed) return;
+
     const w = window.open('', '_blank', 'width=400,height=500');
     w.document.write(`<!DOCTYPE html><html><head><style>body{font-family:monospace;font-size:11pt;padding:10px}
     .center{text-align:center}.bold{font-weight:bold}.line{border-top:1px dashed #000;margin:6px 0}</style></head>

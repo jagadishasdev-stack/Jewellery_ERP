@@ -48,13 +48,28 @@ const INVOICE_CATEGORIES = [
       { key: 'ADVANCE',        label: 'Advance Receipt' },
       { key: 'ORDER_BOOKING',  label: 'Order Booking' },
       { key: 'DELIVERY_NOTE',  label: 'Delivery Note' },
+      { key: 'GIFT_VOUCHER',   label: 'Gift Voucher' },
     ],
   },
   {
     group: 'Purchase', color: '#fa8c16', icon: '🛍️',
     types: [
-      { key: 'PURCHASE_BILL',   label: 'Purchase Bill' },
-      { key: 'PURCHASE_RETURN', label: 'Purchase Return' },
+      { key: 'PURCHASE_BILL',      label: 'Purchase Bill' },
+      { key: 'PURCHASE_RETURN',    label: 'Purchase Return' },
+      { key: 'OLD_GOLD_PURCHASE',  label: 'Old Gold Purchase / Exchange' },
+    ],
+  },
+  {
+    group: 'Approval', color: '#8c6d1f', icon: '📝',
+    types: [
+      { key: 'APPROVAL_ISSUE',   label: 'Approval Issue Voucher' },
+      { key: 'APPROVAL_RECEIVE', label: 'Approval Receive Voucher' },
+    ],
+  },
+  {
+    group: 'Repair', color: '#eb2f96', icon: '🛠️',
+    types: [
+      { key: 'REPAIR_RECEIPT', label: 'Repair Job Card / Receipt' },
     ],
   },
   {

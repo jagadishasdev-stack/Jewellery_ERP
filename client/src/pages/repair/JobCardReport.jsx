@@ -10,6 +10,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { repairApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
+import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
 
@@ -69,7 +70,23 @@ export default function JobCardReport() {
     delivered: (data || []).filter(r => r.Status === 'Delivered').length,
   };
 
-  const printJobCard = (job) => {
+  // If the tenant has designed an Invoice Studio template for
+  // REPAIR_RECEIPT, that design is used (with real job-card data) instead
+  // of the hardcoded layout below — same fallback pattern as
+  // printThermalReceipt for Sales Bill.
+  const printJobCard = async (job) => {
+    const studioData = {
+      job_card_number: job.Job_Card_Number, date: dayjs(job.Created_Date).format('DD-MMM-YYYY'),
+      customer_name: job.Customer_Name || job.Cust_Name, customer_mobile: job.Customer_Mobile,
+      expected_delivery: job.Expected_Delivery ? dayjs(job.Expected_Delivery).format('DD-MMM-YYYY') : null,
+      status: job.Status, item_description: job.Item_Description,
+      item_weight: job.Item_Weight, purity: job.Purity, work_required: job.Repair_Work_Required,
+      estimate_amount: job.Estimate_Amount, advance_paid: job.Advance_Paid,
+      labour_charge: job.Labour_Charge, balance_due: job.Balance_Due,
+    };
+    const studioAttempt = await printFromInvoiceStudio('REPAIR_RECEIPT', studioData, job.Job_Card_Number);
+    if (studioAttempt.printed) return;
+
     const w = window.open('', '_blank', 'width=600,height=700');
     w.document.write(`<!DOCTYPE html><html><head><style>
       body{font-family:Arial,sans-serif;padding:20px;font-size:11pt}
