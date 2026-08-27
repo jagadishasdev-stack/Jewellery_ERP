@@ -365,7 +365,15 @@ export default function InvoiceStudio() {
     onSuccess: (res) => {
       const saved = res.data.data;
       if (!editingId) setEditingId(saved.Template_ID);
-      message.success('✅ Template saved!');
+      // The server auto-promotes a tenant's FIRST template for a document
+      // type to Is_Default (see routes/invoiceStudio.js's POST /templates)
+      // — real printing only ever uses the Is_Default one, so make it
+      // obvious this one already took effect rather than leaving the
+      // admin to separately discover "Set as Default" for what's already
+      // their only template.
+      message.success(saved.Is_Default
+        ? '✅ Template saved and set as your default — real bills now use this design.'
+        : '✅ Template saved.');
       qc.invalidateQueries(['invoice-studio-templates']);
       setIsDirty(false);
     },

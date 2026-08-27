@@ -414,15 +414,37 @@ router.post('/templates', authenticate, async (req, res) => {
     const { Template_Name, Document_Type, Paper_Size, Layout_JSON, Is_Default, Template_Version } = req.body;
     if (requireSuperAdminForLabel(Document_Type, req, res)) return;
     const tenantId = resolveTenantId(req);
+    const docType = Document_Type || 'SALES_BILL';
     const layoutStr = typeof Layout_JSON === 'string' ? Layout_JSON : JSON.stringify(Layout_JSON || []);
+
+    // The client's own "Save" action always sends Is_Default: false (only
+    // the separate "Set as Default" button ever sends true) — GET
+    // /resolve/:docType (the route real printing actually calls) requires
+    // Is_Default=true, so a tenant's very first template for a document
+    // type was permanently invisible to printing until they discovered
+    // and clicked that separate button. Found via a real admin report:
+    // designed a Sales Bill template, printing never picked it up.
+    // Auto-promoting the FIRST active template for a (tenant, doc type)
+    // combo makes the common case — one template per document type —
+    // just work; an admin who deliberately adds a second alternate
+    // design still uses "Set as Default" to switch between them, exactly
+    // as before.
+    let isDefault = !!Is_Default;
+    if (!isDefault) {
+      const existing = await db('tbl_invoice_studio_templates')
+        .where({ Tenant_ID: tenantId, Document_Type: docType, Is_Active: true })
+        .first('Template_ID');
+      if (!existing) isDefault = true;
+    }
+
     const [row] = await db('tbl_invoice_studio_templates').insert({
       Tenant_ID:        tenantId,
       Template_Name:    Template_Name || 'Untitled Template',
-      Document_Type:    Document_Type || 'SALES_BILL',
+      Document_Type:    docType,
       Paper_Size:       Paper_Size || 'A4',
       Components:       layoutStr,
       Version:          Template_Version || 1,
-      Is_Default:       Is_Default || false,
+      Is_Default:       isDefault,
       Is_Active:        true,
       Version_History:  JSON.stringify([{ version: 1, saved_at: new Date().toISOString(), layout: layoutStr }]),
       Created_By:       req.user.username,
@@ -454,6 +476,22 @@ router.put('/templates/:id', authenticate, async (req, res) => {
     try { history = typeof existing.Version_History === 'string' ? JSON.parse(existing.Version_History) : (existing.Version_History || []); } catch {}
     history.push({ version: existing.Version || 1, saved_at: new Date().toISOString(), layout: existing.Components });
     if (history.length > 10) history = history.slice(-10);
+
+    // "Set as Default" was setting Is_Default=true on this row WITHOUT
+    // clearing it on whichever OTHER template already held the default
+    // for this (Tenant_ID, Document_Type) — leaving TWO rows marked
+    // default at once. GET /resolve/:docType's .first() then returned
+    // whichever one the DB happened to return first (insertion order),
+    // not the one actually just chosen — the button silently didn't work
+    // whenever there was more than one template to choose between, which
+    // is the only time clicking it is meaningful at all. Found via a real
+    // test exercising this exact "switch the default" flow.
+    if (Is_Default === true) {
+      await db('tbl_invoice_studio_templates')
+        .where({ Tenant_ID: existing.Tenant_ID, Document_Type: existing.Document_Type, Is_Default: true })
+        .whereNot({ Template_ID: existing.Template_ID })
+        .update({ Is_Default: false });
+    }
 
     const [updated] = await db('tbl_invoice_studio_templates')
       .where({ Template_ID: req.params.id })
