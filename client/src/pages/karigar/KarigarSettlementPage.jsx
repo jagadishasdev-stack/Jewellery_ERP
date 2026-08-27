@@ -7,6 +7,8 @@ import { PrinterOutlined, CalculatorOutlined } from '@ant-design/icons';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { karigarApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
+import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
+import { printHTML } from '../../utils/printService';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
 
@@ -81,6 +83,70 @@ export default function KarigarSettlementPage() {
     });
   };
 
+  // Used to just call window.print() on the whole page (nav, buttons and
+  // all) — no real settlement slip existed. Tries the tenant's Invoice
+  // Studio KARIGAR_SETTLEMENT design first, falls back to a real,
+  // purpose-built layout (not the raw page) if none is designed.
+  const printSettlement = async () => {
+    if (!settlementData) return;
+    const values = form.getFieldsValue();
+    const [from, to] = values.dateRange || [];
+    const settlementRef = `KST-${selectedKarigar?.Vendor_ID || 'X'}-${Date.now().toString().slice(-6)}`;
+    const studioData = {
+      settlement_number: settlementRef, date: dayjs().format('DD-MMM-YYYY HH:mm'),
+      karigar_name: selectedKarigar?.Vendor_Name,
+      bank_name: selectedKarigar?.Bank_Name, bank_account_no: selectedKarigar?.Bank_Account_No, ifsc_code: selectedKarigar?.IFSC_Code,
+      period_from: from?.format?.('DD-MMM-YYYY'), period_to: to?.format?.('DD-MMM-YYYY'),
+      items: (settlementData.items || []).map(i => ({
+        issue_date: dayjs(i.Issue_Date).format('DD-MMM-YYYY'), issue_number: i.Issue_Number,
+        gold_issued: i.Gold_Weight_Issued, gold_returned: i.Gross_Weight_Returned,
+        wastage: i.Wastage_Weight, deduction: i.Wastage_Deduction,
+      })),
+      total_issued: settlementData.totals.totalIssued, total_returned: settlementData.totals.totalReturned,
+      total_wastage: settlementData.totals.totalWastage, gross_wages: settlementData.totals.grossWages,
+      wastage_deduction: settlementData.totals.wastageDeduction, net_payable: settlementData.totals.netWages,
+    };
+    const studioAttempt = await printFromInvoiceStudio('KARIGAR_SETTLEMENT', studioData, settlementRef);
+    if (studioAttempt.printed) return;
+
+    const itemRows = (settlementData.items || []).map(i => `
+      <tr><td>${dayjs(i.Issue_Date).format('DD-MMM-YYYY')}</td><td>${i.Issue_Number}</td>
+      <td>${formatWeight(i.Gold_Weight_Issued)}</td><td>${formatWeight(i.Gross_Weight_Returned)}</td>
+      <td>${formatWeight(i.Wastage_Weight)}</td><td>${formatCurrency(i.Wastage_Deduction)}</td></tr>`).join('');
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      body{font-family:Arial,sans-serif;padding:20px;font-size:11pt}
+      h2{color:#B8860B;text-align:center;margin-bottom:4px}.sub{text-align:center;color:#666;font-size:10pt;margin-bottom:12px}
+      .line{border-top:2px solid #B8860B;margin:10px 0}
+      table{width:100%;border-collapse:collapse;margin:10px 0}
+      th{background:#B8860B;color:#fff;padding:6px 8px;text-align:left;font-size:10pt}
+      td{padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:10pt}
+      .row{display:flex;justify-content:space-between;padding:4px 0}
+      .label{color:#888}.val{font-weight:bold}
+      .total{font-size:14pt;font-weight:bold;color:#B8860B}
+      .footer{margin-top:40px;display:flex;justify-content:space-between}
+      .sig{border-top:1px solid #000;width:180px;text-align:center;padding-top:5px;font-size:9pt}
+      @media print{body{padding:4mm}}
+    </style></head><body>
+      <h2>KARIGAR SETTLEMENT</h2>
+      <div class="sub">${settlementRef} &nbsp;|&nbsp; ${dayjs().format('DD-MMM-YYYY HH:mm')}</div>
+      <div class="line"></div>
+      <div class="row"><span class="label">Karigar</span><span class="val">${selectedKarigar?.Vendor_Name || '-'}</span></div>
+      <div class="row"><span class="label">Period</span><span class="val">${from?.format?.('DD-MMM-YYYY') || '-'} to ${to?.format?.('DD-MMM-YYYY') || '-'}</span></div>
+      <table><thead><tr><th>Issue Date</th><th>Issue #</th><th>Issued</th><th>Returned</th><th>Wastage</th><th>Deduction</th></tr></thead>
+        <tbody>${itemRows}</tbody></table>
+      <div class="line"></div>
+      <div class="row"><span class="label">Gross Wages</span><span class="val">${formatCurrency(settlementData.totals.grossWages)}</span></div>
+      <div class="row"><span class="label">Wastage Deduction</span><span class="val">- ${formatCurrency(settlementData.totals.wastageDeduction)}</span></div>
+      <div class="row"><span class="total">NET PAYABLE: ${formatCurrency(settlementData.totals.netWages)}</span></div>
+      ${selectedKarigar?.Bank_Account_No ? `<div class="row"><span class="label">Bank</span><span class="val">${selectedKarigar.Bank_Name || '-'} — ${selectedKarigar.Bank_Account_No}${selectedKarigar.IFSC_Code ? ` (${selectedKarigar.IFSC_Code})` : ''}</span></div>` : ''}
+      <div class="footer">
+        <div class="sig">Karigar Signature</div>
+        <div class="sig">Authorised Signatory</div>
+      </div>
+    </body></html>`;
+    return printHTML('other', html, { windowSize: 'width=600,height=700', docType: 'Karigar Settlement', docNumber: settlementRef });
+  };
+
   const columns = [
     { title: 'Issue Date', dataIndex: 'Issue_Date', render: (v) => dayjs(v).format('DD-MMM-YYYY') },
     { title: 'Issue #', dataIndex: 'Issue_Number' },
@@ -109,7 +175,7 @@ export default function KarigarSettlementPage() {
       <div className="page-header">
         <Title level={4} style={{ margin: 0 }}>Karigar Settlement</Title>
         {settlementData && (
-          <Button icon={<PrinterOutlined />} onClick={() => window.print()}>Print Bill</Button>
+          <Button icon={<PrinterOutlined />} onClick={printSettlement}>Print Bill</Button>
         )}
       </div>
 

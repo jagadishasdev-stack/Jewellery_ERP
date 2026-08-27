@@ -215,7 +215,8 @@ export default function PurchaseHub() {
     const gstAmount = round2(subtotal * gstPercent / 100);
     return { subtotal: round2(subtotal), gstAmount, total: round2(subtotal + gstAmount) };
   };
-  const onSubmitPurchase = (values) => {
+  const PURCHASE_TITLE_MAP = { gold: 'GOLD PURCHASE BILL', silver: 'SILVER PURCHASE BILL', diamond: 'DIAMOND PURCHASE BILL', vendor: 'VENDOR PURCHASE BILL' };
+  const onSubmitPurchase = async (values) => {
     const lineItems = purchaseItems.map((_, idx) => {
       const gross = parseFloat(values[`gross_${idx}`] || 0);
       const stone = parseFloat(values[`stone_${idx}`] || 0);
@@ -234,16 +235,55 @@ export default function PurchaseHub() {
     });
     const subtotal = lineItems.reduce((s, i) => s + i.Total_Line_Value, 0);
     const gstAmount = round2(subtotal * (parseFloat(values.GST_Percentage) || 0) / 100);
+    const total = round2(subtotal + gstAmount);
     const purchaseTypeMap = { gold: 'Gold', silver: 'Silver', diamond: 'Diamond', vendor: 'Stock' };
-    createMutation.mutate({
-      Supplier_ID: values.Supplier_ID || null,
-      Purchase_Type: purchaseTypeMap[activeModal] || 'Stock',
-      Purchase_Date: values.Purchase_Date?.toISOString() || new Date().toISOString(),
-      Supplier_Invoice_No: values.Supplier_Invoice_No,
-      Subtotal_Amount: round2(subtotal), GST_Amount: gstAmount, Total_Amount: round2(subtotal + gstAmount),
-      Payment_Mode: values.Payment_Mode || 'Cash',
-      Payment_Status: 'Pending', Notes: values.Notes, items: lineItems,
-    });
+    const supplierName = suppliers?.find?.(s => s.Vendor_ID === values.Supplier_ID)?.Vendor_Name
+      || 'Supplier';
+
+    let created;
+    try {
+      created = await createMutation.mutateAsync({
+        Supplier_ID: values.Supplier_ID || null,
+        Purchase_Type: purchaseTypeMap[activeModal] || 'Stock',
+        Purchase_Date: values.Purchase_Date?.toISOString() || new Date().toISOString(),
+        Supplier_Invoice_No: values.Supplier_Invoice_No,
+        Subtotal_Amount: round2(subtotal), GST_Amount: gstAmount, Total_Amount: total,
+        Payment_Mode: values.Payment_Mode || 'Cash',
+        Payment_Status: 'Pending', Notes: values.Notes, items: lineItems,
+      });
+    } catch {
+      return; // createMutation's own onError already showed the message
+    }
+
+    // Fresh print action — Purchase Bill never had one before, hardcoded
+    // or otherwise. Tries the tenant's Invoice Studio PURCHASE_BILL
+    // design first, falls back to this plain layout if none is designed.
+    const purchaseNumber = created?.data?.data?.Purchase_Number || `PB-${Date.now().toString().slice(-7)}`;
+    const itemRows = lineItems.map(i => `
+      <tr><td>${i.Item_Description || i.Metal_Type}</td><td>${i.Purity_Code || '-'}</td>
+      <td>${i.Gross_Weight}g</td><td>${i.Stone_Weight}g</td>
+      <td>₹${i.Gold_Rate.toLocaleString('en-IN')}</td><td>₹${i.Making_Charge.toLocaleString('en-IN')}</td>
+      <td>₹${i.Total_Line_Value.toLocaleString('en-IN')}</td></tr>`).join('');
+    const rows = `
+      <div class="row"><span class="label">Supplier</span><span class="val">${supplierName}</span></div>
+      <div class="row"><span class="label">Purchase No</span><span class="val">${purchaseNumber}</span></div>
+      ${values.Supplier_Invoice_No ? `<div class="row"><span class="label">Supplier Invoice No</span><span class="val">${values.Supplier_Invoice_No}</span></div>` : ''}
+      <div class="dline"></div>
+      <table><thead><tr><th>Item</th><th>Purity</th><th>Gross</th><th>Stone</th><th>Rate</th><th>Making</th><th>Value</th></tr></thead>
+      <tbody>${itemRows}</tbody></table>`;
+    const footer = `
+      <div class="row"><span class="label">Subtotal</span><span class="val">₹${round2(subtotal).toLocaleString('en-IN')}</span></div>
+      ${gstAmount > 0 ? `<div class="row"><span class="label">GST</span><span class="val">₹${gstAmount.toLocaleString('en-IN')}</span></div>` : ''}
+      <div class="row"><span class="total">TOTAL: ₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+      <div class="row"><span class="label">Payment Mode</span><span class="val">${values.Payment_Mode || 'Cash'}</span></div>`;
+    const studioData = {
+      title: PURCHASE_TITLE_MAP[activeModal], purchase_number: purchaseNumber,
+      date: dayjs(values.Purchase_Date || new Date()).format('DD-MMM-YYYY HH:mm'),
+      supplier_name: supplierName, supplier_invoice_no: values.Supplier_Invoice_No,
+      items: lineItems.map(i => ({ item: i.Item_Description || i.Metal_Type, purity: i.Purity_Code, gross_weight: i.Gross_Weight, stone_weight: i.Stone_Weight, rate: i.Gold_Rate, making_charge: i.Making_Charge, value: i.Total_Line_Value })),
+      subtotal: round2(subtotal), gst_amount: gstAmount, total, payment_mode: values.Payment_Mode || 'Cash',
+    };
+    await printBillOrStudio('PURCHASE_BILL', purchaseNumber, studioData, PURCHASE_TITLE_MAP[activeModal], rows, footer);
   };
 
   // ── Submit old gold / exchange ─────────────────────────────────────────────

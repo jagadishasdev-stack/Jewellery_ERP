@@ -14,7 +14,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { salesApi, bankChequeApi } from '../../api/modules';
 import { useAuthStore } from '../../store/authStore';
 import { formatCurrency } from '../../utils/calculations';
-import { printThermalReceipt } from '../../utils/thermalReceipt';
+import { printThermalReceipt, printFromInvoiceStudio } from '../../utils/thermalReceipt';
+import { printHTML } from '../../utils/printService';
 import PrinterOverrideButton from '../../components/PrinterOverrideButton';
 import PageTour from '../../components/PageTour';
 import SalesBillDetail from './SalesBillDetail';
@@ -61,11 +62,51 @@ export default function SalesBillHistoryPage() {
     onError: (err) => message.error(err.response?.data?.message || 'Failed to cancel.'),
   });
 
+  // No print action existed at all for a sales return before — the
+  // customer walked away with nothing on paper. Tries the tenant's
+  // Invoice Studio SALES_RETURN design first, falls back to this plain
+  // credit-note layout if none is designed.
+  const printCreditNote = async ({ invoice_number, customer_name, customer_mobile, net_payable, sale_date, Refund_Mode, reason }) => {
+    const returnRef = `RETURN-${invoice_number}`;
+    const studioData = {
+      credit_note_number: returnRef, against_invoice: invoice_number,
+      date: dayjs().format('DD-MMM-YYYY HH:mm'), original_bill_date: sale_date ? dayjs(sale_date).format('DD-MMM-YYYY') : null,
+      customer_name: customer_name || 'Walk-in', customer_mobile,
+      refund_amount: net_payable, refund_mode: Refund_Mode, reason: reason || '-',
+    };
+    const studioAttempt = await printFromInvoiceStudio('SALES_RETURN', studioData, returnRef);
+    if (studioAttempt.printed) return;
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      body{font-family:Arial,sans-serif;padding:20px;font-size:11pt}
+      h2{color:#B8860B;text-align:center;margin-bottom:4px}.sub{text-align:center;color:#666;font-size:10pt;margin-bottom:12px}
+      .line{border-top:2px solid #B8860B;margin:10px 0}
+      .row{display:flex;justify-content:space-between;padding:4px 0}
+      .label{color:#888}.val{font-weight:bold}
+      .total{font-size:14pt;font-weight:bold;color:#B8860B}
+      @media print{body{padding:4mm}}
+    </style></head><body>
+      <h2>CREDIT NOTE / SALES RETURN</h2>
+      <div class="sub">${returnRef} &nbsp;|&nbsp; ${dayjs().format('DD-MMM-YYYY HH:mm')}</div>
+      <div class="line"></div>
+      <div class="row"><span class="label">Against Invoice</span><span class="val">${invoice_number}</span></div>
+      <div class="row"><span class="label">Customer</span><span class="val">${customer_name || 'Walk-in'}</span></div>
+      ${customer_mobile ? `<div class="row"><span class="label">Mobile</span><span class="val">${customer_mobile}</span></div>` : ''}
+      <div class="row"><span class="label">Reason</span><span class="val">${reason || '-'}</span></div>
+      <div class="row"><span class="label">Refunded Via</span><span class="val">${Refund_Mode}</span></div>
+      <div class="line"></div>
+      <div class="row"><span class="total">REFUND AMOUNT: ₹${parseFloat(net_payable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span></div>
+      <div style="margin-top:20px">Customer Signature: ___________________________</div>
+    </body></html>`;
+    return printHTML('credit_note', html, { windowSize: 'width=500,height=650', docType: 'Sales Return', docNumber: returnRef });
+  };
+
   const returnMutation = useMutation({
-    mutationFn: ({ id, ...data }) => salesApi.return(id, data),
-    onSuccess: (res) => {
+    mutationFn: ({ id, invoice_number, customer_name, customer_mobile, net_payable, sale_date, ...data }) => salesApi.return(id, data),
+    onSuccess: (res, variables) => {
       message.success(res.data.message || 'Sale returned.');
       qc.invalidateQueries({ queryKey: ['sales-history'] });
+      printCreditNote(variables);
       setReturnModal(null); returnForm.resetFields();
     },
     onError: (err) => message.error(err.response?.data?.message || 'Failed to process return.'),
@@ -218,7 +259,13 @@ export default function SalesBillHistoryPage() {
         <Alert type="warning" showIcon style={{ marginBottom: 12 }}
           message="Restores stock, reverses any Old Gold/Gift Voucher/Loyalty Points this sale used and the accounting journal (including GST and cost of goods sold), then refunds the amount already collected via whichever channel you pick below. This cannot be undone." />
         <Form form={returnForm} layout="vertical" initialValues={{ Refund_Mode: 'Cash' }}
-          onFinish={(v) => returnMutation.mutate({ id: returnModal.Sale_ID, ...v })}>
+          onFinish={(v) => returnMutation.mutate({
+            id: returnModal.Sale_ID,
+            invoice_number: returnModal.Invoice_Number, customer_name: returnModal.Customer_Name,
+            customer_mobile: returnModal.Customer_Mobile, net_payable: returnModal.Net_Payable_Amount,
+            sale_date: returnModal.Sale_Date,
+            ...v,
+          })}>
           <Form.Item name="Refund_Mode" label="Refund Via" rules={[{ required: true }]}>
             <Radio.Group optionType="button" buttonStyle="solid">
               <Radio.Button value="Cash">Cash</Radio.Button>
