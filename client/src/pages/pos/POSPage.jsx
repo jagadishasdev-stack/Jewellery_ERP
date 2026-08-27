@@ -22,6 +22,7 @@ import {
   ShopOutlined, PlusOutlined, MinusCircleOutlined,
   CheckCircleFilled, ExclamationCircleOutlined, TagOutlined,
   WalletOutlined, BankOutlined, PictureOutlined, HistoryOutlined,
+  EyeOutlined, FileSearchOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -36,6 +37,7 @@ import { formatCurrency, formatWeight, calculateOldGoldExchange } from '../../ut
 import CustomerSearchModal from './CustomerSearchModal';
 import { printThermalReceipt } from '../../utils/thermalReceipt';
 import PrinterOverrideButton from '../../components/PrinterOverrideButton';
+import SalesBillDetail from '../reports/SalesBillDetail';
 import PageTour from '../../components/PageTour';
 import EmptyState from '../../components/states/EmptyState';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
@@ -64,6 +66,7 @@ const PAYMENT_MODES = [
 // Cheque posts to "Cheque In Hand" until it's cleared later through the
 // Bank/Cheque register, which is where its bank gets picked.
 const BANK_SELECT_MODES = new Set(['Debit Card', 'NEFT', 'RTGS', 'IMPS', 'Bank Transfer']);
+const BILL_STATUS_COLOR = { Paid: 'green', Partial: 'orange', Pending: 'red', Cancelled: 'default' };
 
 // Scheme adjustments are NOT a selectable payment mode — they only apply
 // through the "🪙 Scheme Adjustment" card (left panel), which links the
@@ -113,6 +116,37 @@ export default function POSPage() {
       setReprintingId(null);
     }
   };
+
+  // ── View a bill's full details — either by clicking a Recent Bill row,
+  // or by typing/scanning its invoice number directly. Both land on the
+  // same detail view (SalesBillDetail, the same "one screen, every field"
+  // view Sales Bill History uses) so staff can check a bill without
+  // leaving the billing counter.
+  const [viewBillId, setViewBillId] = useState(null);
+  const [billNumberSearch, setBillNumberSearch] = useState('');
+  const [billLookupLoading, setBillLookupLoading] = useState(false);
+  const { data: viewBillDetail, isLoading: viewBillDetailLoading } = useQuery({
+    queryKey: ['pos-view-bill', viewBillId],
+    queryFn: () => salesApi.getById(viewBillId).then((r) => r.data.data),
+    enabled: !!viewBillId,
+  });
+  const lookupBillByNumber = async () => {
+    const number = billNumberSearch.trim();
+    if (!number) return;
+    setBillLookupLoading(true);
+    try {
+      const res = await salesApi.getByInvoice(number);
+      const saleId = res.data?.data?.sale?.Sale_ID;
+      if (!saleId) { message.error(`No bill found for "${number}".`); return; }
+      setViewBillId(saleId);
+      setBillNumberSearch('');
+    } catch {
+      message.error(`No bill found for "${number}".`);
+    } finally {
+      setBillLookupLoading(false);
+    }
+  };
+
   const {
     items, customer, addItem, removeItem, clearCart, setCustomer,
     getCartTotals, getSocketCartData, setOldGold,
@@ -1089,16 +1123,36 @@ export default function POSPage() {
         open={recentBillsOpen} onClose={() => setRecentBillsOpen(false)}
         extra={<Button size="small" onClick={() => { setRecentBillsOpen(false); navigate('/reports/sales-bill-history'); }}>View Full History</Button>}
       >
+        {/* Type or scan an invoice number to jump straight to that bill's
+            full details, without hunting for it in the list below. */}
+        <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
+          <Input
+            prefix={<FileSearchOutlined style={{ color: '#B8860B' }} />}
+            placeholder="Enter bill number (e.g. INV-...)"
+            value={billNumberSearch}
+            onChange={(e) => setBillNumberSearch(e.target.value)}
+            onPressEnter={lookupBillByNumber}
+          />
+          <Button onClick={lookupBillByNumber} loading={billLookupLoading} icon={<SearchOutlined />} style={{ background: '#B8860B', color: '#fff', border: 'none' }} />
+        </Space.Compact>
+
         <List
           loading={recentBillsLoading}
           dataSource={recentBills || []}
           locale={{ emptyText: 'No bills yet' }}
           renderItem={(bill) => (
             <List.Item
+              style={{ cursor: 'pointer' }}
+              onClick={() => setViewBillId(bill.Sale_ID)}
               actions={[
-                <PrinterOverrideButton key="reprint"
-                  loading={reprintingId === bill.Sale_ID}
-                  onPrint={(printerName) => reprintBill(bill.Sale_ID, printerName)} />,
+                <Tooltip key="view" title="View full bill details">
+                  <Button type="text" size="small" icon={<EyeOutlined />} onClick={(e) => { e.stopPropagation(); setViewBillId(bill.Sale_ID); }} />
+                </Tooltip>,
+                <span key="reprint" onClick={(e) => e.stopPropagation()}>
+                  <PrinterOverrideButton
+                    loading={reprintingId === bill.Sale_ID}
+                    onPrint={(printerName) => reprintBill(bill.Sale_ID, printerName)} />
+                </span>,
               ]}
             >
               <List.Item.Meta
@@ -1113,6 +1167,23 @@ export default function POSPage() {
             </List.Item>
           )}
         />
+      </Drawer>
+
+      {/* ── Full bill details — from a Recent Bill click or a bill-number
+           lookup above. Same complete "one screen" view Sales Bill History
+           uses, so staff can actually check a bill's items/GST/adjustments
+           right from the billing counter instead of just blindly reprinting. ── */}
+      <Drawer
+        title={viewBillDetail?.sale?.Invoice_Number || 'Bill Details'}
+        placement="right" width={screens.lg ? 880 : '100%'}
+        open={!!viewBillId} onClose={() => setViewBillId(null)} loading={viewBillDetailLoading}
+        extra={viewBillDetail && (
+          <PrinterOverrideButton label="Reprint" size="middle"
+            loading={reprintingId === viewBillDetail.sale.Sale_ID}
+            onPrint={(printerName) => reprintBill(viewBillDetail.sale.Sale_ID, printerName)} />
+        )}
+      >
+        {viewBillDetail && <SalesBillDetail detail={viewBillDetail} statusColor={BILL_STATUS_COLOR} />}
       </Drawer>
 
       <PageTour steps={tourSteps} />
