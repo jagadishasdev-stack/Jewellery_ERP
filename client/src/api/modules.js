@@ -132,6 +132,9 @@ export const superAdminApi = {
   toggleTenantModule: (tenantId, moduleKey, enabled) => api.post('/super-admin/tenant-module-toggle', { tenantId, moduleKey, enabled }),
   provisionTenant: (tenantId, businessType) => api.post('/super-admin/tenant-provision', { tenantId, businessType }),
   getTenantModules: (tenantId) => api.get(`/super-admin/tenant/${tenantId}/modules`),
+  // "Log in as" a tenant — no password needed, see superAdmin.js's own comment.
+  impersonate: (tenantId, userId) => api.post('/super-admin/impersonate', { tenantId, userId }),
+  endImpersonation: () => api.post('/super-admin/impersonate/end'),
 };
 
 // ─── Reports ──────────────────────────────────────────────────────────────────

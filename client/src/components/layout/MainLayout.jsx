@@ -558,7 +558,7 @@ export default function MainLayout() {
   // or none of them. Safe to include search unconditionally since no other
   // menu key uses one.
   const currentFullPath = location.pathname + location.search;
-  const { user, logout } = useAuthStore();
+  const { user, logout, impersonation, endImpersonation } = useAuthStore();
   const { isEnabled, businessType } = useModules();
   const { config: modeConfig, isOfficial, isDummy, isUnofficial } = useDataMode();
   const screens = useBreakpoint();
@@ -585,6 +585,7 @@ export default function MainLayout() {
   }, [location.pathname]);
 
   const handleLogout = async () => { await logout(); navigate('/login'); };
+  const handleEndImpersonation = async () => { await endImpersonation(); navigate('/admin/tenants'); };
 
   // ── Change Password (self-service) ──────────────────────────────────────────
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
@@ -663,7 +664,7 @@ export default function MainLayout() {
   const effectiveWidth = isMobile || isHeaderLayout ? 0 : (siderCollapsed ? collapsedWidth : siderWidth);
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ minHeight: '100vh', marginTop: impersonation?.active ? 30 : 0 }}>
 
       {/* ── Desktop / Tablet Sidebar (only in sidebar-layout mode) ──────────── */}
       {!isMobile && !isHeaderLayout && (
@@ -902,6 +903,23 @@ export default function MainLayout() {
            Only ever shows right after a real login (authStore.justLoggedIn),
            never on a plain page refresh. Renders null otherwise. ──────────── */}
       <SplashGate />
+
+      {/* ── "Log in as tenant" banner — always visible while impersonating,
+           on every screen regardless of layout, so this never reads as a
+           real, silent login. See authStore's startImpersonation. ────────── */}
+      {impersonation?.active && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1001,
+          background: '#722ed1', color: '#fff', padding: '6px 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
+          fontSize: 12, boxShadow: '0 2px 8px rgba(0,0,0,.15)',
+        }}>
+          <span>🔑 Viewing as <b>{user?.companyName}</b> ({user?.fullName}) — logged in by Super Admin "{impersonation.byUsername}"</span>
+          <Button size="small" ghost icon={<LogoutOutlined />} onClick={handleEndImpersonation}>
+            Exit — Back to Super Admin
+          </Button>
+        </div>
+      )}
 
       {/* ── Change Password (self-service, any logged-in user) ──────────────── */}
       <Modal

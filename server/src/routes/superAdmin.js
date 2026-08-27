@@ -542,6 +542,106 @@ router.put('/tenant/:tenantId/users/:userId', authenticate, requireSuperAdmin, a
     return sendError(res, 500, 'Failed to update user.');
   }
 });
+
+// ─── POST /api/super-admin/impersonate — "Log in as" a tenant, no password ────
+// Real, previously-missing gap: Super Admin's own login belongs to
+// SA_MASTER, which owns no tenant data at all — every operational screen
+// (POS, Inventory, Billing...) is tenant-scoped, so there was no way to
+// actually USE one as that tenant to test or support them; every request
+// just came back "not found," which read as a bug until traced to this.
+//
+// Mints a real JWT for one of the target tenant's own users — defaults to
+// their first active Admin if userId isn't given — WITHOUT ever touching
+// or needing that user's password (this is the entire point: a genuine
+// "log in as," not a shared/borrowed credential). Every such token carries
+// an `impersonation` marker (who's really driving, and since when) so the
+// client can show a clear "you're viewing as X" banner rather than let it
+// pass silently as a real login, and so it's traceable after the fact.
+// Deliberately short-lived (2h, vs the normal 24h) — a support session,
+// not a standing login.
+router.post('/impersonate', authenticate, requireSuperAdmin, async (req, res) => {
+  const { tenantId, userId } = req.body;
+  if (!tenantId) return sendError(res, 400, 'tenantId is required.');
+  try {
+    const tenant = await db('tbl_tenant_master').where({ Tenant_ID: tenantId }).first();
+    if (!tenant) return sendError(res, 404, 'Tenant not found.');
+    if (!tenant.Is_Active) return sendError(res, 403, 'This tenant is inactive — reactivate it first.');
+
+    let userQuery = db('tbl_user_master').where({ Tenant_ID: tenantId, Is_Active: true });
+    userQuery = userId
+      ? userQuery.where({ User_ID: userId })
+      : userQuery.where({ Is_Admin: true }).orderBy('Created_Date', 'asc');
+    const user = await userQuery.first();
+    if (!user) return sendError(res, 404, userId ? 'User not found in this tenant.' : 'No active admin user found for this tenant to log in as — pick a specific user instead.');
+
+    const role = await db('tbl_role_master').where({ Role_ID: user.Role_ID }).first();
+    if (!role) return sendError(res, 500, 'User role is misconfigured.');
+
+    // Same Custom_Permissions merge as the real /auth/login — see that
+    // route's own comment for why this exact shape matters.
+    const rolePermissions = typeof role.Permissions === 'string' ? JSON.parse(role.Permissions) : role.Permissions;
+    const customPermissions = user.Custom_Permissions
+      ? (typeof user.Custom_Permissions === 'string' ? JSON.parse(user.Custom_Permissions) : user.Custom_Permissions)
+      : {};
+    const permissions = { ...rolePermissions, ...customPermissions };
+
+    const jwt = require('jsonwebtoken');
+    const impersonation = {
+      active: true, byUserId: req.user.userId, byUsername: req.user.username,
+      startedAt: new Date().toISOString(),
+    };
+    const token = jwt.sign({
+      userId: user.User_ID, tenantId: user.Tenant_ID, roleId: user.Role_ID,
+      roleName: role.Role_Name, username: user.Username, fullName: user.Full_Name,
+      permissions, impersonation,
+    }, process.env.JWT_SECRET, { expiresIn: '2h' });
+
+    const { auditLog } = require('../utils/auditLogger');
+    await auditLog({
+      tenantId, userId: user.User_ID,
+      tableName: 'tbl_user_master', recordId: user.User_ID,
+      actionType: 'IMPERSONATE_START',
+      description: `Super Admin "${req.user.username}" logged in as "${user.Username}" (${role.Role_Name}) — support/testing session`,
+      req,
+    });
+
+    return sendSuccess(res, {
+      token,
+      user: {
+        userId: user.User_ID, username: user.Username, fullName: user.Full_Name,
+        tenantId: user.Tenant_ID, roleName: role.Role_Name, permissions,
+        companyName: tenant.Company_Name, gstNo: tenant.GST_No || null,
+      },
+      impersonation,
+    }, `Now viewing as ${tenant.Company_Name}.`);
+  } catch (err) {
+    console.error('Impersonate error:', err.message);
+    return sendError(res, 500, 'Failed to start impersonation session.');
+  }
+});
+
+// ─── POST /api/super-admin/impersonate/end ─────────────────────────────────
+// Only records the audit trail — ending the session client-side just means
+// switching back to the Super Admin's own already-held token; there's
+// nothing server-side to invalidate (the impersonation token simply
+// expires on its own in 2h regardless).
+router.post('/impersonate/end', authenticate, async (req, res) => {
+  if (!req.user.impersonation?.active) return sendError(res, 400, 'This session is not an impersonation session.');
+  try {
+    const { auditLog } = require('../utils/auditLogger');
+    await auditLog({
+      tenantId: req.user.tenantId, userId: req.user.userId,
+      tableName: 'tbl_user_master', recordId: req.user.userId,
+      actionType: 'IMPERSONATE_END',
+      description: `Super Admin "${req.user.impersonation.byUsername}" ended impersonation of "${req.user.username}"`,
+      req,
+    });
+    return sendSuccess(res, null, 'Impersonation session ended.');
+  } catch (err) {
+    return sendError(res, 500, 'Failed to end impersonation session.');
+  }
+});
+
 router.get('/tenant/:id/modules', authenticate, requireSuperAdmin, async (req, res) => {
   const tenantId = req.params.id;
   try {

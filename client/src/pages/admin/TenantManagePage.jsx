@@ -7,6 +7,7 @@
  * in local state, merge on final submit — no shared Form instance across steps.
  */
 import React, { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Table, Button, Card, Typography, Tag, Space, Modal, Form,
   Input, DatePicker, InputNumber, message, Descriptions, Select,
@@ -17,12 +18,13 @@ import {
   ApiOutlined, CheckCircleOutlined, InfoCircleOutlined,
   TeamOutlined, KeyOutlined, UserOutlined, LockOutlined, UnlockOutlined,
   ControlOutlined, ApartmentOutlined, MessageOutlined, BellOutlined, CreditCardOutlined,
-  FileTextOutlined, MinusCircleOutlined,
+  FileTextOutlined, MinusCircleOutlined, LoginOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { tenantApi, superAdminApi, smsApi, pushApi } from '../../api/modules';
 import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
 import { printHTML } from '../../utils/printService';
+import { useAuthStore } from '../../store/authStore';
 import PageTour from '../../components/PageTour';
 import { STANDARD_ACTIONS, ACTION_LABELS, DEFAULT_SHORTCUTS } from '../../utils/shortcuts';
 import dayjs from 'dayjs';
@@ -68,6 +70,22 @@ const PLATFORM_DEFAULT_ADMIN_PASSWORD = 'Jsphere';
 
 export default function TenantManagePage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const startImpersonation = useAuthStore((s) => s.startImpersonation);
+  const [impersonating, setImpersonating] = useState(null); // Tenant_ID currently starting, for the button's own loading state
+
+  const impersonateAsAdmin = async (tenant) => {
+    setImpersonating(tenant.Tenant_ID);
+    try {
+      const result = await startImpersonation(tenant.Tenant_ID);
+      message.success(`Logged in as ${result.user.fullName} — ${tenant.Company_Name}.`);
+      navigate('/dashboard');
+    } catch (err) {
+      message.error(err.response?.data?.message || err.message || 'Failed to log in as this tenant.');
+    } finally {
+      setImpersonating(null);
+    }
+  };
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const createButtonRef = useRef(null);
@@ -678,7 +696,7 @@ export default function TenantManagePage() {
     { title: 'Users', dataIndex: 'Max_Users', width: 65, render: v => <Tag>{v}</Tag> },
     { title: 'Status', dataIndex: 'Is_Active', width: 90,
       render: v => <Badge status={v ? 'success' : 'error'} text={v ? 'Active' : 'Inactive'} /> },
-    { title: 'Actions', fixed: 'right', width: 424,
+    { title: 'Actions', fixed: 'right', width: 460,
       render: (_, r) => (
         <Space size={4}>
           <Tooltip title="View"><Button size="small" icon={<EyeOutlined />} onClick={() => setDetailTenant(r)} /></Tooltip>
@@ -706,6 +724,10 @@ export default function TenantManagePage() {
           </Tooltip>
           <Tooltip title="Manage Users">
             <Button size="small" icon={<TeamOutlined />} style={{ borderColor: '#1890ff', color: '#1890ff' }} onClick={() => fetchUsers(r)} />
+          </Tooltip>
+          <Tooltip title="Log In As This Tenant — opens their admin account, no password needed, for support/testing">
+            <Button size="small" icon={<LoginOutlined />} loading={impersonating === r.Tenant_ID}
+              style={{ borderColor: '#722ed1', color: '#722ed1' }} onClick={() => impersonateAsAdmin(r)} />
           </Tooltip>
           {r.Is_Active
             ? <Popconfirm title={`Deactivate "${r.Company_Name}"?`} description="Users cannot login. Data preserved."
@@ -1633,9 +1655,31 @@ export default function TenantManagePage() {
               },
             },
             {
-              title: 'Actions', width: 170,
+              title: 'Actions', width: 210,
               render: (_, r) => (
                 <Space size={4}>
+                  {/* Log In As This Specific User — same impersonation as the
+                      row-level button on the main table, but picks exactly
+                      this user instead of defaulting to the first admin. */}
+                  {r.Is_Active && (
+                    <Tooltip title="Log In As This User">
+                      <Button size="small" icon={<LoginOutlined />} loading={impersonating === usersTenant?.Tenant_ID}
+                        style={{ borderColor: '#722ed1', color: '#722ed1' }}
+                        onClick={async () => {
+                          setImpersonating(usersTenant.Tenant_ID);
+                          try {
+                            const result = await startImpersonation(usersTenant.Tenant_ID, r.User_ID);
+                            message.success(`Logged in as ${result.user.fullName}.`);
+                            setUsersTenant(null);
+                            navigate('/dashboard');
+                          } catch (err) {
+                            message.error(err.response?.data?.message || err.message || 'Failed to log in as this user.');
+                          } finally {
+                            setImpersonating(null);
+                          }
+                        }} />
+                    </Tooltip>
+                  )}
                   {/* Reset Password */}
                   <Tooltip title="Reset Password">
                     <Button size="small" icon={<KeyOutlined />}
