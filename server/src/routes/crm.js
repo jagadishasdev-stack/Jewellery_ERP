@@ -63,7 +63,15 @@ router.post('/leads/:id/convert', authenticate, requireModuleAccess('crm', 'Appr
       .update({ Status: 'Converted', Converted_Customer_ID: customer.Customer_ID, Converted_Date: dayjs().format('YYYY-MM-DD') }).returning('*');
 
     return sendSuccess(res, { lead: updatedLead, customer }, 'Lead converted to customer.');
-  } catch (err) { return sendError(res, 500, 'Failed to convert lead: ' + err.message); }
+  } catch (err) {
+    // Real, previously-broken bug: a mobile number matching an existing
+    // customer's tbl_customer_master UNIQUE(Tenant_ID, Mobile_1) threw a
+    // raw Postgres unique-violation, surfaced as an opaque 500 with the
+    // raw DB error text — and the lead was left un-converted with no
+    // clear signal why. Now a clean, actionable 409.
+    if (err.code === '23505') return sendError(res, 409, 'A customer with this mobile number already exists — link the lead to that customer manually instead.');
+    return sendError(res, 500, 'Failed to convert lead: ' + err.message);
+  }
 });
 
 // ── Follow-ups ───────────────────────────────────────────────────────────────────
@@ -110,6 +118,11 @@ router.post('/feedback', authenticate, requireModuleAccess('crm', 'Add'), [body(
 });
 
 router.put('/feedback/:id/resolve', authenticate, requireModuleAccess('crm', 'Edit'), [body('Resolution_Notes').notEmpty()], async (req, res) => {
+  // Real, previously-broken bug: this validator was declared but never
+  // enforced — a missing Resolution_Notes still resolved the feedback
+  // with a null note instead of 400ing.
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
     const [row] = await db('tbl_customer_feedback').where({ Feedback_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Resolved', Resolution_Notes: req.body.Resolution_Notes }).returning('*');

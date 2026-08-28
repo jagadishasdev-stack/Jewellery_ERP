@@ -83,6 +83,11 @@ router.post('/reorder-requests', authenticate, requireModuleAccess('reorder_rfid
 });
 
 router.put('/reorder-requests/:id', authenticate, requireModuleAccess('reorder_rfid_card_charges', 'Edit'), [body('Status').isIn(['Pending', 'Ordered', 'Received', 'Cancelled'])], async (req, res) => {
+  // Real, previously-broken bug: this validator was declared but never
+  // enforced — an out-of-enum Status was accepted with 200 and persisted
+  // straight to the DB.
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
     const [row] = await db('tbl_reorder_request').where({ Request_ID: req.params.id, Tenant_ID: req.user.tenantId }).update(req.body).returning('*');
     if (!row) return sendError(res, 404, 'Reorder request not found.');

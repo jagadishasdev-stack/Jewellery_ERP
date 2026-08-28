@@ -60,10 +60,19 @@ router.post('/customer-insurance', authenticate, requireModuleAccess('insurance_
 });
 
 router.post('/customer-insurance/:id/claim', authenticate, requireModuleAccess('insurance_amc', 'Approve'), [body('Claim_Amount').isFloat({ gt: 0 })], async (req, res) => {
+  // Real, previously-broken bugs found by writing a real test: the
+  // Claim_Amount>0 validator was declared but never enforced (a 0 or
+  // missing amount was silently accepted), and there was no guard
+  // against filing a second claim against an already-Claimed policy —
+  // it just silently overwrote the first claim's date/amount.
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
+    const existing = await db('tbl_customer_insurance').where({ Insurance_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!existing) return sendError(res, 404, 'Not found.');
+    if (existing.Status === 'Claimed') return sendError(res, 400, 'A claim has already been filed against this policy.');
     const [row] = await db('tbl_customer_insurance').where({ Insurance_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Claimed', Claim_Date: dayjs().format('YYYY-MM-DD'), Claim_Amount: req.body.Claim_Amount }).returning('*');
-    if (!row) return sendError(res, 404, 'Not found.');
     return sendSuccess(res, row, 'Claim recorded.');
   } catch (err) { return sendError(res, 500, 'Failed to record claim.'); }
 });
