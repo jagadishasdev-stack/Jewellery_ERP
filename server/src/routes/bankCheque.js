@@ -125,9 +125,17 @@ router.post('/cheques', authenticate, requireModuleAccess('bank_cheque', 'Add'),
 
 router.post('/cheques/:id/deposit', authenticate, requireModuleAccess('bank_cheque', 'Edit'), async (req, res) => {
   try {
-    const [row] = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: req.user.tenantId })
+    const cheque = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!cheque) return sendError(res, 404, 'Cheque not found.');
+    // Had no state guard at all — a cheque already Deposited/Cleared/Bounced
+    // could be re-"deposited" again, silently stamping a fresh Deposit_Date
+    // over a terminal state (e.g. wiping the fact that a Cleared cheque had
+    // already cleared, or a Bounced one had already bounced) with nothing
+    // else in the row or ledger reflecting that it happened. Only a fresh
+    // (Pending) cheque can be deposited.
+    if (cheque.Status !== 'Pending') return sendError(res, 400, `Cheque is already ${cheque.Status}; cannot deposit.`);
+    const [row] = await db('tbl_cheque_register').where('Cheque_ID', cheque.Cheque_ID)
       .update({ Status: 'Deposited', Deposit_Date: dayjs().format('YYYY-MM-DD') }).returning('*');
-    if (!row) return sendError(res, 404, 'Cheque not found.');
     return sendSuccess(res, row, 'Cheque marked deposited.');
   } catch (err) { return sendError(res, 500, 'Failed to update cheque.'); }
 });
@@ -141,6 +149,13 @@ router.post('/cheques/:id/clear', authenticate, requireModuleAccess('bank_cheque
   try {
     const cheque = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: tenantId }).first();
     if (!cheque) return sendError(res, 404, 'Cheque not found.');
+    // Had no state guard — clearing an already-Cleared cheque a second time
+    // would post ANOTHER Dr-bank/Cr-cheque-in-hand journal for the same
+    // cheque, double-counting real money into Current_Balance/Trial
+    // Balance; clearing an already-Bounced cheque would move money for a
+    // cheque that never actually came good. Only an open (Pending or
+    // Deposited) cheque can clear.
+    if (!['Pending', 'Deposited'].includes(cheque.Status)) return sendError(res, 400, `Cheque is already ${cheque.Status}; cannot clear this cheque.`);
     const [row] = await db('tbl_cheque_register').where('Cheque_ID', cheque.Cheque_ID)
       .update({ Status: 'Cleared', Clearing_Date: dayjs().format('YYYY-MM-DD'), Modified_Date: new Date() }).returning('*');
     if (cheque.Cheque_Type === 'Received' && cheque.Account_ID) {
@@ -168,10 +183,27 @@ router.post('/cheques/:id/clear', authenticate, requireModuleAccess('bank_cheque
 });
 
 router.post('/cheques/:id/bounce', authenticate, requireModuleAccess('bank_cheque', 'Edit'), [body('Bounce_Charge').optional().isFloat({ min: 0 })], async (req, res) => {
+  // Declared a Bounce_Charge>=0 validator but never actually checked it —
+  // validationResult(req) was never called here (unlike every other
+  // validated route in this file), so a negative Bounce_Charge sailed
+  // straight through to the DB.
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
-    const [row] = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: req.user.tenantId })
+    const cheque = await db('tbl_cheque_register').where({ Cheque_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!cheque) return sendError(res, 404, 'Cheque not found.');
+    // Had no state guard at all — an already-Bounced cheque could be
+    // "bounced" again (silently overwriting Bounce_Charge), and worse, an
+    // already-Cleared cheque could be flipped to Bounced without reversing
+    // the Dr-bank/Cr-cheque-in-hand journal /clear posted — corrupting the
+    // bank's Current_Balance/ledger with no trace. A real "cleared, then
+    // later returned by the bank" flow needs its own reversal journal
+    // (a business-policy decision on how that reversal should be booked,
+    // not a quick mechanical fix) — this guard only blocks the silent
+    // corruption; it doesn't attempt that reversal.
+    if (!['Pending', 'Deposited'].includes(cheque.Status)) return sendError(res, 400, `Cheque is already ${cheque.Status}; cannot bounce.`);
+    const [row] = await db('tbl_cheque_register').where('Cheque_ID', cheque.Cheque_ID)
       .update({ Status: 'Bounced', Bounce_Charge: req.body.Bounce_Charge || 0, Modified_Date: new Date() }).returning('*');
-    if (!row) return sendError(res, 404, 'Cheque not found.');
     return sendSuccess(res, row, 'Cheque marked bounced.');
   } catch (err) { return sendError(res, 500, 'Failed to update cheque.'); }
 });
