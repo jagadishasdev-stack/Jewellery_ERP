@@ -172,11 +172,15 @@ router.post('/purities', authenticate, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
+    // Real, previously-broken bug: tbl_purity_master has no Created_By
+    // column (unlike every other master table this file manages) — this
+    // route unconditionally tried to insert one anyway, so EVERY call to
+    // this endpoint 500'd, for every tenant, always. Found by writing a
+    // real test against the live schema, not by inspection alone.
     const [row] = await db('tbl_purity_master').insert({
       ...req.body,
       Metal_Type: req.body.Metal_Type || 'Gold',
       Is_Active: true,
-      Created_By: req.user.username,
     }).returning('*');
     return sendSuccess(res, row, 'Purity created.', 201);
   } catch (err) {
@@ -288,9 +292,13 @@ router.post('/making-charges', authenticate, async (req, res) => {
 
 router.put('/making-charges/:id', authenticate, async (req, res) => {
   try {
+    // Real, previously-broken bug: unlike item-types/designs/gemstones,
+    // tbl_making_charge_master has no Modified_Date column — this route
+    // copied that same update shape from the others without checking,
+    // so every edit to an existing making charge 500'd, always.
     const [updated] = await db('tbl_making_charge_master')
       .where({ MC_ID: req.params.id, Tenant_ID: req.user.tenantId })
-      .update({ ...req.body, Modified_Date: new Date() })
+      .update({ ...req.body })
       .returning('*');
     if (!updated) return sendError(res, 404, 'Making charge not found.');
     return sendSuccess(res, updated);

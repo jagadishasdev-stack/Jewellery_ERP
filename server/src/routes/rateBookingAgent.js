@@ -78,6 +78,11 @@ router.post('/rate-bookings', authenticate, requireModuleAccess('rate_booking_ag
 // POST /:id/utilize — links a booking to the sale that used it, so a
 // billing screen can pull the locked rate instead of the day's current one.
 router.post('/rate-bookings/:id/utilize', authenticate, requireModuleAccess('rate_booking_agent_commission', 'Edit'), [body('Utilized_Sale_ID').notEmpty()], async (req, res) => {
+  // Real, previously-broken bug: declared but never enforced — an empty
+  // body silently marked the booking Utilized with Utilized_Sale_ID left
+  // null instead of 400ing.
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
     const booking = await db('tbl_rate_booking').where({ Booking_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
     if (!booking) return sendError(res, 404, 'Booking not found.');
@@ -128,9 +133,13 @@ router.post('/commissions', authenticate, requireModuleAccess('rate_booking_agen
 
 router.post('/commissions/:id/pay', authenticate, requireModuleAccess('rate_booking_agent_commission', 'Approve'), [body('Payment_Reference').optional()], async (req, res) => {
   try {
+    const existing = await db('tbl_agent_commission_transactions').where({ Txn_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!existing) return sendError(res, 404, 'Commission record not found.');
+    // Was previously unguarded — paying an already-Paid commission again
+    // silently returned 200 and overwrote Payment_Reference.
+    if (existing.Status === 'Paid') return sendError(res, 400, 'This commission has already been paid.');
     const [row] = await db('tbl_agent_commission_transactions').where({ Txn_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Paid', Paid_Date: dayjs().format('YYYY-MM-DD'), Payment_Reference: req.body.Payment_Reference || null }).returning('*');
-    if (!row) return sendError(res, 404, 'Commission record not found.');
     return sendSuccess(res, row, 'Commission marked paid.');
   } catch (err) { return sendError(res, 500, 'Failed to update commission.'); }
 });

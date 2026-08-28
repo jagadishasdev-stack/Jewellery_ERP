@@ -43,6 +43,12 @@ router.get('/einvoice', authenticate, requireModuleAccess('hsn_einvoice_loyalty'
 // contract to call today, and is the one place to plug an actual GSP client
 // in later without touching any caller.
 router.post('/einvoice/generate', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'Add'), [body('Sale_ID').notEmpty()], async (req, res) => {
+  // Real, previously-broken bug: this validator was declared but never
+  // enforced (no other route in this file makes that mistake) — a missing
+  // Sale_ID fell straight through to a raw Knex "undefined binding" 500
+  // instead of a clean 400/422.
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
   try {
     const sale = await db('tbl_sales_header').where({ Sale_ID: req.body.Sale_ID, Tenant_ID: tenantId }).first();
@@ -64,10 +70,19 @@ router.post('/einvoice/generate', authenticate, requireModuleAccess('hsn_einvoic
 });
 
 router.post('/einvoice/:id/cancel', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'Delete'), [body('Cancellation_Reason').notEmpty()], async (req, res) => {
+  // Same class of bug as /einvoice/generate above — declared but never
+  // enforced, so a missing Cancellation_Reason silently cancelled with a
+  // null reason instead of 400ing.
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
+    const existing = await db('tbl_einvoice_log').where({ Log_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!existing) return sendError(res, 404, 'e-Invoice log entry not found.');
+    // Was previously unguarded — cancelling an already-cancelled entry
+    // silently overwrote its Cancellation_Reason a second time.
+    if (existing.Status === 'Cancelled') return sendError(res, 400, 'This e-Invoice entry is already cancelled.');
     const [row] = await db('tbl_einvoice_log').where({ Log_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: 'Cancelled', Cancelled_Date: new Date(), Cancellation_Reason: req.body.Cancellation_Reason }).returning('*');
-    if (!row) return sendError(res, 404, 'e-Invoice log entry not found.');
     return sendSuccess(res, row, 'e-Invoice cancelled.');
   } catch (err) { return sendError(res, 500, 'Failed to cancel e-invoice.'); }
 });

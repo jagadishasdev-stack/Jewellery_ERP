@@ -101,6 +101,15 @@ async function teardown() {
   // (tbl_agent_commission_transactions) cascades fine from Agent_ID, but
   // that's moot if the agent row itself never gets deleted.
   await db('tbl_agent_master').where({ Tenant_ID: TENANT_ID }).del();
+  // Same gap as tbl_accounting_journal above — tbl_catalog_orders (productCatalog.js)
+  // has no FK to tbl_tenant_master either, and tbl_product_images' own FK to
+  // tbl_ornament_master is ON DELETE SET NULL rather than CASCADE, so it never
+  // gets cleaned up just by deleting ornaments below. Confirmed by real leakage:
+  // orphaned rows from earlier catalog test runs survived teardown and broke
+  // later runs' Article_Number-scoped assertions. tbl_catalog_order_items
+  // cascades from tbl_catalog_orders, so deleting the parent is enough.
+  await db('tbl_product_images').where({ Tenant_ID: TENANT_ID }).del();
+  await db('tbl_catalog_orders').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_tally_sync_log').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_tally_config').where({ Tenant_ID: TENANT_ID }).del();
   await db('tbl_financial_year_close').where({ Tenant_ID: TENANT_ID }).del();
