@@ -57,6 +57,16 @@ function parseSheet(buffer) {
 }
 
 function num(v, fallback = 0) {
+  // Real, previously-broken bug found by writing a real test: parseSheet's
+  // `defval: null` means a genuinely blank cell arrives here as `null` —
+  // and Number(null) is 0, which IS finite, so the fallback below never
+  // triggered for exactly the "cell left blank" case this function exists
+  // to handle. Two real consequences: GST_Percentage's intended "default
+  // to 3% when blank" silently imported 0% instead, and purity's
+  // "Karat/Percentage must both be numbers" hard-reject
+  // (num(r['Karat'], NaN), checked via Number.isFinite) silently accepted
+  // a blank Karat/Percentage as 0/0 instead of skipping the row.
+  if (v === null || v === undefined || v === '') return fallback;
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
