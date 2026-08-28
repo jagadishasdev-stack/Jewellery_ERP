@@ -12,6 +12,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId;
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -36,7 +37,7 @@ async function createOrnament(overrides = {}) {
   return res.body.data;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => dayjs().format('YYYY-MM-DD');
 
 test('GET /api/tally/export/ledgers returns a well-formed Tally ledger-import XML', async () => {
   const res = await request(app).get('/api/tally/export/ledgers').set(auth());

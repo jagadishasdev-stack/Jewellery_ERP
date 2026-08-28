@@ -15,6 +15,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId, branchA, branchB, staffToken, staffUserId;
 const authAs = (branchId) => ({ Authorization: `Bearer ${token}`, ...(branchId ? { 'X-Branch-ID': branchId } : {}) });
@@ -74,7 +75,7 @@ test('a restricted-access user cannot bypass branch isolation via ?branchId= on 
   // instead of the X-Branch-ID header — no requireValidBranch access
   // check at all. Confirms that hole is closed: the query param is now
   // ignored entirely, and only the header (still access-checked) matters.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(branchA, 12000, 'QARPT-SS-A1');
 
   const viaQueryParam = await request(app).get('/api/reports/sales-summary')
@@ -89,7 +90,7 @@ test('a restricted-access user cannot bypass branch isolation via ?branchId= on 
 });
 
 test('GET /api/reports/sales-summary via X-Branch-ID actually narrows to that branch', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(branchA, 25000, 'QARPT-SS-A2');
   await sellOneItem(branchB, 40000, 'QARPT-SS-B1');
 
@@ -100,7 +101,7 @@ test('GET /api/reports/sales-summary via X-Branch-ID actually narrows to that br
 });
 
 test('GET /api/reports/financial (P&L + balance sheet + stock value) is branch-scoped, not tenant-wide', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(branchA, 50000, 'QARPT-FIN-A1');
   await sellOneItem(branchB, 70000, 'QARPT-FIN-B1');
 
@@ -115,7 +116,7 @@ test('GET /api/reports/financial (P&L + balance sheet + stock value) is branch-s
 });
 
 test('GET /api/reports/item-wise-sales excludes the other branch\'s sales', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(branchA, 18000, 'QARPT-IWS-A1');
   const saleB = await sellOneItem(branchB, 22000, 'QARPT-IWS-B1');
 
@@ -129,7 +130,7 @@ test('GET /api/reports/item-wise-sales excludes the other branch\'s sales', asyn
 });
 
 test('GET /api/reports/closing-report (service-layer, not a direct route query) scopes stock movement to the branch', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(branchA, 15000, 'QARPT-CLR-A1');
   await sellOneItem(branchB, 15000, 'QARPT-CLR-B1');
 
@@ -157,7 +158,7 @@ test('a branch-restricted user is rejected from requesting a branch they were ne
 });
 
 test('"All Branches" still returns the complete tenant-wide figure on a newly-fixed route (nothing silently excluded)', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   const invA = await sellOneItem(branchA, 9000, 'QARPT-ALL-A1');
   const invB = await sellOneItem(branchB, 9000, 'QARPT-ALL-B1');
 

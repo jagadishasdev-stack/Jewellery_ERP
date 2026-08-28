@@ -8,6 +8,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, karigarId, branchA;
 const authAs = (branchId) => ({ Authorization: `Bearer ${token}`, ...(branchId ? { 'X-Branch-ID': branchId } : {}) });
@@ -34,7 +35,7 @@ afterAll(async () => {
 
 test('a return inherits its Branch_ID from the parent issue, not the caller\'s current context', async () => {
   const issue = await request(app).post('/api/karigar/issue').set(authAs(branchA)).send({
-    Karigar_ID: karigarId, Gold_Weight_Issued: 50, Gold_Rate_At_Issue: 6000, Issue_Date: new Date().toISOString().slice(0, 10),
+    Karigar_ID: karigarId, Gold_Weight_Issued: 50, Gold_Rate_At_Issue: 6000, Issue_Date: dayjs().format('YYYY-MM-DD'),
   });
   expect(issue.body.data.Branch_ID).toBe(branchA);
 
@@ -42,7 +43,7 @@ test('a return inherits its Branch_ID from the parent issue, not the caller\'s c
   // still inherit branchA from the issue, not come back branchless.
   const ret = await request(app).post('/api/karigar/return').set(authAs(null)).send({
     Issue_ID: issue.body.data.Issue_ID, Gross_Weight_Returned: 48, Net_Gold_Weight: 47,
-    Return_Date: new Date().toISOString().slice(0, 10),
+    Return_Date: dayjs().format('YYYY-MM-DD'),
   });
   expect(ret.status).toBe(201);
   expect(ret.body.data.Branch_ID).toBe(branchA);
@@ -54,7 +55,7 @@ test('CRITICAL (cross-tenant): a return cannot be processed against a REAL OTHER
 
   const res = await request(app).post('/api/karigar/return').set(authAs()).send({
     Issue_ID: dljIssue.Issue_ID, Gross_Weight_Returned: 1, Net_Gold_Weight: 1,
-    Return_Date: new Date().toISOString().slice(0, 10),
+    Return_Date: dayjs().format('YYYY-MM-DD'),
   });
   expect(res.status).toBe(404);
 

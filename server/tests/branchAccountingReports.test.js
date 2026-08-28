@@ -13,6 +13,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId, branchA, branchB;
 const authAs = (branchId) => ({ Authorization: `Bearer ${token}`, ...(branchId ? { 'X-Branch-ID': branchId } : {}) });
@@ -57,7 +58,7 @@ test('a sale\'s accounting journal is stamped with the branch it was made in', a
 });
 
 test('GET /api/accounting/day-book filters vouchers by branch', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   const saleA = await sellOneItem(branchA, 8000, 'QAACC-DB-A1');
   const saleB = await sellOneItem(branchB, 6000, 'QAACC-DB-B1');
 
@@ -68,7 +69,7 @@ test('GET /api/accounting/day-book filters vouchers by branch', async () => {
 });
 
 test('GET /api/reports/gst-summary filters by branch without excluding anything from the total (All Branches still shows everything)', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(branchA, 20000, 'QAACC-GST-A1');
   await sellOneItem(branchB, 30000, 'QAACC-GST-B1');
 

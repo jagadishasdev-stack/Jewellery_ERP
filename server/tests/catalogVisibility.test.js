@@ -14,6 +14,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId;
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -126,7 +127,7 @@ test('POST /api/sales/create bills a catalog-hidden item completely normally —
   expect(header.Invoice_Number).toMatch(/^INV-/); // plain prefix — not treated as an accounting-book hide
   expect(header.Contains_Hidden_Stock).toBe(false);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   const itemWise = await request(app).get('/api/reports/item-wise-sales').set(auth()).query({ fromDate: today, toDate: today });
   const row = itemWise.body.data.find(r => r.Type_Name === 'QA Catalog Hidden Item');
   expect(row).toBeDefined();

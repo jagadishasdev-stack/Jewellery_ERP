@@ -8,6 +8,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId;
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -42,7 +43,7 @@ async function sellOneItem(price, articleNumber, customerId) {
 }
 
 test('gst-summary splits CGST/SGST separately from a single blended total, with no hardcoded gstRate', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(50000, 'QAGSTSPLIT-1');
 
   const res = await request(app).get('/api/reports/gst-summary').set(auth()).query({ fromDate: today, toDate: today });
@@ -56,7 +57,7 @@ test('gst-summary splits CGST/SGST separately from a single blended total, with 
 });
 
 test('gst-summary splits B2B (customer has a GSTIN) from B2C', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   const b2bCustomer = await request(app).post('/api/customers').set(auth()).send({
     Customer_Name: 'QA GST B2B Customer', Mobile_1: '9992223331', GST_No: '29ABCDE1234F1Z5',
   });

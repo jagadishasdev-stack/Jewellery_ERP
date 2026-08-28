@@ -25,6 +25,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId, hiddenLocationId;
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -113,7 +114,7 @@ test('an Official-mode hidden-stock sale is excluded from the Official sales-by-
   });
   expect(visibleSale.status).toBe(201);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   const officialItemWise = await request(app).get('/api/reports/item-wise-sales').set(auth()).query({ fromDate: today, toDate: today });
   const qaRow = officialItemWise.body.data.find((r) => r.Type_Name === 'QA Report Item');
   // Only the 7000 visible-item sale should count — the 15000 hidden-item

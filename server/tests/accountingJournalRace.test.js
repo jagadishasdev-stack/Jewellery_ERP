@@ -12,6 +12,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, customerId;
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -38,7 +39,7 @@ async function latestJournal(reference) {
 
 test('POST /api/pawnbroking/loans posts its disbursement journal before the response returns', async () => {
   const res = await request(app).post('/api/pawnbroking/loans').set(auth()).send({
-    Customer_ID: customerId, Loan_Date: new Date().toISOString().slice(0, 10),
+    Customer_ID: customerId, Loan_Date: dayjs().format('YYYY-MM-DD'),
     Loan_Amount: 50000, Interest_Rate_Pct: 2,
     items: [{ Item_Description: 'Gold Chain', Gross_Weight: 20, Net_Weight: 18 }],
   });
@@ -52,7 +53,7 @@ test('POST /api/pawnbroking/loans posts its disbursement journal before the resp
 
 test('POST /api/pawnbroking/loans/:id/transactions posts its journal before the response returns', async () => {
   const loan = await request(app).post('/api/pawnbroking/loans').set(auth()).send({
-    Customer_ID: customerId, Loan_Date: new Date().toISOString().slice(0, 10),
+    Customer_ID: customerId, Loan_Date: dayjs().format('YYYY-MM-DD'),
     Loan_Amount: 30000, Interest_Rate_Pct: 2,
     items: [{ Item_Description: 'Gold Ring', Gross_Weight: 5, Net_Weight: 4.5 }],
   });
@@ -105,7 +106,7 @@ test('POST /api/karigar/settle posts its wage journal before the response return
 });
 
 test('day close posts its cash-expense journal before the response returns', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   const res = await request(app).post('/api/day-close/close').set(auth()).send({
     cash_in_hand: 5000, verified_cash: 5000, cash_expenses: 300,
   });

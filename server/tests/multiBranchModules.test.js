@@ -11,6 +11,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId, karigarId, branchA, branchB;
 const withBranchHeader = (branchId) => ({ Authorization: `Bearer ${token}`, ...(branchId ? { 'X-Branch-ID': branchId } : {}) });
@@ -59,7 +60,7 @@ test('Purchase: creating under Branch A stamps both the purchase header and its 
 
 test('Karigar Issue: stamped with the active branch, and /issues is isolated per branch', async () => {
   const res = await request(app).post('/api/karigar/issue').set(withBranchHeader(branchA)).send({
-    Karigar_ID: karigarId, Gold_Weight_Issued: 50, Gold_Rate_At_Issue: 6000, Issue_Date: new Date().toISOString().slice(0, 10),
+    Karigar_ID: karigarId, Gold_Weight_Issued: 50, Gold_Rate_At_Issue: 6000, Issue_Date: dayjs().format('YYYY-MM-DD'),
   });
   expect(res.status).toBe(201);
   expect(res.body.data.Branch_ID).toBe(branchA);
@@ -90,7 +91,7 @@ test('Approval Issue: stamped with the active branch, and /issues is isolated pe
   });
 
   const res = await request(app).post('/api/approval/issue').set(withBranchHeader(branchA)).send({
-    Issue_Date: new Date().toISOString().slice(0, 10),
+    Issue_Date: dayjs().format('YYYY-MM-DD'),
     items: [{ Ornament_ID: ornament.body.data.Ornament_ID }],
   });
   expect(res.status).toBe(201);

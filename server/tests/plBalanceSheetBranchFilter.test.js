@@ -10,6 +10,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId, branchA, branchB;
 const authAs = (branchId) => ({ Authorization: `Bearer ${token}`, ...(branchId ? { 'X-Branch-ID': branchId } : {}) });
@@ -47,7 +48,7 @@ async function sellOneItem(branchId, price, articleNumber) {
 }
 
 test('P&L for one branch excludes another branch\'s income, and "All Branches" still sees everything', async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = dayjs().format('YYYY-MM-DD');
   await sellOneItem(branchA, 25000, 'QAPL-A1');
   await sellOneItem(branchB, 40000, 'QAPL-B1');
 

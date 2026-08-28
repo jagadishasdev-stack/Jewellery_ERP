@@ -13,6 +13,7 @@ const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
+const dayjs = require('dayjs');
 
 let tenant, token, typeId, floorId, counterId, trayId;
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -47,7 +48,7 @@ async function createOrnament(overrides = {}) {
   return res.body.data;
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => dayjs().format('YYYY-MM-DD');
 
 test('every new item defaults to Stock_Classification=Normal', async () => {
   const ornament = await createOrnament();
