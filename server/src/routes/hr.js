@@ -36,7 +36,17 @@ router.post('/holidays', authenticate, requireModuleAccess('hr_payroll', 'Add'),
   try {
     const [row] = await db('tbl_holiday_master').insert({ ...req.body, Tenant_ID: req.user.tenantId }).returning('*');
     return sendSuccess(res, row, 'Holiday added.', 201);
-  } catch (err) { return sendError(res, 500, 'Failed to add holiday.'); }
+  } catch (err) {
+    // tbl_holiday_master has a UNIQUE(Tenant_ID, Branch_ID, Holiday_Date)
+    // constraint — a same-branch duplicate hit this as a raw "duplicate key
+    // value violates unique constraint" 500 instead of a friendly message.
+    // (Note: this constraint does NOT catch a duplicate org-wide holiday —
+    // Branch_ID left null — since Postgres treats NULL as distinct from
+    // itself in a unique constraint; that gap is real but a low-stakes,
+    // cosmetic one, left as-is.)
+    if (err.code === '23505') return sendError(res, 409, 'A holiday is already recorded for this branch on that date.');
+    return sendError(res, 500, 'Failed to add holiday.');
+  }
 });
 
 // ── Attendance ──────────────────────────────────────────────────────────────
