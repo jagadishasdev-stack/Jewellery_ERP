@@ -187,7 +187,21 @@ router.post('/stock', upload.single('file'), authenticate, requirePermission('te
         // abort every other valid row in the file — caught here, not just
         // at the outer try/catch, precisely because that failure mode
         // actually happened during testing (see excel-import test notes).
-        skipped.push(`Row ${rowNum} (${articleNumber}): SKIPPED — ${insErr.message}`);
+        //
+        // Article_Number carries a schema-level GLOBAL unique constraint
+        // (not scoped to Tenant_ID — see migrations/002_create_tenant_
+        // tables.js), but the dup-check above only looks within this
+        // tenant's own rows. So a code free for this tenant can still
+        // collide with a completely unrelated tenant's existing article
+        // and fail here — safe (the row is skipped, nothing is
+        // overwritten) but confusing if reported as a raw DB error. Give
+        // it the same friendly message as an ordinary same-tenant
+        // duplicate rather than surfacing Postgres's own wording.
+        if (insErr.code === '23505') {
+          skipped.push(`Row ${rowNum} (${articleNumber}): SKIPPED — Article Number already exists, not overwritten.`);
+        } else {
+          skipped.push(`Row ${rowNum} (${articleNumber}): SKIPPED — ${insErr.message}`);
+        }
       }
     }
 
@@ -488,13 +502,22 @@ router.post('/vendors', upload.single('file'), authenticate, requirePermission('
       if (existing) { skipped.push(`Row ${rowNum} (${name}): SKIPPED — mobile ${mobile} already exists, not overwritten.`); continue; }
 
       const prefix = vendorType === 'Supplier' ? 'SUP' : 'KAR';
-      const lastOfType = await db('tbl_vendor_master').where({ Tenant_ID: tenantId, Vendor_Type: vendorType }).count('Vendor_ID as c').first();
-      // lastOfType is a fresh COUNT run on every iteration, taken AFTER the
-      // previous row in this same batch already committed its insert — so
-      // it already reflects rows inserted earlier in this loop. Adding
-      // `imported` on top here would double-count and skip numbers
-      // (SUP1, SUP3, SUP5...) instead of a clean sequence.
-      const vendorCode = `${prefix}${(parseInt(lastOfType.c) || 0) + 1}`;
+      // Vendor_Code carries a schema-level GLOBAL unique constraint (not
+      // scoped to Tenant_ID — see migrations/002_create_tenant_tables.js),
+      // so the next number has to be derived from every tenant's usage of
+      // this prefix, not just this tenant's own rows. A per-tenant COUNT
+      // here would make any two tenants' first "Supplier" row both compute
+      // "SUP1", and whichever inserted second would fail with a raw
+      // duplicate-key error for a reason that has nothing to do with what
+      // it did. This is a fresh query on every iteration, taken AFTER the
+      // previous row in this same batch already committed its insert, so
+      // it already reflects rows inserted earlier in this loop.
+      const existingCodes = await db('tbl_vendor_master').where('Vendor_Code', 'like', `${prefix}%`).pluck('Vendor_Code');
+      const maxSuffix = existingCodes.reduce((max, code) => {
+        const n = parseInt(code.slice(prefix.length), 10);
+        return Number.isFinite(n) && n > max ? n : max;
+      }, 0);
+      const vendorCode = `${prefix}${maxSuffix + 1}`;
 
       try {
         await db('tbl_vendor_master').insert({
@@ -513,7 +536,11 @@ router.post('/vendors', upload.single('file'), authenticate, requirePermission('
         });
         imported++;
       } catch (insErr) {
-        skipped.push(`Row ${rowNum} (${name}): SKIPPED — ${insErr.message}`);
+        if (insErr.code === '23505') {
+          skipped.push(`Row ${rowNum} (${name}): SKIPPED — vendor code ${vendorCode} was just taken by another import running at the same time; please re-run to retry this row.`);
+        } else {
+          skipped.push(`Row ${rowNum} (${name}): SKIPPED — ${insErr.message}`);
+        }
       }
     }
 

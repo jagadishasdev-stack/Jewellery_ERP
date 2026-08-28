@@ -291,32 +291,23 @@ describe('POST /api/excel-import/vendors', () => {
   });
 
   /**
-   * REAL FINDING, reproduced directly against the actual shared dev DB, not
-   * fabricated: tbl_vendor_master.Vendor_Code has a single-column GLOBAL
-   * UNIQUE constraint (`tbl_vendor_master_vendor_code_unique`, see
+   * FIXED. tbl_vendor_master.Vendor_Code has a single-column GLOBAL UNIQUE
+   * constraint (`tbl_vendor_master_vendor_code_unique`, see
    * migrations/002_create_tenant_tables.js) — it is NOT scoped to
-   * Tenant_ID. But the route's own auto-numbering only counts vendors OF
-   * THE SAME TENANT:
-   *   .where({ Tenant_ID: tenantId, Vendor_Type: vendorType }).count(...)
-   * So the FIRST "Supplier" row ANY tenant ever imports always computes
-   * Vendor_Code "SUP1", the second always "SUP2" — regardless of what
-   * codes other tenants already hold. Confirmed directly against this dev
-   * DB before writing this test: a different real tenant ('TEST_TENANT')
-   * already owns SUP1/SUP2/SUP3, which is exactly why the happy-path test
-   * above had to avoid "Supplier" entirely (it deterministically fails
-   * here, every time, for any tenant, until that ambient data changes).
-   * This test is self-healing so it keeps proving the bug even if
-   * TEST_TENANT's rows are ever cleaned up: it checks whether "SUP1" is
-   * already taken ambiently (it is, today) and only seeds its own
-   * throwaway tenant+vendor row with that exact code if it isn't. Either
-   * way, the mechanism demonstrated is identical: QATEST's own counter
-   * computes "SUP1" for its first Supplier (0 Suppliers of its own so
-   * far), a DIFFERENT tenant already owns "SUP1", insert fails. End result
-   * is not data corruption — the row is skipped — but it is skipped via a
-   * raw "duplicate key value violates unique constraint" DB error instead
-   * of any validation message, for a tenant that did nothing wrong.
+   * Tenant_ID. The route used to auto-number by counting vendors OF THE
+   * SAME TENANT only, so the FIRST "Supplier" row ANY tenant ever imported
+   * always computed Vendor_Code "SUP1" regardless of what codes other
+   * tenants already held — confirmed directly against this dev DB, where a
+   * real pre-existing tenant ('TEST_TENANT') already owns SUP1/SUP2/SUP3.
+   * The route now derives the next number from the highest suffix ANY
+   * tenant has used for that prefix, so a fresh tenant's first "Supplier"
+   * import lands on a genuinely free code instead of colliding with an
+   * unrelated tenant's existing one. This test seeds a throwaway
+   * "SUP1"-owning row (if "SUP1" isn't already ambiently taken) purely to
+   * force the scenario deterministically, then asserts the import now
+   * succeeds and lands on a code that isn't "SUP1".
    */
-  test('BUG (flagged for review): Vendor_Code is a GLOBAL unique column but generated per-tenant, so a fresh tenant\'s first Supplier row can collide with a completely unrelated tenant\'s existing vendor', async () => {
+  test('imports a Supplier row with a Vendor_Code that does not collide with an unrelated tenant already holding SUP1', async () => {
     const existingSup1 = await db('tbl_vendor_master').where('Vendor_Code', 'SUP1').first();
     let seeded = false;
 
@@ -334,7 +325,7 @@ describe('POST /api/excel-import/vendors', () => {
         await db('tbl_vendor_master').insert({
           Tenant_ID: OTHER_TENANT_ID,
           Vendor_Type: 'Supplier',
-          Vendor_Code: 'SUP1', // exactly what QATEST's own counter will independently compute below, since QATEST has 0 Suppliers of its own
+          Vendor_Code: 'SUP1', // what QATEST's OLD per-tenant counter would have independently computed too, since QATEST has 0 Suppliers of its own
           Vendor_Name: 'Other Tenant Existing Supplier',
           Mobile_1: '9700000099',
           Is_Active: true,
@@ -342,7 +333,7 @@ describe('POST /api/excel-import/vendors', () => {
       }
       // else: "SUP1" is already owned by a real, pre-existing tenant
       // ('TEST_TENANT' as of this writing) — no seeding needed, the
-      // collision this test demonstrates already exists ambiently.
+      // ambient collision this test guards against already exists.
 
       const res = await post('vendors').attach(
         'file',
@@ -350,12 +341,13 @@ describe('POST /api/excel-import/vendors', () => {
         'vendors.xlsx'
       );
 
-      expect(res.body.data.imported).toBe(0); // NOT imported — collided with a totally unrelated tenant's vendor code
-      expect(res.body.data.skipped).toBe(1);
-      expect(res.body.data.errors[0]).toMatch(/duplicate key value violates unique constraint/);
+      expect(res.body.data.imported).toBe(1);
+      expect(res.body.data.skipped).toBe(0);
 
       const mine = await db('tbl_vendor_master').where({ Tenant_ID: tenant.tenantId, Mobile_1: '9800000099' }).first();
-      expect(mine).toBeFalsy(); // this tenant's own supplier list has no bearing on why this failed
+      expect(mine).toBeTruthy();
+      expect(mine.Vendor_Code).toMatch(/^SUP\d+$/);
+      expect(mine.Vendor_Code).not.toBe('SUP1'); // must not collide with the unrelated tenant's existing code
     } finally {
       if (seeded) {
         await db('tbl_vendor_master').where({ Tenant_ID: OTHER_TENANT_ID }).del();
@@ -541,25 +533,31 @@ describe('POST /api/excel-import/stock', () => {
   });
 
   /**
-   * REAL FINDING, not a fabricated edge case: tbl_ornament_master.Article_Number
-   * has a single-column UNIQUE constraint at the DB level (see
-   * src/db/migrations/002_create_tenant_tables.js) — it is NOT scoped to
-   * Tenant_ID. But the route's own duplicate check (a few lines above the
-   * insert) IS scoped to Tenant_ID:
+   * FIXED (partially — see note). tbl_ornament_master.Article_Number has a
+   * single-column UNIQUE constraint at the DB level (see src/db/migrations/
+   * 002_create_tenant_tables.js) — it is NOT scoped to Tenant_ID. But the
+   * route's own duplicate check (a few lines above the insert) IS scoped to
+   * Tenant_ID:
    *   .where({ Tenant_ID: tenantId, Article_Number: articleNumber })
    * So if a different tenant already owns that exact Article_Number, this
    * tenant's own "does it already exist for ME" check finds nothing, the
    * code proceeds to insert, and the DB itself rejects it with a duplicate
-   * key error — caught by the inner try/catch and reported as a generic
-   * "SKIPPED — duplicate key value violates unique constraint" row error,
-   * NOT the friendly "Article Number already exists, not overwritten"
-   * message a same-tenant duplicate gets. End result is still safe (no data
-   * corruption, the row is skipped) but the reported reason is misleading —
-   * it reads like a DB malfunction, not an expected duplicate. Flagging for
-   * review: Article_Number's uniqueness is effectively cross-tenant even
-   * though the app is otherwise fully tenant-scoped.
+   * key error. The insert is still safe (no data corruption, the row is
+   * simply skipped) — that part was never broken — but it used to be
+   * reported via Postgres's own raw "duplicate key value violates unique
+   * constraint" wording instead of the friendly "Article Number already
+   * exists, not overwritten" message a same-tenant duplicate gets. The
+   * route now catches this specific case (Postgres error code 23505) and
+   * reports the same friendly message either way.
+   * NOTE: this does not fix the underlying design gap — Article_Number's
+   * uniqueness is still effectively cross-tenant even though the app is
+   * otherwise fully tenant-scoped, so two unrelated tenants still cannot
+   * both use the same article number. That would require loosening the DB
+   * constraint to (Tenant_ID, Article_Number), which is a real schema
+   * migration and a business-policy call, not a quick fix — left for a
+   * deliberate decision, not applied here.
    */
-  test('BUG (flagged for review): a cross-tenant Article_Number collision is skipped via a raw DB error, not the friendly duplicate message, because the app-level dup check is Tenant_ID-scoped but the DB unique constraint is not', async () => {
+  test('a cross-tenant Article_Number collision is skipped via the same friendly duplicate message as a same-tenant one', async () => {
     const sharedArt = `QAXART-XTEN-${RUN}`;
 
     try {
@@ -590,13 +588,13 @@ describe('POST /api/excel-import/stock', () => {
         'stock.xlsx'
       );
 
-      // Current (buggy) behavior: NOT caught by the app's own "already
-      // exists" check (that check only looked at THIS tenant), so it reaches
-      // the DB insert and fails there instead.
+      // NOT caught by the app's own "already exists" check (that check only
+      // looked at THIS tenant), so it reaches the DB insert and is rejected
+      // there instead — but the route now recognizes that specific failure
+      // (23505) and reports it with the same friendly wording.
       expect(res.body.data.imported).toBe(0);
       expect(res.body.data.skipped).toBe(1);
-      expect(res.body.data.errors[0]).not.toMatch(/already exists, not overwritten/); // did NOT get the friendly message
-      expect(res.body.data.errors[0]).toMatch(/SKIPPED/);
+      expect(res.body.data.errors[0]).toMatch(/already exists, not overwritten/);
 
       const mine = await db('tbl_ornament_master').where({ Tenant_ID: tenant.tenantId, Article_Number: sharedArt }).first();
       expect(mine).toBeFalsy(); // not corrupted — the row simply never landed for this tenant either
