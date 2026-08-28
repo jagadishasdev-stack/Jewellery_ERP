@@ -10,7 +10,29 @@ const dayjs = require('dayjs');
 const { authenticate, requirePermission } = require('../middleware/auth');
 
 // ── All audit routes require authentication + admin permission ─────────────────
-router.use(authenticate);
+// The file header has always said "Admin-only", and every default role
+// already carries a dedicated `audit` permission key (see
+// src/db/seeds/001_seed_master_data.js — true for Super Admin/Client
+// Admin/Accountant, false for Store Manager/Sales Staff/...), but nothing
+// in this file ever actually checked it — only DELETE /sessions/:sessionId
+// had its own inline role check. Every other route (the full audit trail
+// including Old_Data/New_Data change history, active sessions with IP/
+// device info, login history, per-user activity) was reachable by ANY
+// authenticated user of ANY role in the tenant. Gating the whole router
+// here, once, rather than adding it to each route individually.
+router.use(authenticate, requirePermission('audit'));
+
+// FIXED throughout this file: every query below used to reference
+// "Created_Date" and "Device_Info" on tbl_audit_log — neither column
+// exists on the live table (confirmed via columnInfo()); the real columns
+// are "Action_Timestamp" and "Browser_Info" (this table predates the
+// Created_Date/Device_Info convention used elsewhere and was never
+// migrated to match — see migrations/004 vs. 011's own "already exists,
+// only add these 4 columns" branch). Every route touching either column —
+// which was effectively the whole file except force-logout — has always
+// 500'd for every tenant. tbl_session_master (used by /active-sessions)
+// genuinely does have its own Device_Info column — that one reference (see
+// below) was already correct and is left untouched.
 
 // ─── GET /api/audit/logs ──────────────────────────────────────────────────────
 // Full audit trail with filters
@@ -26,11 +48,11 @@ router.get('/logs', async (req, res) => {
   try {
     let qb = db('tbl_audit_log as a')
       .leftJoin('tbl_user_master as u', 'a.User_ID', 'u.User_ID')
-      .orderBy('a.Created_Date', 'desc');
+      .orderBy('a.Action_Timestamp', 'desc');
 
     if (!isSuperAdmin) qb = qb.where('a.Tenant_ID', req.user.tenantId);
-    if (fromDate) qb = qb.whereRaw(`DATE("a"."Created_Date") >= ?`, [fromDate]);
-    if (toDate)   qb = qb.whereRaw(`DATE("a"."Created_Date") <= ?`, [toDate]);
+    if (fromDate) qb = qb.whereRaw(`DATE("a"."Action_Timestamp") >= ?`, [fromDate]);
+    if (toDate)   qb = qb.whereRaw(`DATE("a"."Action_Timestamp") <= ?`, [toDate]);
     if (userId)   qb = qb.where('a.User_ID', userId);
     if (tableName) qb = qb.where('a.Table_Name', tableName);
     if (actionType) qb = qb.where('a.Action_Type', actionType);
@@ -50,7 +72,7 @@ router.get('/logs', async (req, res) => {
         'a.Log_ID', 'a.Tenant_ID', 'a.User_ID', 'a.Username', 'a.Full_Name',
         'a.Branch_ID', 'a.Table_Name', 'a.Record_ID', 'a.Action_Type',
         'a.Description', 'a.Old_Data', 'a.New_Data',
-        'a.IP_Address', 'a.Device_Info', 'a.Created_Date',
+        'a.IP_Address', 'a.Browser_Info', 'a.Action_Timestamp',
         'u.Full_Name as User_Full_Name',
       )
       .limit(parseInt(limit))
@@ -79,13 +101,13 @@ router.get('/user-activity', async (req, res) => {
         db.raw('COUNT(CASE WHEN "Action_Type" = \'DELETE\' THEN 1 END) as deletes'),
         db.raw('COUNT(CASE WHEN "Action_Type" = \'LOGIN\'  THEN 1 END) as logins'),
         db.raw('COUNT(CASE WHEN "Action_Type" = \'PRINT\'  THEN 1 END) as prints'),
-        db.raw('MAX("Created_Date") as last_activity'),
+        db.raw('MAX("Action_Timestamp") as last_activity'),
       )
       .orderBy('total_actions', 'desc');
 
     if (!isSuperAdmin) qb = qb.where('Tenant_ID', req.user.tenantId);
-    if (fromDate) qb = qb.whereRaw(`DATE("Created_Date") >= ?`, [fromDate]);
-    if (toDate)   qb = qb.whereRaw(`DATE("Created_Date") <= ?`, [toDate]);
+    if (fromDate) qb = qb.whereRaw(`DATE("Action_Timestamp") >= ?`, [fromDate]);
+    if (toDate)   qb = qb.whereRaw(`DATE("Action_Timestamp") <= ?`, [toDate]);
 
     return sendSuccess(res, await qb);
   } catch (err) {
@@ -99,7 +121,7 @@ router.get('/deleted-entries', async (req, res) => {
   try {
     let qb = db('tbl_audit_log')
       .where('Action_Type', 'DELETE')
-      .orderBy('Created_Date', 'desc')
+      .orderBy('Action_Timestamp', 'desc')
       .limit(200);
     if (!isSuperAdmin) qb = qb.where('Tenant_ID', req.user.tenantId);
     return sendSuccess(res, await qb);
@@ -114,7 +136,7 @@ router.get('/edit-history/:table/:recordId', async (req, res) => {
     const logs = await db('tbl_audit_log')
       .where({ Table_Name: req.params.table, Record_ID: req.params.recordId })
       .whereIn('Action_Type', ['INSERT', 'UPDATE', 'DELETE'])
-      .orderBy('Created_Date', 'asc');
+      .orderBy('Action_Timestamp', 'asc');
     return sendSuccess(res, logs);
   } catch (err) {
     return sendError(res, 500, 'Failed.');
@@ -167,22 +189,22 @@ router.get('/summary', async (req, res) => {
     const whereClause = isSuperAdmin ? {} : { Tenant_ID: tenantId };
 
     const [totalLogs]    = await db('tbl_audit_log').where(whereClause).count('Log_ID as c');
-    const [todayLogs]    = await db('tbl_audit_log').where(whereClause).whereRaw(`DATE("Created_Date") = ?`, [today]).count('Log_ID as c');
-    const [todayLogins]  = await db('tbl_audit_log').where({ ...whereClause, Action_Type: 'LOGIN' }).whereRaw(`DATE("Created_Date") = ?`, [today]).count('Log_ID as c');
+    const [todayLogs]    = await db('tbl_audit_log').where(whereClause).whereRaw(`DATE("Action_Timestamp") = ?`, [today]).count('Log_ID as c');
+    const [todayLogins]  = await db('tbl_audit_log').where({ ...whereClause, Action_Type: 'LOGIN' }).whereRaw(`DATE("Action_Timestamp") = ?`, [today]).count('Log_ID as c');
     const [activeSess]   = await db('tbl_session_master').where({ ...whereClause, Is_Active: true }).count('Session_ID as c');
-    const [deletedToday] = await db('tbl_audit_log').where({ ...whereClause, Action_Type: 'DELETE' }).whereRaw(`DATE("Created_Date") = ?`, [today]).count('Log_ID as c');
+    const [deletedToday] = await db('tbl_audit_log').where({ ...whereClause, Action_Type: 'DELETE' }).whereRaw(`DATE("Action_Timestamp") = ?`, [today]).count('Log_ID as c');
 
     const byAction = await db('tbl_audit_log')
       .where(whereClause)
-      .whereRaw(`DATE("Created_Date") = ?`, [today])
+      .whereRaw(`DATE("Action_Timestamp") = ?`, [today])
       .groupBy('Action_Type')
       .select('Action_Type', db.raw('COUNT(*) as count'));
 
     const recentActivity = await db('tbl_audit_log')
       .where(whereClause)
-      .orderBy('Created_Date', 'desc')
+      .orderBy('Action_Timestamp', 'desc')
       .limit(10)
-      .select('Log_ID', 'Username', 'Full_Name', 'Action_Type', 'Table_Name', 'Description', 'IP_Address', 'Created_Date');
+      .select('Log_ID', 'Username', 'Full_Name', 'Action_Type', 'Table_Name', 'Description', 'IP_Address', 'Action_Timestamp');
 
     return sendSuccess(res, {
       totalLogs: parseInt(totalLogs.c),
@@ -206,7 +228,7 @@ router.get('/login-history', async (req, res) => {
   try {
     let qb = db('tbl_audit_log')
       .whereIn('Action_Type', ['LOGIN', 'LOGOUT', 'LOGIN_FAILED'])
-      .orderBy('Created_Date', 'desc');
+      .orderBy('Action_Timestamp', 'desc');
     if (!isSuperAdmin) qb = qb.where('Tenant_ID', req.user.tenantId);
     const data = await qb.limit(parseInt(limit)).offset((parseInt(page) - 1) * parseInt(limit));
     return sendSuccess(res, data);
