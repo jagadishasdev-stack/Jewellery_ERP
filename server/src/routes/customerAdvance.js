@@ -36,22 +36,32 @@ router.post('/', authenticate, requireValidBranch, requirePermission('sales'), [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
+  // Was a bare insert + a separate, unwrapped postJournal() call — if the
+  // ledger post failed for any reason (a resolveLedgerForPayment error, a
+  // DB hiccup), the tbl_customer_advance row was already committed as a
+  // real, spendable Active balance with NO accounting trail behind it at
+  // all, while the caller got a 500 suggesting nothing happened. postJournal
+  // itself already supports an explicit `trx` to reuse (see
+  // accountingEngine.js's own doc comment) for exactly this — the sibling
+  // /:customerId/apply route below already uses a transaction for the same
+  // reason. Wrapping this one the same way.
+  const trx = await db.transaction();
   try {
-    const customer = await db('tbl_customer_master').where({ Customer_ID: req.body.Customer_ID, Tenant_ID: tenantId }).first();
-    if (!customer) return sendError(res, 404, 'Customer not found.');
+    const customer = await trx('tbl_customer_master').where({ Customer_ID: req.body.Customer_ID, Tenant_ID: tenantId }).first();
+    if (!customer) { await trx.rollback(); return sendError(res, 404, 'Customer not found.'); }
 
     const amount = round2(parseFloat(req.body.Amount));
     const receiptNumber = `ADV-${tenantId.replace('_', '')}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
     const branchId = resolveBranchForInsert(req, req.body.Branch_ID);
 
-    const [advance] = await db('tbl_customer_advance').insert({
+    const [advance] = await trx('tbl_customer_advance').insert({
       Tenant_ID: tenantId, Branch_ID: branchId, Customer_ID: req.body.Customer_ID,
       Amount: amount, Balance_Amount: amount, Payment_Mode: req.body.Payment_Mode,
       Reference: receiptNumber, Purpose: req.body.Purpose || null, Status: 'Active',
       Created_By: req.user.username,
     }).returning('*');
 
-    const ledger = await resolveLedgerForPayment(db, tenantId, req.body.Payment_Mode, req.body.Bank_Account_ID);
+    const ledger = await resolveLedgerForPayment(trx, tenantId, req.body.Payment_Mode, req.body.Bank_Account_ID);
     await postJournal({
       tenantId, sourceType: 'CUSTOMER_ADVANCE', sourceId: advance.Advance_ID, reference: receiptNumber, branchId,
       narration: `Advance received | ${customer.Customer_Name} | ${req.body.Purpose || 'Advance'}`,
@@ -59,11 +69,13 @@ router.post('/', authenticate, requireValidBranch, requirePermission('sales'), [
         { account: ledger.account, group: ledger.group, sub: ledger.sub, type: 'Dr', amount },
         { account: 'Customer Advance Account', group: 'Liabilities', sub: 'Advance', type: 'Cr', amount },
       ],
-      createdBy: req.user.username, dataMode: modeVal(req),
+      createdBy: req.user.username, dataMode: modeVal(req), trx,
     });
 
+    await trx.commit();
     return sendSuccess(res, advance, `Advance ${receiptNumber} recorded.`, 201);
   } catch (err) {
+    await trx.rollback();
     console.error('Customer advance create error:', err);
     return sendError(res, 500, 'Failed to record advance.');
   }

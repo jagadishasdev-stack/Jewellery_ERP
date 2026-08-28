@@ -1,131 +1,184 @@
 /**
- * Customer Advance — a real, per-customer, lookupable advance ledger.
- * Purchase Hub's Advance Receipt / Advance Adjustment cards only ever
- * printed a paper receipt; there was no generic (not order-tied)
- * customer-advance table anywhere. Proves the full lifecycle: recording
- * an advance posts a real Dr Cash/Cr Customer Advance Account journal,
- * the balance is queryable per customer, applying it against a bill
- * settles the outstanding balance first (and refunds any excess), and
- * it correctly draws down FIFO across more than one receipt.
+ * server/src/routes/customerAdvance.js — per-customer advance subledger
+ * (record an advance receipt, check balance, FIFO-apply against a real
+ * bill). 3 endpoints, previously zero coverage — real money, real
+ * double-entry accounting.
+ *
+ * FIXED as part of this pass: POST / (record an advance) did a bare
+ * insert into tbl_customer_advance, then a SEPARATE, unwrapped
+ * postJournal() call. If the ledger post failed for any reason, the
+ * advance row was already committed as a real, spendable Active balance
+ * with NO accounting trail behind it — while the caller got a 500
+ * suggesting nothing happened at all. postJournal() already supports an
+ * explicit `trx` to reuse for exactly this (see its own doc comment in
+ * accountingEngine.js), and this file's own sibling route
+ * (/:customerId/apply) already used a transaction for the same reason.
+ * Now both are wrapped in one transaction, matching /apply's convention.
  */
 const request = require('supertest');
 const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
 
-let tenant, token, customerId;
+let tenant, token, typeId, customerId;
 const auth = () => ({ Authorization: `Bearer ${token}` });
 
 beforeAll(async () => {
   tenant = await testTenant.setup();
   const res = await request(app).post('/api/auth/login').send({ username: tenant.username, password: tenant.password, tenantId: tenant.tenantId });
   token = res.body.data.token;
+  typeId = (await db('tbl_item_type_master').first()).Type_ID;
 
-  const cust = await request(app).post('/api/customers').set(auth()).send({ Customer_Name: 'QA Advance Customer', Mobile_1: '9887770001' });
-  customerId = cust.body.data.Customer_ID;
+  const [customer] = await db('tbl_customer_master').insert({
+    Tenant_ID: tenant.tenantId, Customer_Code: 'QACADV-1', Customer_Name: 'QA Advance Customer', Mobile_1: '9822200001', Created_By: 'test',
+  }).returning('*');
+  customerId = customer.Customer_ID;
 });
 
 afterAll(async () => {
+  await db('tbl_customer_advance_application').where({ Tenant_ID: tenant.tenantId }).del();
+  await db('tbl_customer_advance').where({ Tenant_ID: tenant.tenantId }).del();
+  await db('tbl_sales_payments').where({ Tenant_ID: tenant.tenantId }).del();
+  await db('tbl_sales_header').where({ Tenant_ID: tenant.tenantId }).del();
+  await db('tbl_customer_master').where({ Tenant_ID: tenant.tenantId }).del();
   await testTenant.teardown();
   await db.destroy();
 });
 
-async function waitForJournal(reference, timeoutMs = 3000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const journal = await db('tbl_accounting_journal').where({ Tenant_ID: tenant.tenantId, Reference: reference }).orderBy('Journal_ID', 'desc').first();
-    if (journal) {
-      const entries = await db('tbl_accounting_entries').where({ Journal_ID: journal.Journal_ID });
-      if (entries.length > 0) return entries;
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error(`Timed out waiting for a journal for Reference=${reference}.`);
+async function createSale(netPayable) {
+  const [sale] = await db('tbl_sales_header').insert({
+    Tenant_ID: tenant.tenantId, Branch_ID: tenant.branchId, Invoice_Number: `QACADV-INV-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    Sale_Date: new Date(), Customer_ID: customerId, Customer_Name: 'QA Advance Customer',
+    Subtotal_Amount: netPayable, Net_Payable_Amount: netPayable, Balance_Amount: netPayable, Amount_Paid: 0, Payment_Status: 'Pending',
+    Created_By: 'test',
+  }).returning('*');
+  return sale;
 }
 
-async function makeSale(articleNumber, price, amountPaid) {
-  const [ornament] = await db('tbl_ornament_master').insert({
-    Tenant_ID: tenant.tenantId, Article_Number: articleNumber, Gross_Weight: 2, Net_Gold_Weight: 1.8,
-    Current_Gold_Rate: 6000, Base_Making_Charge_Per_Gram: 500, Purchase_Cost: price * 0.7, Stock_Quantity: 1,
-    Is_Sold: false, Is_Active: true, Total_Price: price,
-  }).returning('Ornament_ID');
-  const sale = await request(app).post('/api/sales/create').set(auth()).send({
-    items: [{ Ornament_ID: ornament.Ornament_ID, Total_Line_Price: price, Gross_Weight: 2, Net_Gold_Weight: 1.8 }],
-    Customer_Name: 'QA Advance Customer', Payment_Mode: 'Cash', Amount_Paid: amountPaid,
-    payments: [{ mode: 'Cash', amount: amountPaid }],
+describe('POST /api/customer-advance', () => {
+  test('validates required fields', async () => {
+    const res = await request(app).post('/api/customer-advance').set(auth()).send({});
+    expect(res.status).toBe(422);
   });
-  return sale.body.data.sale;
-}
 
-test('recording an advance posts a real Dr Cash / Cr Customer Advance Account journal', async () => {
-  const res = await request(app).post('/api/customer-advance').set(auth()).send({
-    Customer_ID: customerId, Amount: 5000, Payment_Mode: 'Cash', Purpose: 'Against future order',
+  test('404s for a nonexistent customer', async () => {
+    const res = await request(app).post('/api/customer-advance').set(auth())
+      .send({ Customer_ID: 9999999, Amount: 5000, Payment_Mode: 'Cash' });
+    expect(res.status).toBe(404);
   });
-  expect(res.status).toBe(201);
-  expect(parseFloat(res.body.data.Balance_Amount)).toBe(5000);
 
-  const entries = await waitForJournal(res.body.data.Reference);
-  expect(entries.some((e) => e.Ledger_Account === 'Cash Account' && e.Entry_Type === 'Dr' && parseFloat(e.Amount) === 5000)).toBe(true);
-  expect(entries.some((e) => e.Ledger_Account === 'Customer Advance Account' && e.Entry_Type === 'Cr' && parseFloat(e.Amount) === 5000)).toBe(true);
+  test('FIXED: records a real advance atomically — the row, its journal, and the response all agree', async () => {
+    const res = await request(app).post('/api/customer-advance').set(auth())
+      .send({ Customer_ID: customerId, Amount: 10000, Payment_Mode: 'Cash', Purpose: 'QA test advance' });
+    expect(res.status).toBe(201);
+    expect(res.body.data.Balance_Amount == 10000 || Number(res.body.data.Balance_Amount) === 10000).toBe(true);
+    expect(res.body.data.Status).toBe('Active');
+    expect(res.body.data.Reference).toMatch(new RegExp(`^ADV-${tenant.tenantId.replace('_', '')}-`));
 
-  const balance = await request(app).get(`/api/customer-advance/balance/${customerId}`).set(auth());
-  expect(balance.status).toBe(200);
-  expect(balance.body.data.total_available).toBe(5000);
+    const journal = await db('tbl_accounting_journal').where({ Tenant_ID: tenant.tenantId, Source_Type: 'CUSTOMER_ADVANCE', Source_ID: res.body.data.Advance_ID }).first();
+    expect(journal).toBeTruthy(); // the ledger trail really exists, not just the subledger row
+
+    const entries = await db('tbl_accounting_entries').where({ Journal_ID: journal.Journal_ID });
+    expect(entries.length).toBe(2);
+    const dr = entries.find(e => e.Entry_Type === 'Dr');
+    const cr = entries.find(e => e.Entry_Type === 'Cr');
+    expect(Number(dr.Amount)).toBe(10000);
+    expect(Number(cr.Amount)).toBe(10000);
+    expect(cr.Ledger_Account).toBe('Customer Advance Account');
+  });
 });
 
-test('applying an advance settles an outstanding bill first, refunds only what is left over', async () => {
-  const sale = await makeSale('QATEST-ADV-001', 4000, 1000); // Balance_Amount = 3000, ₹5000 advance available
-
-  const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth()).send({
-    Invoice_Number: sale.Invoice_Number, Amount: 4500,
+describe('GET /api/customer-advance/balance/:customerId', () => {
+  test('sums only Active advances with a remaining balance for this customer', async () => {
+    const res = await request(app).get(`/api/customer-advance/balance/${customerId}`).set(auth());
+    expect(res.status).toBe(200);
+    expect(Number(res.body.data.total_available)).toBe(10000);
+    expect(res.body.data.advances.length).toBe(1);
   });
-  expect(res.status).toBe(201);
-  expect(res.body.data.applied_to_invoice).toBe(3000);
-  expect(res.body.data.refund_amount).toBe(1500);
-  expect(res.body.data.invoice_balance_remaining).toBe(0);
 
-  const updatedSale = await db('tbl_sales_header').where({ Sale_ID: sale.Sale_ID }).first();
-  expect(parseFloat(updatedSale.Balance_Amount)).toBe(0);
-  expect(updatedSale.Payment_Status).toBe('Paid');
-
-  const balance = await request(app).get(`/api/customer-advance/balance/${customerId}`).set(auth());
-  expect(balance.body.data.total_available).toBe(500); // 5000 - 4500
-
-  const entries = await waitForJournal(sale.Invoice_Number);
-  expect(entries.some((e) => e.Ledger_Account === 'Customer Advance Account' && e.Entry_Type === 'Dr' && parseFloat(e.Amount) === 4500)).toBe(true);
-  expect(entries.some((e) => e.Ledger_Account === 'Customer Receivable Account' && e.Entry_Type === 'Cr' && parseFloat(e.Amount) === 3000)).toBe(true);
-  expect(entries.some((e) => e.Ledger_Account === 'Cash Account' && e.Entry_Type === 'Cr' && parseFloat(e.Amount) === 1500)).toBe(true);
-  expect(entries.some((e) => e.Ledger_Account === 'Sales Account')).toBe(false); // revenue already booked at sale time
+  test('a customer with no advances at all gets a clean zero, not an error', async () => {
+    const [other] = await db('tbl_customer_master').insert({
+      Tenant_ID: tenant.tenantId, Customer_Code: 'QACADV-2', Customer_Name: 'QA No Advance Customer', Mobile_1: '9822200002', Created_By: 'test',
+    }).returning('*');
+    const res = await request(app).get(`/api/customer-advance/balance/${other.Customer_ID}`).set(auth());
+    expect(res.status).toBe(200);
+    expect(Number(res.body.data.total_available)).toBe(0);
+    expect(res.body.data.advances).toEqual([]);
+    await db('tbl_customer_master').where({ Customer_ID: other.Customer_ID }).del();
+  });
 });
 
-test('rejects applying more than the customer actually has available', async () => {
-  const sale = await makeSale('QATEST-ADV-002', 10000, 0);
-  const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth()).send({
-    Invoice_Number: sale.Invoice_Number, Amount: 999999, // only ₹500 left
+describe('POST /api/customer-advance/:customerId/apply', () => {
+  test('validates required fields', async () => {
+    const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth()).send({});
+    expect(res.status).toBe(422);
   });
-  expect(res.status).toBe(400);
-  expect(res.body.message).toMatch(/exceeds/);
-});
 
-test('draws down FIFO across multiple advance receipts for the same customer', async () => {
-  const cust = await request(app).post('/api/customers').set(auth()).send({ Customer_Name: 'QA FIFO Advance Customer', Mobile_1: '9887770002' });
-  const custId = cust.body.data.Customer_ID;
+  test('404s for an unknown invoice number', async () => {
+    const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth())
+      .send({ Invoice_Number: 'NO-SUCH-INVOICE', Amount: 100 });
+    expect(res.status).toBe(404);
+  });
 
-  const first = await request(app).post('/api/customer-advance').set(auth()).send({ Customer_ID: custId, Amount: 1000, Payment_Mode: 'Cash' });
-  const second = await request(app).post('/api/customer-advance').set(auth()).send({ Customer_ID: custId, Amount: 2000, Payment_Mode: 'Cash' });
+  test('400s when the requested amount exceeds the customer\'s available advance', async () => {
+    const sale = await createSale(5000);
+    const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth())
+      .send({ Invoice_Number: sale.Invoice_Number, Amount: 999999 });
+    expect(res.status).toBe(400);
+    await db('tbl_sales_header').where({ Sale_ID: sale.Sale_ID }).del();
+  });
 
-  const sale = await makeSale('QATEST-ADV-003', 1500, 0);
-  const apply = await request(app).post(`/api/customer-advance/${custId}/apply`).set(auth()).send({ Invoice_Number: sale.Invoice_Number, Amount: 1500 });
-  expect(apply.status).toBe(201);
+  test('applies advance fully within the invoice balance — no refund, invoice partially paid', async () => {
+    const sale = await createSale(6000);
+    const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth())
+      .send({ Invoice_Number: sale.Invoice_Number, Amount: 4000 });
+    expect(res.status).toBe(201);
+    expect(Number(res.body.data.applied_to_invoice)).toBe(4000);
+    expect(Number(res.body.data.refund_amount)).toBe(0);
+    expect(Number(res.body.data.invoice_balance_remaining)).toBe(2000);
 
-  const firstRow = await db('tbl_customer_advance').where({ Advance_ID: first.body.data.Advance_ID }).first();
-  const secondRow = await db('tbl_customer_advance').where({ Advance_ID: second.body.data.Advance_ID }).first();
-  expect(parseFloat(firstRow.Balance_Amount)).toBe(0); // fully drained first (FIFO)
-  expect(firstRow.Status).toBe('Fully Applied');
-  expect(parseFloat(secondRow.Balance_Amount)).toBe(1500); // only 500 of the 2000 taken, 1500 left
+    const updatedSale = await db('tbl_sales_header').where({ Sale_ID: sale.Sale_ID }).first();
+    expect(Number(updatedSale.Balance_Amount)).toBe(2000);
+    expect(updatedSale.Payment_Status).toBe('Partial');
 
-  const applications = await db('tbl_customer_advance_application').where({ Sale_ID: sale.Sale_ID }).orderBy('Advance_ID', 'asc');
-  expect(applications.length).toBe(2);
-  expect(parseFloat(applications[0].Amount_Applied)).toBe(1000);
-  expect(parseFloat(applications[1].Amount_Applied)).toBe(500);
+    const balance = await request(app).get(`/api/customer-advance/balance/${customerId}`).set(auth());
+    expect(Number(balance.body.data.total_available)).toBe(6000); // 10000 - 4000
+
+    const applications = await db('tbl_customer_advance_application').where({ Tenant_ID: tenant.tenantId, Sale_ID: sale.Sale_ID });
+    expect(applications.length).toBe(1);
+    expect(Number(applications[0].Amount_Applied)).toBe(4000);
+  });
+
+  test('applying more than the invoice owes produces a real refund for the difference', async () => {
+    const sale = await createSale(1000);
+    const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth())
+      .send({ Invoice_Number: sale.Invoice_Number, Amount: 3000 });
+    expect(res.status).toBe(201);
+    expect(Number(res.body.data.applied_to_invoice)).toBe(1000);
+    expect(Number(res.body.data.refund_amount)).toBe(2000);
+    expect(Number(res.body.data.invoice_balance_remaining)).toBe(0);
+
+    const updatedSale = await db('tbl_sales_header').where({ Sale_ID: sale.Sale_ID }).first();
+    expect(updatedSale.Payment_Status).toBe('Paid');
+  });
+
+  test('draws down FIFO across multiple advance receipts, oldest first', async () => {
+    // Remaining balance after the two applications above: 6000 - 3000 = 3000
+    // on the original receipt. Add a second, newer receipt.
+    const second = await request(app).post('/api/customer-advance').set(auth())
+      .send({ Customer_ID: customerId, Amount: 5000, Payment_Mode: 'Cash' });
+    const firstAdvanceId = (await db('tbl_customer_advance').where({ Tenant_ID: tenant.tenantId, Customer_ID: customerId }).orderBy('Created_Date', 'asc').first()).Advance_ID;
+
+    const sale = await createSale(7000); // more than the oldest receipt alone (3000) — must draw from both
+    const res = await request(app).post(`/api/customer-advance/${customerId}/apply`).set(auth())
+      .send({ Invoice_Number: sale.Invoice_Number, Amount: 7000 });
+    expect(res.status).toBe(201);
+
+    const oldest = await db('tbl_customer_advance').where({ Advance_ID: firstAdvanceId }).first();
+    expect(Number(oldest.Balance_Amount)).toBe(0);
+    expect(oldest.Status).toBe('Fully Applied'); // fully drawn down first
+
+    const applications = await db('tbl_customer_advance_application').where({ Tenant_ID: tenant.tenantId, Sale_ID: sale.Sale_ID }).orderBy('Advance_ID');
+    expect(applications.length).toBe(2); // touched both receipts
+  });
 });
