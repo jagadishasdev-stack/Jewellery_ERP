@@ -45,6 +45,15 @@ router.post('/:id/approve', async (req, res) => {
     const row = await db('tbl_device_licenses').where({ Device_License_ID: req.params.id }).first();
     if (!row) return sendError(res, 404, 'Request not found.');
     if (row.Status === 'APPROVED') return sendError(res, 400, 'Already approved.');
+    // Only special-cased APPROVED — a REJECTED or REVOKED row fell straight
+    // through to a fresh approval, silently overturning that earlier,
+    // deliberate decision on the very same row instead of requiring the
+    // store to file a brand-new device request. Reusing a rejected/revoked
+    // row this way also meant it kept whatever old Device_ID/Contact_Note
+    // it was originally filed with, which may no longer be accurate.
+    if (row.Status === 'REJECTED' || row.Status === 'REVOKED') {
+      return sendError(res, 400, `This request was already ${row.Status.toLowerCase()}. Ask the store to file a new device access request instead of reinstating this one.`);
+    }
 
     const licenseKey = `IMGDEV-${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
 

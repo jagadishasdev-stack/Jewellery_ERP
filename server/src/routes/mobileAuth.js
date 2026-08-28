@@ -11,6 +11,8 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/knex');
 const { sendSuccess, sendError } = require('../utils/response');
 const { auditLog } = require('../utils/auditLogger');
+const { runWithTenantDb } = require('../db/tenantDb');
+const { getTenantDb } = require('../db/tenantDbResolver');
 const { sendSms } = require('../utils/smsService');
 const { authenticate } = require('../middleware/auth');
 
@@ -208,6 +210,25 @@ router.post('/login', async (req, res) => {
 
     // ── loginType: 'customer' — mobile OTP based (Savings App customers) ──────
     if (loginType === 'customer' && mobile) {
+      // Fixed: `otp` was destructured from the body above but never actually
+      // checked anywhere in this branch — any caller who merely knew a
+      // customer's mobile number got a full 7d JWT for them, no OTP (or
+      // password) required at all, despite the branch's own comment and
+      // param name both claiming this is "OTP based". Enforced the same way
+      // /verify-otp does (including the same dev-fixed-OTP allowance).
+      if (!otp) return sendError(res, 400, 'otp is required for customer login.');
+
+      const isDevFixedOtp = process.env.NODE_ENV !== 'production' && otp === '234789';
+      if (!isDevFixedOtp) {
+        const otpRecord = await db('tbl_mobile_otp')
+          .where({ Mobile: mobile, OTP: otp, Purpose: 'LOGIN', Is_Used: false })
+          .where('Expires_At', '>', new Date())
+          .orderBy('Created_Date', 'desc')
+          .first();
+        if (!otpRecord) return sendError(res, 401, 'Invalid or expired OTP.');
+        await db('tbl_mobile_otp').where('OTP_ID', otpRecord.OTP_ID).update({ Is_Used: true });
+      }
+
       // For customer mobile login — find or create customer record
       let customer = await db('tbl_customer_master')
         .where({ Tenant_ID: resolvedTenantId })
@@ -318,13 +339,32 @@ router.post('/login', async (req, res) => {
       Last_Login_Date: new Date(), Login_Attempts: 0, Locked_Until: null,
     });
 
-    await auditLog({
+    // Two stacked bugs here, both matching ones already fixed once in
+    // auth.js's own /login route (see its comments) but never propagated
+    // to this file's independent copy of the same login flow:
+    // 1. `req: { ...req, user: {...} }` — a real Express/Node req's
+    //    `headers` (and `ip`) are accessor properties on IncomingMessage,
+    //    not own enumerable ones, so a plain object spread silently drops
+    //    them. auditLog then threw on `req.headers['x-forwarded-for']`.
+    // 2. auditLog uses the `tenantDb` proxy, which requires `authenticate()`
+    //    to have already run and established a tenant DB context via
+    //    `runWithTenantDb` — but this route mints its OWN token and never
+    //    goes through `authenticate()`, so that context was never active.
+    // Both were individually caught as "non-fatal" — meaning EVERY mobile
+    // staff login's audit entry has silently failed to write at all, ever,
+    // with no error surfaced to the caller. Fixed the same way auth.js
+    // does it: mutate req.user directly instead of spreading req, and wrap
+    // the call in an explicit runWithTenantDb using this tenant's own
+    // resolved connection.
+    req.user = { username, fullName: user.Full_Name };
+    const tenantConn = await getTenantDb(resolvedTenantId);
+    await runWithTenantDb(tenantConn, () => auditLog({
       tenantId: resolvedTenantId, userId: user.User_ID,
       tableName: 'tbl_session_master', recordId: sessionId,
       actionType: 'LOGIN',
       description: `Mobile staff login: "${username}"`,
-      req: { ...req, user: { username, fullName: user.Full_Name } },
-    });
+      req,
+    }));
 
     return sendSuccess(res, {
       token,

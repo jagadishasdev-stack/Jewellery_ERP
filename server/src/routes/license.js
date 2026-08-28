@@ -132,11 +132,15 @@ router.post('/revoke', authenticate, requireSuperAdmin, async (req, res) => {
   if (!licenseKey) return sendError(res, 400, 'License key required.');
 
   try {
-    await db('tbl_license_master')
-      .where({ License_Key: licenseKey })
-      .update({ Is_Revoked: true, Is_Active: false, Revocation_Reason: reason || 'Revoked by Super Admin' });
+    const existing = await db('tbl_license_master').where({ License_Key: licenseKey }).first();
+    if (!existing) return sendError(res, 404, 'License key not found.');
 
-    return sendSuccess(res, null, 'License revoked successfully.');
+    const [updated] = await db('tbl_license_master')
+      .where({ License_Key: licenseKey })
+      .update({ Is_Revoked: true, Is_Active: false, Revocation_Reason: reason || 'Revoked by Super Admin' })
+      .returning('*');
+
+    return sendSuccess(res, updated, 'License revoked successfully.');
   } catch (err) {
     return sendError(res, 500, 'Failed to revoke license.');
   }

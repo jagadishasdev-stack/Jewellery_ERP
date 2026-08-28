@@ -46,6 +46,8 @@ router.get('/sync-log', authenticate, requireModuleAccess('tally_bridge', 'View'
 router.post('/sync', authenticate, requireModuleAccess('tally_bridge', 'Add'), [
   body('Sync_Type').isIn(['Voucher', 'Ledger', 'StockItem']), body('Reference_Table').notEmpty(), body('Reference_ID').notEmpty(),
 ], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   const tenantId = req.user.tenantId;
   try {
     const config = await db('tbl_tally_config').where('Tenant_ID', tenantId).first();
@@ -56,6 +58,8 @@ router.post('/sync', authenticate, requireModuleAccess('tally_bridge', 'Add'), [
 });
 
 router.put('/sync-log/:id', authenticate, requireModuleAccess('tally_bridge', 'Edit'), [body('Status').isIn(['Pending', 'Synced', 'Failed'])], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
   try {
     const update = { ...req.body };
     if (req.body.Status === 'Synced') update.Synced_Date = new Date();
