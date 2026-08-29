@@ -14,7 +14,7 @@ import {
   PlusOutlined, SearchOutlined, CheckCircleOutlined, ArrowRightOutlined,
   PrinterOutlined, EditOutlined, EyeOutlined, ReloadOutlined,
   ShoppingOutlined, UndoOutlined, FileTextOutlined, GoldOutlined,
-  BarcodeOutlined, SyncOutlined,
+  BarcodeOutlined, SyncOutlined, LinkOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { binApi } from '../../api/modules';
@@ -539,6 +539,23 @@ function OrderBinTab() {
     onSuccess: () => { message.success('Status updated.'); qc.invalidateQueries(['bin-orders']); },
   });
 
+  // Ready Order Purchase — picking "Ready" specifically goes through the
+  // QC-gated /mark-ready route instead of the plain status-set above: if
+  // a purchase is linked (see linkPurchaseMut below), it must already be
+  // Received, and the confirm below stands in for the QC_Passed check.
+  // Every OTHER status transition is unchanged, still the plain route.
+  const markReadyMut = useMutation({
+    mutationFn: (id) => binApi.markOrderReady(id),
+    onSuccess: () => { message.success('Order marked Ready.'); qc.invalidateQueries(['bin-orders']); },
+    onError: (e) => message.error(e.response?.data?.message || 'Cannot mark Ready yet.'),
+  });
+  const [linkPurchaseTarget, setLinkPurchaseTarget] = useState(null);
+  const linkPurchaseMut = useMutation({
+    mutationFn: ({ id, purchaseId }) => binApi.linkOrderPurchase(id, purchaseId),
+    onSuccess: () => { message.success('Linked to purchase.'); qc.invalidateQueries(['bin-orders']); setLinkPurchaseTarget(null); },
+    onError: (e) => message.error(e.response?.data?.message || 'Failed to link purchase.'),
+  });
+
   const openEdit = (row) => {
     setEditRow(row);
     form.setFieldsValue({ ...row, Order_Date: dayjs(row.Order_Date), Due_Date: row.Due_Date ? dayjs(row.Due_Date) : null });
@@ -558,16 +575,23 @@ function OrderBinTab() {
     { title: 'Status',     dataIndex: 'Status',      width: 130,
       render: (v, r) => (
         <Select size="small" value={v} style={{ width: 130 }}
-          onChange={s => statusMut.mutate({ id: r.Order_ID, status: s })}
+          onChange={s => s === 'Ready' ? markReadyMut.mutate(r.Order_ID) : statusMut.mutate({ id: r.Order_ID, status: s })}
           options={ORDER_STATUS.map(s => ({ value: s, label: <Tag color={STATUS_COLOR[s]}>{s}</Tag> }))} />
       ),
     },
     {
-      title: 'Actions', width: 70,
+      title: 'Actions', width: 110,
       render: (_, r) => (
-        <Tooltip title="Edit">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
-        </Tooltip>
+        <Space size={4}>
+          <Tooltip title="Edit">
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
+          </Tooltip>
+          <Tooltip title={r.Related_Purchase_ID ? `Linked to Purchase #${r.Related_Purchase_ID}` : 'Link a procurement Purchase to this order'}>
+            <Button size="small" icon={<LinkOutlined />} type={r.Related_Purchase_ID ? 'primary' : 'default'}
+              style={r.Related_Purchase_ID ? { background: '#B8860B', borderColor: '#B8860B' } : undefined}
+              onClick={() => setLinkPurchaseTarget(r)} />
+          </Tooltip>
+        </Space>
       ),
     },
   ];
@@ -668,6 +692,22 @@ function OrderBinTab() {
           <Button type="primary" htmlType="submit" block size="large" loading={saveMut.isPending}
             style={{ background: '#B8860B', border: 'none', fontWeight: 700 }}>
             {editRow ? 'Update Order' : 'Create Order'}
+          </Button>
+        </Form>
+      </Modal>
+
+      <Modal title={`Link Purchase — ${linkPurchaseTarget?.Voucher_ID || ''}`}
+        open={!!linkPurchaseTarget} onCancel={() => setLinkPurchaseTarget(null)} footer={null} destroyOnClose>
+        <p style={{ color: '#888', fontSize: 12 }}>
+          Once linked, this order can only be marked Ready after that purchase is marked Received (Purchase page).
+        </p>
+        <Form layout="vertical" onFinish={(v) => linkPurchaseMut.mutate({ id: linkPurchaseTarget.Order_ID, purchaseId: v.Purchase_ID })}>
+          <Form.Item name="Purchase_ID" label="Purchase ID" rules={[{ required: true }]}
+            initialValue={linkPurchaseTarget?.Related_Purchase_ID}>
+            <InputNumber style={{ width: '100%' }} min={1} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block loading={linkPurchaseMut.isPending} style={{ background: '#B8860B', borderColor: '#B8860B' }}>
+            Link
           </Button>
         </Form>
       </Modal>

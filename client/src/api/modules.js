@@ -259,6 +259,8 @@ export const binApi = {
   createOrder: (data) => api.post('/bin/orders', data),
   updateOrder: (id, data) => api.put(`/bin/orders/${id}`, data),
   updateOrderStatus: (id, status) => api.post(`/bin/orders/${id}/status`, { status }),
+  linkOrderPurchase: (id, purchaseId) => api.post(`/bin/orders/${id}/link-purchase`, { Purchase_ID: purchaseId }),
+  markOrderReady: (id) => api.post(`/bin/orders/${id}/mark-ready`, { QC_Passed: true }),
   getPureGold: (params) => api.get('/bin/pure-gold', { params }),
   createPureGold: (data) => api.post('/bin/pure-gold', data),
   updatePureGold: (id, data) => api.put(`/bin/pure-gold/${id}`, data),
@@ -271,6 +273,7 @@ export const purchaseApi = {
   getById: (id) => api.get(`/purchase/${id}`),
   create: (data) => api.post('/purchase/create', data),
   approve: (id) => api.post(`/purchase/${id}/approve`),
+  receive: (id) => api.post(`/purchase/${id}/receive`),
   paySupplier: (id, data) => api.post(`/purchase/${id}/pay-supplier`, data),
 };
 

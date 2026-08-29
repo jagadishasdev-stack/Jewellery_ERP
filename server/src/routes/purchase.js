@@ -331,6 +331,26 @@ router.post('/:id/approve', authenticate, requirePermission('inventory'), async 
   } catch (err) { return sendError(res, 500, 'Failed to approve.'); }
 });
 
+// ── POST /api/purchase/:id/receive ────────────────────────────────────────────
+// tbl_purchase_header.Status has declared 'Received' as a real state since
+// the table was created (Draft, Approved, Received, Cancelled) but no
+// route anywhere ever set it — an Approved purchase had no way to record
+// that its goods actually arrived. Needed for Ready Order Purchase's QC
+// gate (an order can't be marked Ready off an unreceived purchase), but
+// real and useful on its own regardless of that.
+router.post('/:id/receive', authenticate, requirePermission('inventory'), async (req, res) => {
+  try {
+    const purchase = await db('tbl_purchase_header').where({ Purchase_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!purchase) return sendError(res, 404, 'Purchase not found.');
+    if (purchase.Status !== 'Approved') return sendError(res, 400, `Only an Approved purchase can be received (this one is ${purchase.Status}).`);
+    const [updated] = await db('tbl_purchase_header')
+      .where({ Purchase_ID: req.params.id, Tenant_ID: req.user.tenantId })
+      .update({ Status: 'Received' })
+      .returning('*');
+    return sendSuccess(res, updated, 'Purchase marked Received.');
+  } catch (err) { return sendError(res, 500, 'Failed to mark purchase received.'); }
+});
+
 // ── POST /api/purchase/:id/pay-supplier  ──────────────────────────────────────
 // There was no way anywhere in this file to ever pay down a purchase's
 // Balance_Amount — Payment_Status was hardcoded 'Pending' client-side and

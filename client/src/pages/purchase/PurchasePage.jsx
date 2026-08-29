@@ -76,6 +76,16 @@ export default function PurchasePage() {
     onSuccess: () => { message.success('Purchase approved.'); qc.invalidateQueries(['purchases']); },
   });
 
+  // Status has declared 'Received' since this table was created (Draft,
+  // Approved, Received, Cancelled) but nothing ever set it — an Approved
+  // purchase had no way to record its goods actually arriving. Needed for
+  // Ready Order Purchase's QC gate, but real and useful on its own too.
+  const receiveMutation = useMutation({
+    mutationFn: (id) => purchaseApi.receive(id),
+    onSuccess: () => { message.success('Purchase marked Received.'); qc.invalidateQueries(['purchases']); },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to mark received.'),
+  });
+
   // There was no way anywhere in the app to ever pay down a purchase's
   // balance — Supplier Payable only ever grew. This + the modal below is
   // the missing UI for the new POST /purchase/:id/pay-supplier route.
@@ -119,6 +129,13 @@ export default function PurchasePage() {
               loading={approveMutation.isPending}
               onClick={() => approveMutation.mutate(r.Purchase_ID)}>
               Approve
+            </Button>
+          )}
+          {r.Status === 'Approved' && (
+            <Button size="small" icon={<CheckOutlined />}
+              loading={receiveMutation.isPending}
+              onClick={() => receiveMutation.mutate(r.Purchase_ID)}>
+              Mark Received
             </Button>
           )}
           {['Partial', 'Pending'].includes(r.Payment_Status) && (

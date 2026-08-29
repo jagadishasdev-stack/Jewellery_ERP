@@ -457,6 +457,42 @@ router.post('/orders/:id/status', authenticate, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed.'); }
 });
 
+// ── Ready Order Purchase — link a real Purchase to this order, then only
+// allow "Ready" once that purchase's items have actually arrived. This is
+// deliberately additive on top of /orders/:id/status above (which still
+// works exactly as before, ungated, for orders that never need
+// procurement at all) — it does not replace or restrict that route.
+router.post('/orders/:id/link-purchase', authenticate, [body('Purchase_ID').isInt()], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const order = await db('tbl_bin_orders').where({ Order_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!order) return sendError(res, 404, 'Order not found.');
+    const purchase = await db('tbl_purchase_header').where({ Purchase_ID: req.body.Purchase_ID, Tenant_ID: req.user.tenantId }).first();
+    if (!purchase) return sendError(res, 404, 'Purchase not found.');
+    const [updated] = await db('tbl_bin_orders').where({ Order_ID: req.params.id })
+      .update({ Related_Purchase_ID: req.body.Purchase_ID, Modified_Date: new Date() }).returning('*');
+    return sendSuccess(res, updated, 'Linked to purchase.');
+  } catch (err) { return sendError(res, 500, 'Failed to link purchase.'); }
+});
+
+router.post('/orders/:id/mark-ready', authenticate, async (req, res) => {
+  try {
+    const order = await db('tbl_bin_orders').where({ Order_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!order) return sendError(res, 404, 'Order not found.');
+    if (order.Related_Purchase_ID) {
+      const purchase = await db('tbl_purchase_header').where({ Purchase_ID: order.Related_Purchase_ID }).first();
+      if (!purchase || purchase.Status !== 'Received') {
+        return sendError(res, 400, 'The linked purchase has not been received yet — cannot mark this order Ready.');
+      }
+    }
+    if (!req.body.QC_Passed) return sendError(res, 400, 'Quality check must be confirmed before marking Ready.');
+    const [updated] = await db('tbl_bin_orders').where({ Order_ID: req.params.id })
+      .update({ Status: 'Ready', QC_Passed: true, Modified_Date: new Date() }).returning('*');
+    return sendSuccess(res, updated, 'Order marked Ready.');
+  } catch (err) { return sendError(res, 500, 'Failed to mark order ready.'); }
+});
+
 // ════════════════════════════════════════════════════════════════════════════
 // PURE GOLD BIN
 // ════════════════════════════════════════════════════════════════════════════
