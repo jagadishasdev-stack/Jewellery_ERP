@@ -4,7 +4,7 @@ import {
   Form, Select, DatePicker, message, Avatar, Drawer, Descriptions,
   List, Row, Col,
 } from 'antd';
-import { PlusOutlined, UserOutlined, HistoryOutlined } from '@ant-design/icons';
+import { PlusOutlined, UserOutlined, HistoryOutlined, EditOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { customersApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
@@ -18,6 +18,10 @@ const { Option } = Select;
 export default function CustomersPage() {
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  // Server route (PUT /customers/:id) and client API helper (customersApi.update)
+  // already existed, unused — Add was the only wired path. This adds Edit,
+  // reusing the exact same modal/form rather than a second form to maintain.
+  const [editingCustomer, setEditingCustomer] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [page, setPage] = useState(1);
@@ -59,9 +63,37 @@ export default function CustomersPage() {
     onError: (err) => message.error(err.response?.data?.message || 'Failed to add customer.'),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => customersApi.update(id, data),
+    onSuccess: () => {
+      message.success('Customer updated!');
+      qc.invalidateQueries(['customers']);
+      setModalOpen(false);
+      setEditingCustomer(null);
+      form.resetFields();
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to update customer.'),
+  });
+
   const openHistory = (customer) => {
     setSelectedCustomer(customer);
     setDrawerOpen(true);
+  };
+
+  const openEdit = (customer) => {
+    setEditingCustomer(customer);
+    form.setFieldsValue({
+      ...customer,
+      Date_Of_Birth: customer.Date_Of_Birth ? dayjs(customer.Date_Of_Birth) : null,
+      Anniversary_Date: customer.Anniversary_Date ? dayjs(customer.Anniversary_Date) : null,
+    });
+    setModalOpen(true);
+  };
+
+  const openAdd = () => {
+    setEditingCustomer(null);
+    form.resetFields();
+    setModalOpen(true);
   };
 
   const columns = [
@@ -99,9 +131,14 @@ export default function CustomersPage() {
     {
       title: 'Actions',
       render: (_, r) => (
-        <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => openHistory(r)}>
-          History
-        </Button>
+        <Space size={0}>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>
+            Edit
+          </Button>
+          <Button type="link" size="small" icon={<HistoryOutlined />} onClick={() => openHistory(r)}>
+            History
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -128,7 +165,7 @@ export default function CustomersPage() {
           type="primary"
           icon={<PlusOutlined />}
           style={{ background: '#B8860B', borderColor: '#B8860B', fontWeight: 600 }}
-          onClick={() => setModalOpen(true)}
+          onClick={openAdd}
         >
           Add Customer
         </Button>
@@ -175,17 +212,19 @@ export default function CustomersPage() {
       </Card>
       </div>
 
-      {/* Add Customer Modal */}
+      {/* Add / Edit Customer Modal — same form for both, differing only in
+          which mutation onFinish routes to and the title/button text. */}
       <Modal
-        title={<Space><UserOutlined style={{ color: '#B8860B' }} /> Add New Customer</Space>}
+        title={<Space><UserOutlined style={{ color: '#B8860B' }} /> {editingCustomer ? `Edit ${editingCustomer.Customer_Name}` : 'Add New Customer'}</Space>}
         open={modalOpen}
-        onCancel={() => { setModalOpen(false); form.resetFields(); }}
+        onCancel={() => { setModalOpen(false); setEditingCustomer(null); form.resetFields(); }}
         footer={null}
         width={580}
         styles={{ body: { paddingTop: 16 } }}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" className="erp-form" onFinish={(v) => createMutation.mutate(v)}>
+        <Form form={form} layout="vertical" className="erp-form"
+          onFinish={(v) => editingCustomer ? updateMutation.mutate({ id: editingCustomer.Customer_ID, data: v }) : createMutation.mutate(v)}>
           <Row gutter={[12, 0]}>
             <Col xs={24} sm={12}>
               <Form.Item name="Customer_Name" label="Full Name" rules={[{ required: true }]}>
@@ -297,10 +336,10 @@ export default function CustomersPage() {
             htmlType="submit"
             block
             size="large"
-            loading={createMutation.isPending}
+            loading={editingCustomer ? updateMutation.isPending : createMutation.isPending}
             style={{ background: '#B8860B', borderColor: '#B8860B', fontWeight: 600, marginTop: 4 }}
           >
-            Save Customer
+            {editingCustomer ? 'Update Customer' : 'Save Customer'}
           </Button>
         </Form>
       </Modal>

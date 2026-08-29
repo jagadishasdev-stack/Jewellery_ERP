@@ -47,7 +47,13 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
         // estimate (carat × the gemstone master's rate), not a stored
         // figure. Shown on the label as an estimate; correct the
         // gemstone's Price_Per_Carat if this doesn't match reality.
-        db.raw('ROUND((o."Total_Stone_Carat" * COALESCE(g."Price_Per_Carat", 0))::numeric, 2) as "Stone_Value_Estimate"')
+        db.raw('ROUND((o."Total_Stone_Carat" * COALESCE(g."Price_Per_Carat", 0))::numeric, 2) as "Stone_Value_Estimate"'),
+        // Fine weight (pure-gold-equivalent weight) — previously not
+        // tracked anywhere in the schema. Deliberately computed on read,
+        // not stored: it's fully derived from Net_Gold_Weight × Purity%,
+        // so a stored copy would just be one more place to go stale if
+        // either value is ever corrected after the fact.
+        db.raw('ROUND((o."Net_Gold_Weight" * COALESCE(p."Percentage", 100) / 100)::numeric, 3) as "Fine_Weight"')
       );
     // Same POS-billing exception as the barcode route above — a text
     // search used to add an item to a bill must still find Hidden/Special
@@ -113,7 +119,8 @@ router.get('/barcode/:code', authenticate, async (req, res) => {
       .leftJoin('tbl_design_master as d', 'o.Design_ID', 'd.Design_ID')
       .where('o.Article_Number', req.params.code)
       .where('o.Tenant_ID', req.user.tenantId)
-      .select('o.*', 't.Type_Name', 'p.Purity_Code', 'd.Design_Name');
+      .select('o.*', 't.Type_Name', 'p.Purity_Code', 'd.Design_Name',
+        db.raw('ROUND((o."Net_Gold_Weight" * COALESCE(p."Percentage", 100) / 100)::numeric, 3) as "Fine_Weight"'));
     // POS scans a barcode to ADD it to a bill — Hidden/Special stock must
     // still be findable here (it's real, billable inventory, just kept
     // out of casual browsing/reports), so callers doing that pass
@@ -169,7 +176,8 @@ router.get('/:id', authenticate, async (req, res) => {
         'o.*', 't.Type_Name', 'p.Purity_Code', 'd.Design_Name', 'd.Design_Code', 'g.Stone_Name',
         'fl.Floor_Name', 'fl.Floor_Code', 'v.Vendor_Code as Supplier_Code', 'v.Vendor_Name as Supplier_Name',
         // See the /GET list route above for why this is an estimate, not a stored value.
-        db.raw('ROUND((o."Total_Stone_Carat" * COALESCE(g."Price_Per_Carat", 0))::numeric, 2) as "Stone_Value_Estimate"')
+        db.raw('ROUND((o."Total_Stone_Carat" * COALESCE(g."Price_Per_Carat", 0))::numeric, 2) as "Stone_Value_Estimate"'),
+        db.raw('ROUND((o."Net_Gold_Weight" * COALESCE(p."Percentage", 100) / 100)::numeric, 3) as "Fine_Weight"')
       );
     if (req.user.roleName !== 'Super Admin') {
       qb = qb.where('o.Tenant_ID', req.user.tenantId);

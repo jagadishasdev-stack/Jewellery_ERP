@@ -124,29 +124,38 @@ router.get('/inventory-value', authenticate, requireValidBranch, async (req, res
     const tenantId = req.user.tenantId;
     const { metalType } = req.query;
 
+    // Fine weight (pure-gold-equivalent) sum — previously nowhere in the
+    // schema at all. Derived the same way as ornaments.js's per-item
+    // Fine_Weight: Net_Gold_Weight × Purity% ; joined here to be summed
+    // rather than selected per row.
+    const fineWeightExpr = 'SUM("o"."Net_Gold_Weight" * COALESCE("p"."Percentage", 100) / 100) as total_fine_weight';
+
     let byTypeQb = withBranch(db('tbl_ornament_master as o')
       .join('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
+      .leftJoin('tbl_purity_master as p', 'o.Purity_ID', 'p.Purity_ID')
       .where('o.Tenant_ID', tenantId)
       .where('o.Is_Active', true)
       .where('o.Is_Sold', false), req, 'o.Branch_ID')
       .groupBy('t.Type_Name', 't.Type_Code')
-      .select('t.Type_Name', 't.Type_Code', db.raw('COUNT(*) as count'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'))
+      .select('t.Type_Name', 't.Type_Code', db.raw('COUNT(*) as count'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'), db.raw(fineWeightExpr))
       .orderBy('total_mrp', 'desc');
     if (metalType) byTypeQb = byTypeQb.where('o.Metal_Type', metalType);
     const byType = await applyStockVisibility(byTypeQb, req, 'o');
 
     let byMetalQb = withBranch(db('tbl_ornament_master as o')
+      .leftJoin('tbl_purity_master as p', 'o.Purity_ID', 'p.Purity_ID')
       .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).where('o.Is_Sold', false), req, 'o.Branch_ID')
       .groupBy('o.Metal_Type')
-      .select('o.Metal_Type', db.raw('COUNT(*) as count'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'))
+      .select('o.Metal_Type', db.raw('COUNT(*) as count'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'), db.raw(fineWeightExpr))
       .orderBy('total_mrp', 'desc');
     const byMetal = await applyStockVisibility(byMetalQb, req, 'o');
 
-    let overallQb = withBranch(db('tbl_ornament_master')
-      .where('Tenant_ID', tenantId).where('Is_Active', true).where('Is_Sold', false), req)
-      .select(db.raw('COUNT(*) as total_pieces'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'));
-    if (metalType) overallQb = overallQb.where('Metal_Type', metalType);
-    const overall = await applyStockVisibility(overallQb, req).first();
+    let overallQb = withBranch(db('tbl_ornament_master as o')
+      .leftJoin('tbl_purity_master as p', 'o.Purity_ID', 'p.Purity_ID')
+      .where('o.Tenant_ID', tenantId).where('o.Is_Active', true).where('o.Is_Sold', false), req, 'o.Branch_ID')
+      .select(db.raw('COUNT(*) as total_pieces'), db.raw('SUM("Gross_Weight") as total_weight'), db.raw('SUM("Total_Price") as total_mrp'), db.raw('SUM("Purchase_Cost") as total_cost'), db.raw(fineWeightExpr));
+    if (metalType) overallQb = overallQb.where('o.Metal_Type', metalType);
+    const overall = await applyStockVisibility(overallQb, req, 'o').first();
 
     return sendSuccess(res, { overall, byType, byMetal });
   } catch (err) {
@@ -600,6 +609,84 @@ router.get('/item-movement', authenticate, requireValidBranch, async (req, res) 
   } catch (err) {
     console.error('Item movement error:', err.message);
     return sendError(res, 500, `Failed to generate movement report: ${err.message}`);
+  }
+});
+
+// ─── GET /api/reports/barcode-report ──────────────────────────────────────────
+// Previously missing entirely — barcode generation/reprint existed (Label
+// Designer, printBarcodeLabel) but there was no searchable list of every
+// tag ever created. This is that list: one row per ornament, its barcode
+// (Article_Number), and whether/when it was last actually printed (from
+// tbl_print_log, Printer_Role='barcode' — the same log Print History uses).
+router.get('/barcode-report', authenticate, requireValidBranch, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { search, status, metalType, fromDate, toDate } = req.query;
+
+    // Data_Mode filtering is handled by applyStockVisibility() below, which
+    // has its own mode-specific inclusive rules (e.g. Practice mode also
+    // sees Official stock) — adding a plain .where('Data_Mode', ...) here
+    // too would double-filter and silently narrow that back down.
+    let qb = withBranch(db('tbl_ornament_master as o')
+      .leftJoin('tbl_item_type_master as t', 'o.Type_ID', 't.Type_ID')
+      .leftJoin('tbl_design_master as d', 'o.Design_ID', 'd.Design_ID')
+      .leftJoin('tbl_purity_master as p', 'o.Purity_ID', 'p.Purity_ID')
+      .where('o.Tenant_ID', tenantId), req, 'o.Branch_ID');
+
+    if (search) qb = qb.where('o.Article_Number', 'ilike', `%${search}%`);
+    if (metalType) qb = qb.where('o.Metal_Type', metalType);
+    if (fromDate) qb = qb.whereRaw('DATE("o"."Created_Date") >= ?', [fromDate]);
+    if (toDate) qb = qb.whereRaw('DATE("o"."Created_Date") <= ?', [toDate]);
+    if (status === 'sold') qb = qb.where('o.Is_Sold', true);
+    else if (status === 'available') qb = qb.where('o.Is_Sold', false).where('o.Is_Stock_Available', true);
+    // Is_Reserved was repurposed/renamed to Is_On_Approval when the
+    // Approval module was built (see 20260719132658_create_approval_module.js)
+    // — there's no separate "reserved for a customer" concept on stock today.
+    else if (status === 'on_approval') qb = qb.where('o.Is_On_Approval', true);
+
+    // Not awaited here — applyStockVisibility() is synchronous and returns
+    // a chainable builder, but a Knex builder is also "thenable"; awaiting
+    // it here would execute the query early (before .select()/.orderBy()
+    // are added below) and resolve to rows instead of a builder.
+    qb = applyStockVisibility(qb, req, 'o');
+
+    const rows = await qb
+      .select(
+        'o.Ornament_ID', 'o.Article_Number', 'o.Metal_Type', 'o.Gross_Weight', 'o.Created_Date',
+        'o.Is_Sold', 'o.Is_On_Approval', 'o.Is_On_Display', 'o.Is_Stock_Available',
+        db.raw('COALESCE("t"."Type_Name", \'Unknown\') as "Type_Name"'),
+        db.raw('COALESCE("d"."Design_Name", \'-\') as "Design_Name"'),
+        db.raw('COALESCE("p"."Purity_Code", \'-\') as "Purity_Code"'),
+      )
+      .orderBy('o.Created_Date', 'desc')
+      .limit(2000); // a hard page cap, not a silent one — surfaced in the response below
+
+    const articleNumbers = rows.map(r => r.Article_Number);
+    const lastPrints = articleNumbers.length
+      ? await db('tbl_print_log')
+          .where('Tenant_ID', tenantId).where('Printer_Role', 'barcode')
+          .whereIn('Document_Number', articleNumbers)
+          .select('Document_Number', 'Printed_Date', 'Status')
+          .orderBy('Printed_Date', 'desc')
+      : [];
+    // Keep only the latest attempt per barcode (query above is already
+    // newest-first, so the first occurrence per key wins).
+    const lastPrintMap = {};
+    for (const p of lastPrints) {
+      if (!lastPrintMap[p.Document_Number]) lastPrintMap[p.Document_Number] = p;
+    }
+
+    const enriched = rows.map(r => ({
+      ...r,
+      Status: r.Is_Sold ? 'Sold' : r.Is_On_Approval ? 'On Approval' : r.Is_On_Display ? 'On Display' : r.Is_Stock_Available ? 'Available' : 'Unavailable',
+      Last_Printed_Date: lastPrintMap[r.Article_Number]?.Printed_Date || null,
+      Last_Print_Status: lastPrintMap[r.Article_Number]?.Status || null,
+    }));
+
+    return sendSuccess(res, { items: enriched, truncated: rows.length === 2000 });
+  } catch (err) {
+    console.error('Barcode report error:', err.message);
+    return sendError(res, 500, `Failed to generate barcode report: ${err.message}`);
   }
 });
 

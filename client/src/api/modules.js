@@ -172,6 +172,7 @@ export const reportsApi = {
   karigarPerformance: () => api.get('/reports/karigar-performance'),
   designPerformance: () => api.get('/reports/design-performance'),
   branchPerformance: () => api.get('/reports/branch-performance'),
+  barcodeReport: (params) => api.get('/reports/barcode-report', { params }),
 };
 
 // ─── Floors & Counters ────────────────────────────────────────────────────────
@@ -741,4 +742,12 @@ export const masterExtApi = {
   getDiamondShape: () => api.get('/master/diamond-shape'),
   checkHUID: (number) => api.get(`/master/huid/${number}`),
   registerHUID: (data) => api.post('/master/huid', data),
+};
+
+// ─── Sync ───────────────────────────────────────────────────────────────────────
+// The cloud half of the sync engine (server/src/routes/sync.js) has always
+// been real and tested — this is its first client-side UI, previously
+// API-only with zero visibility into whether anything had actually synced.
+export const syncApi = {
+  getStatus: () => api.get('/sync/status'),
 };

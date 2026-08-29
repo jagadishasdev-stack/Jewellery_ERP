@@ -479,7 +479,7 @@ export default function StockManagementPage() {
   const exportCSV = () => {
     const items = inventoryData?.items || [];
     if (!items.length) { message.warning('No data.'); return; }
-    const headers = ['Article_Number','Type_Name','Metal_Type','Purity_Code','Gross_Weight','Net_Gold_Weight','Stone_Weight','Total_Price','Physical_Location','Is_Sold'];
+    const headers = ['Article_Number','Type_Name','Metal_Type','Purity_Code','Gross_Weight','Net_Gold_Weight','Fine_Weight','Stone_Weight','Total_Price','Physical_Location','Is_Sold'];
     const rows = items.map(r => headers.map(h => `"${r[h] ?? ''}"`).join(','));
     const blob = new Blob([[headers.join(','), ...rows].join('\n')], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -518,6 +518,7 @@ export default function StockManagementPage() {
         <div style={{fontSize:11}}>
           <div>Gross: <b>{formatWeight(r.Gross_Weight)}</b></div>
           <div style={{color:'#888'}}>Net: {formatWeight(r.Net_Gold_Weight)}</div>
+          {r.Fine_Weight != null && <div style={{color:'#888'}}>Fine: {formatWeight(r.Fine_Weight)}</div>}
           {parseFloat(r.Stone_Weight||0) > 0 && <div style={{color:'#888'}}>Stone: {formatWeight(r.Stone_Weight)}</div>}
         </div>
       ),

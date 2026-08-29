@@ -23,6 +23,7 @@ import {
   WalletOutlined, PieChartOutlined, SearchOutlined, SwapOutlined,
   QuestionCircleOutlined, BankOutlined, ContactsOutlined, LineChartOutlined,
   FileProtectOutlined, BuildOutlined, SyncOutlined, SafetyCertificateOutlined,
+  DesktopOutlined,
 } from '@ant-design/icons';
 import { useMutation } from '@tanstack/react-query';
 import { useAuthStore } from '../../store/authStore';
@@ -306,6 +307,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/reports/management-reports', label: '🎯 Management Reports' },
         { key: '/reports/branch-performance', label: '🏢 Branch Performance' },
         { key: '/reports/closing-report', label: '📊 Closing Report' },
+        { key: '/reports/barcode-report', label: '🏷️ Barcode Report' },
         { key: 'reports-div2', type: 'divider' },
         { key: '/reports/sales', label: '📜 Legacy Sales' },
         { key: '/reports/day-close', label: '🔒 Day Close' },
@@ -321,6 +323,19 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   // only how it's visually grouped.
   const transactionChildren = [];
   if (reportsGroup) transactionChildren.push(reportsGroup);
+  // "Window" — workspace controls (recent screens, fullscreen, second
+  // screen, keyboard shortcuts). Real content behind this now (see
+  // WindowPage.jsx) reusing the same recent-windows tracking the floating
+  // tab already had — not an empty placeholder.
+  transactionChildren.push({ key: '/window', icon: <DesktopOutlined />, label: '🪟 Window' });
+  // "Utility" — deliberately scoped to genuinely NEW capability (Sync
+  // Status) this pass, not a relocation of the existing Printer
+  // Settings/Label Designer/Excel Import pages already living under Admin
+  // — those stay put, matching the earlier sign-off to leave Admin
+  // untouched. A fuller Utility consolidation is a separate follow-up.
+  if (permissions.tenant_management) {
+    transactionChildren.push({ key: '/admin/sync-status', icon: <SyncOutlined />, label: '🛠 Utility (Sync Status)' });
+  }
 
   const salesChildren = [billingGroup, repairGroup].filter(Boolean);
   if (salesChildren.length) transactionChildren.push({ key: 'txn-sales-group', type: 'group', label: 'SALES', children: salesChildren });

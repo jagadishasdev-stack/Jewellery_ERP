@@ -35,6 +35,9 @@ import SalesHistoryPage from './pages/reports/SalesHistoryPage';
 import SalesBillHistoryPage from './pages/reports/SalesBillHistoryPage';
 import PurchaseReportPage from './pages/reports/PurchaseReportPage';
 import KarigarReportPage from './pages/reports/KarigarReportPage';
+import BarcodeReportPage from './pages/reports/BarcodeReportPage';
+import WindowPage from './pages/window/WindowPage';
+import SyncStatusPage from './pages/admin/SyncStatusPage';
 import BranchPerformancePage from './pages/reports/BranchPerformancePage';
 import DayClosePage from './pages/reports/DayClosePage';
 import InvoiceTemplatePage from './pages/invoice/InvoiceTemplatePage';
@@ -229,6 +232,9 @@ function App() {
         <Route path="/reports/approval" element={<ApprovalReportsPage />} />
         <Route path="/reports/management-reports" element={<ManagementReportsPage />} />
         <Route path="/reports/closing-report" element={<ClosingReportPage />} />
+        <Route path="/reports/barcode-report" element={<BarcodeReportPage />} />
+        <Route path="/window" element={<WindowPage />} />
+        <Route path="/admin/sync-status" element={<SyncStatusPage />} />
         <Route path="/repair" element={<RepairPage />} />
         <Route path="/repair/job-cards" element={<JobCardReport />} />
         <Route path="/pawnbroking" element={<PawnbrokingPage />} />

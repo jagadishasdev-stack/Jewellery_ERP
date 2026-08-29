@@ -227,7 +227,8 @@ export default function InventoryReportsPage() {
                       style={{borderRadius:8,border:isActive?'2px solid #B8860B':'1px solid #f0f0f0',cursor:'pointer'}}
                     >
                       <Tag color={METAL_TYPE_COLORS[metal]} style={{marginBottom:6}}>{metal}</Tag>
-                      <div style={{fontSize:11,color:'#888'}}>{parseInt(row.count||0)} pcs &middot; {parseFloat(row.total_weight||0).toFixed(3)}g</div>
+                      <div style={{fontSize:11,color:'#888'}}>{parseInt(row.count||0)} pcs &middot; {parseFloat(row.total_weight||0).toFixed(3)}g gross</div>
+                      {row.total_fine_weight != null && <div style={{fontSize:11,color:'#888'}}>{parseFloat(row.total_fine_weight||0).toFixed(3)}g fine</div>}
                       <div style={{fontSize:15,fontWeight:700,color:'#B8860B'}}>{formatCurrency(row.total_mrp||0)}</div>
                     </Card>
                   </Col>
@@ -250,6 +251,7 @@ export default function InventoryReportsPage() {
             {[
               {title:'Total Pieces',value:parseInt(overall.total_pieces||0),color:'#B8860B'},
               {title:'Total Weight',value:parseFloat(overall.total_weight||0).toFixed(3)+'g',color:'#1890ff',raw:true},
+              {title:'Fine Weight',value:parseFloat(overall.total_fine_weight||0).toFixed(3)+'g',color:'#722ed1',raw:true},
               {title:'Total MRP',value:parseFloat(overall.total_mrp||0),color:'#52c41a',fmt:formatCurrency},
               {title:'Cost Value',value:parseFloat(overall.total_cost||0),color:'#722ed1',fmt:formatCurrency},
             ].map((c,i)=>(
