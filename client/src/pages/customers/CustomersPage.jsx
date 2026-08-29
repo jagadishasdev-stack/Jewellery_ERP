@@ -85,6 +85,14 @@ export default function CustomersPage() {
       dataIndex: 'Is_Wholesale',
       render: (v) => <Tag color={v ? 'blue' : 'green'}>{v ? 'Wholesale' : 'Retail'}</Tag>,
     },
+    {
+      title: 'Category',
+      dataIndex: 'Customer_Category',
+      render: (v) => {
+        const color = { VIP: 'gold', Platinum: 'purple', Gold: 'orange', Silver: 'default', Regular: 'default' }[v] || 'default';
+        return <Tag color={color}>{v || 'Regular'}</Tag>;
+      },
+    },
     { title: 'Purchases', dataIndex: 'Total_Purchase_Count', render: (v) => <Tag>{v || 0} bills</Tag> },
     { title: 'Total Value', dataIndex: 'Total_Purchase_Value', render: (v) => formatCurrency(v) },
     { title: 'Loyalty Pts', dataIndex: 'Loyalty_Points', render: (v) => <Tag color="gold">{parseFloat(v || 0).toFixed(0)}</Tag> },
@@ -224,6 +232,58 @@ export default function CustomersPage() {
                   <Option value={false}>Retail</Option>
                   <Option value={true}>Wholesale</Option>
                 </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="Customer_Category" label="Category" initialValue="Regular">
+                <Select>
+                  <Option value="Regular">Regular</Option>
+                  <Option value="Silver">Silver</Option>
+                  <Option value="Gold">Gold</Option>
+                  <Option value="Platinum">Platinum</Option>
+                  <Option value="VIP">VIP</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            {/* Address_Line1/2, State, Pincode, GST_No, PAN_No already existed
+                as real columns on tbl_customer_master — this form just never
+                surfaced them, so they were silently unreachable everywhere. */}
+            <Col xs={24} sm={12}>
+              <Form.Item name="Address_Line1" label="Address Line 1">
+                <Input placeholder="House/street" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="Address_Line2" label="Address Line 2">
+                <Input placeholder="Area/landmark" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="State" label="State">
+                <Input placeholder="State" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="Pincode" label="Pincode">
+                <Input placeholder="6-digit PIN" maxLength={6} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="GST_No" label="GSTIN">
+                <Input placeholder="For business/wholesale customers" style={{ textTransform: 'uppercase' }}
+                  onChange={(e) => form.setFieldValue('GST_No', e.target.value.toUpperCase())} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="PAN_No" label="PAN Number"
+                rules={[{ pattern: /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, message: 'Format: ABCDE1234F' }]}>
+                <Input placeholder="ABCDE1234F" maxLength={10} style={{ textTransform: 'uppercase' }}
+                  onChange={(e) => form.setFieldValue('PAN_No', e.target.value.toUpperCase())} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="Aadhar_Number" label="Aadhar Number (for KYC records)">
+                <Input placeholder="12-digit Aadhar" maxLength={12} />
               </Form.Item>
             </Col>
             <Col xs={24}>

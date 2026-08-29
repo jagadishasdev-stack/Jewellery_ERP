@@ -14,7 +14,7 @@ import {
   Row, Col, Card, Input, Button, Table, Space, Typography,
   Modal, Select, InputNumber, Divider, Tag, message,
   Tooltip, Badge, Alert, Progress, Statistic, Steps,
-  Drawer, List, Image, Grid,
+  Drawer, List, Image, Grid, Popover,
 } from 'antd';
 import {
   ScanOutlined, DeleteOutlined, UserOutlined, PrinterOutlined,
@@ -23,10 +23,11 @@ import {
   CheckCircleFilled, ExclamationCircleOutlined, TagOutlined,
   WalletOutlined, BankOutlined, PictureOutlined, HistoryOutlined,
   EyeOutlined, FileSearchOutlined, FileImageOutlined,
+  CalculatorOutlined, SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { ornamentsApi, customersApi, salesApi, savingsApi, dayCloseApi, oldGoldApi, tenantApi, bankChequeApi } from '../../api/modules';
+import { ornamentsApi, customersApi, salesApi, savingsApi, dayCloseApi, oldGoldApi, tenantApi, bankChequeApi, complianceApi } from '../../api/modules';
 import { useCartStore } from '../../store/cartStore';
 import { useCounterStore } from '../../store/counterStore';
 import { useAuthStore } from '../../store/authStore';
@@ -37,6 +38,7 @@ import { formatCurrency, formatWeight, calculateOldGoldExchange } from '../../ut
 import CustomerSearchModal from './CustomerSearchModal';
 import { printThermalReceipt, buildSalesBillStudioData } from '../../utils/thermalReceipt';
 import PrinterOverrideButton from '../../components/PrinterOverrideButton';
+import CopyPrintButton from '../../components/CopyPrintButton';
 import InvoicePreviewModal from '../../components/InvoicePreviewModal';
 import SalesBillDetail from '../reports/SalesBillDetail';
 import PageTour from '../../components/PageTour';
@@ -76,6 +78,55 @@ const BILL_STATUS_COLOR = { Paid: 'green', Partial: 'orange', Pending: 'red', Ca
 
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
 const PAN_THRESHOLD = 200000;
+// No existing constant covers "this purchase is valuable enough to be worth
+// insuring" — chosen as a reasonable default for jewellery, not tied to any
+// statutory threshold like PAN_THRESHOLD is.
+const INSURANCE_OFFER_THRESHOLD = 50000;
+// Standard Indian currency denominations, largest first, for the Cash
+// payment row's optional "Count Cash" helper.
+const CASH_DENOMINATIONS = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
+
+// "Count Cash" — a till-reconciliation helper that didn't exist anywhere:
+// count how many of each note/coin the cashier was actually handed, and
+// apply the sum straight into the Cash split's amount field, instead of
+// mentally adding it up (or worse, miscounting a large cash payment).
+function CashDenominationPopover({ onApply }) {
+  const [counts, setCounts] = useState({});
+  const total = CASH_DENOMINATIONS.reduce((s, d) => s + d * (counts[d] || 0), 0);
+  return (
+    <Popover
+      trigger="click"
+      title="Count Cash"
+      content={
+        <div style={{ width: 220 }}>
+          {CASH_DENOMINATIONS.map((d) => (
+            <div key={d} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <Text style={{ fontSize: 12, width: 50 }}>₹{d} ×</Text>
+              <InputNumber size="small" min={0} style={{ width: 80 }}
+                value={counts[d] || 0}
+                onChange={(v) => setCounts((p) => ({ ...p, [d]: v || 0 }))} />
+              <Text style={{ fontSize: 12, width: 70, textAlign: 'right' }}>{formatCurrency(d * (counts[d] || 0))}</Text>
+            </div>
+          ))}
+          <Divider style={{ margin: '6px 0' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <Text strong>Total</Text>
+            <Text strong style={{ color: '#B8860B' }}>{formatCurrency(total)}</Text>
+          </div>
+          <Button size="small" type="primary" block
+            style={{ background: '#B8860B', borderColor: '#B8860B' }}
+            onClick={() => { onApply(total); setCounts({}); }}>
+            Apply to Amount
+          </Button>
+        </div>
+      }
+    >
+      <Tooltip title="Count Cash">
+        <Button size="large" icon={<CalculatorOutlined />} />
+      </Tooltip>
+    </Popover>
+  );
+}
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export default function POSPage() {
@@ -103,18 +154,35 @@ export default function POSPage() {
   // printerNameOverride (spec §16) — set when the user picks a specific
   // printer from the Recent Bills dropdown arrow instead of the plain
   // reprint click; undefined means "use the configured Sales Bill default."
-  const reprintBill = async (saleId, printerNameOverride) => {
+  const reprintBill = async (saleId, printerNameOverride, copyLabel) => {
     setReprintingId(saleId);
     try {
       const res = await salesApi.getById(saleId);
       const { sale, items: saleItems } = res.data.data;
-      const printResult = await printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo }, printerNameOverride);
-      if (printResult?.success) message.success('Reprinted.');
+      const printResult = await printThermalReceipt(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo }, printerNameOverride, copyLabel);
+      if (printResult?.success) message.success(copyLabel ? `${copyLabel} printed.` : 'Reprinted.');
       else message.warning('Reprint sent to the fallback print dialog — the configured printer may be offline.');
     } catch {
       message.error('Failed to reprint this bill.');
     } finally {
       setReprintingId(null);
+    }
+  };
+
+  // One-click e-Invoice — previously the ONLY way to generate one was a
+  // fully separate Compliance page requiring the Sale ID to be typed in by
+  // hand; this calls the same endpoint with the ID already known, right
+  // from the bill itself.
+  const [einvoiceGeneratingId, setEinvoiceGeneratingId] = useState(null);
+  const generateEinvoiceForBill = async (saleId) => {
+    setEinvoiceGeneratingId(saleId);
+    try {
+      const res = await complianceApi.generateEinvoice({ Sale_ID: saleId });
+      message.info(res.data.message);
+    } catch (err) {
+      message.error(err.response?.data?.message || 'Failed to generate e-Invoice.');
+    } finally {
+      setEinvoiceGeneratingId(null);
     }
   };
 
@@ -452,6 +520,21 @@ export default function POSPage() {
       const { sale, items: saleItems } = res.data.data;
       message.success(`✅ Invoice ${sale.Invoice_Number} created!`);
       emitCheckoutComplete(sale);
+      // Insurance is otherwise a fully disconnected module (no link from a
+      // sale at all) — this is a non-blocking prompt only, never forced;
+      // dismissing it does nothing to the sale that already succeeded above.
+      if (sale.Customer_ID && parseFloat(sale.Net_Payable_Amount || 0) >= INSURANCE_OFFER_THRESHOLD) {
+        message.success({
+          content: (
+            <span>
+              High-value sale — <a onClick={() => navigate('/insurance-amc', {
+                state: { prefillCustomerId: sale.Customer_ID, prefillSumInsured: sale.Net_Payable_Amount },
+              })}>offer jewellery insurance?</a>
+            </span>
+          ),
+          duration: 8,
+        });
+      }
       // Fire-and-forget by design (checkout must not block on printing) —
       // but a failed print (spec §26) still needs to be distinct from "the
       // sale itself failed," which it never is: the invoice above already
@@ -1089,6 +1172,9 @@ export default function POSPage() {
                 />
                 <Input size="large" placeholder="Ref / UTR" style={{ width: 100 }}
                   value={split.reference} onChange={e => updateSplit(idx, 'reference', e.target.value)} />
+                {split.mode === 'Cash' && (
+                  <CashDenominationPopover onApply={(total) => updateSplit(idx, 'amount', total)} />
+                )}
                 {paymentSplits.length > 1 && !isUnofficial && (
                   <Button size="large" danger type="text" icon={<MinusCircleOutlined />} onClick={() => removeSplit(idx)} />
                 )}
@@ -1184,6 +1270,14 @@ export default function POSPage() {
                 <Tooltip key="preview" title="Preview the designed invoice before printing">
                   <Button type="text" size="small" icon={<FileImageOutlined />} onClick={(e) => { e.stopPropagation(); openPreview(bill.Sale_ID); }} />
                 </Tooltip>,
+                <Tooltip key="einvoice" title="Generate e-Invoice">
+                  <Button type="text" size="small" icon={<SafetyCertificateOutlined />} loading={einvoiceGeneratingId === bill.Sale_ID}
+                    onClick={(e) => { e.stopPropagation(); generateEinvoiceForBill(bill.Sale_ID); }} />
+                </Tooltip>,
+                <span key="copies" onClick={(e) => e.stopPropagation()}>
+                  <CopyPrintButton loading={reprintingId === bill.Sale_ID}
+                    onPrintCopy={(copyLabel) => reprintBill(bill.Sale_ID, undefined, copyLabel)} />
+                </span>,
                 <span key="reprint" onClick={(e) => e.stopPropagation()}>
                   <PrinterOverrideButton
                     loading={reprintingId === bill.Sale_ID}
@@ -1216,6 +1310,10 @@ export default function POSPage() {
         extra={viewBillDetail && (
           <Space>
             <Button icon={<FileImageOutlined />} onClick={() => openPreview(viewBillDetail.sale.Sale_ID)}>Preview</Button>
+            <Button icon={<SafetyCertificateOutlined />} loading={einvoiceGeneratingId === viewBillDetail.sale.Sale_ID}
+              onClick={() => generateEinvoiceForBill(viewBillDetail.sale.Sale_ID)}>E-Inv</Button>
+            <CopyPrintButton size="middle" loading={reprintingId === viewBillDetail.sale.Sale_ID}
+              onPrintCopy={(copyLabel) => reprintBill(viewBillDetail.sale.Sale_ID, undefined, copyLabel)} />
             <PrinterOverrideButton label="Reprint" size="middle"
               loading={reprintingId === viewBillDetail.sale.Sale_ID}
               onPrint={(printerName) => reprintBill(viewBillDetail.sale.Sale_ID, printerName)} />

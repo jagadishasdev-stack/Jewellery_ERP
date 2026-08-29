@@ -16,8 +16,9 @@ import dayjs from 'dayjs';
 // new-module route expects a date string, not a moment/dayjs object.
 export default function GenericCrudTab({
   queryKey, listFn, createFn, columns, fields, title = 'New', extraButton, rowKey, transformSubmit,
+  initialValues, autoOpen,
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!autoOpen);
   const [form] = Form.useForm();
   const qc = useQueryClient();
 
@@ -53,7 +54,7 @@ export default function GenericCrudTab({
         rowKey={rowKey} pagination={{ pageSize: 10 }} scroll={{ x: 'max-content' }}
       />
       <Modal title={title} open={open} onCancel={() => setOpen(false)} footer={null} destroyOnClose>
-        <Form form={form} layout="vertical" onFinish={handleFinish}>
+        <Form form={form} layout="vertical" onFinish={handleFinish} initialValues={initialValues}>
           {fields.map((f) => (
             <Form.Item key={f.name} name={f.name} label={f.label} rules={f.required ? [{ required: true, message: `${f.label} is required` }] : []} initialValue={f.initialValue}>
               {f.type === 'number' ? <InputNumber style={{ width: '100%' }} min={f.min ?? 0} step={f.step || 1} placeholder={f.placeholder} /> :

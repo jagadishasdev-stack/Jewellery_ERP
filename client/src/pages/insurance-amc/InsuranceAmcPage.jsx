@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Typography, Tabs, Tag, Button, Space, message } from 'antd';
 import { SafetyOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation } from 'react-router-dom';
 import { insuranceAmcApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import GenericCrudTab from '../../components/GenericCrudTab';
@@ -31,13 +32,14 @@ function PoliciesTab() {
   );
 }
 
-function CustomerInsuranceTab() {
+function CustomerInsuranceTab({ prefill }) {
   const qc = useQueryClient();
   const [claimId, setClaimId] = useState(null);
   return (
     <GenericCrudTab
       queryKey={['customer-insurance']} listFn={insuranceAmcApi.getCustomerInsurance} createFn={insuranceAmcApi.createCustomerInsurance}
       title="Enroll Customer" rowKey="Insurance_ID"
+      initialValues={prefill} autoOpen={!!prefill}
       fields={[
         { name: 'Customer_ID', label: 'Customer ID', type: 'number', required: true, placeholder: 'Numeric Customer_ID' },
         { name: 'Policy_ID', label: 'Policy ID', type: 'number', placeholder: 'Numeric Policy_ID' },
@@ -108,6 +110,16 @@ function AmcEnrollmentsTab() {
 
 export default function InsuranceAmcPage() {
   const tabsRef = useRef(null);
+  // Reached with a prefill (e.g. from POS's "Offer Insurance" prompt after a
+  // high-value sale) — jumps straight to Customer Insurance with the
+  // customer + sum insured already filled in, instead of landing on
+  // Policies and making staff hunt for the right tab and re-type numbers
+  // that were already known at checkout.
+  const location = useLocation();
+  const prefill = location.state?.prefillCustomerId ? {
+    Customer_ID: location.state.prefillCustomerId,
+    Sum_Insured: location.state.prefillSumInsured,
+  } : null;
   const tourSteps = [
     { title: '1. Set Up Policies & Plans', description: 'Start in "Insurance Policies" and "AMC Plans" — define the insurers/premium rates and maintenance plans you offer before enrolling any customer.', target: () => tabsRef.current },
     { title: '2. Enroll a Customer', description: 'Move to "Customer Insurance" or "AMC Enrollments" — pick the customer, policy/plan, and it works out the premium/expiry for you.' },
@@ -119,9 +131,9 @@ export default function InsuranceAmcPage() {
         <Title level={4} style={{ margin: 0 }}><Space><SafetyOutlined style={{ color: '#B8860B' }} />Insurance & AMC</Space></Title>
       </div>
       <div ref={tabsRef}>
-      <Tabs items={[
+      <Tabs defaultActiveKey={prefill ? 'customer-insurance' : 'policies'} items={[
         { key: 'policies', label: 'Insurance Policies', children: <PoliciesTab /> },
-        { key: 'customer-insurance', label: 'Customer Insurance', children: <CustomerInsuranceTab /> },
+        { key: 'customer-insurance', label: 'Customer Insurance', children: <CustomerInsuranceTab prefill={prefill} /> },
         { key: 'amc-plans', label: 'AMC Plans', children: <AmcPlansTab /> },
         { key: 'amc-enrollments', label: 'AMC Enrollments', children: <AmcEnrollmentsTab /> },
       ]} />

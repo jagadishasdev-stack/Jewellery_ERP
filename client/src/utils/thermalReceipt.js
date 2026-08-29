@@ -29,7 +29,20 @@ import dayjs from 'dayjs';
  * purchase bills, credit notes...) collapsed onto one shared 'regular'
  * printer no matter its actual document type.
  */
-export const printFromInvoiceStudio = async (docType, data, docNumber, printerNameOverride) => {
+// Stamps a "SHOP COPY" / "CUSTOMER COPY" banner onto the very top of a
+// print document's <body> — done as a plain string insertion (not a change
+// to buildInvoicePrintDocument itself) so it shows up regardless of what a
+// tenant's own Invoice Studio template happens to contain; the template
+// doesn't need to know or care about copy labels at all.
+const stampCopyLabel = (html, copyLabel) => {
+  if (!copyLabel) return html;
+  const banner = `<div style="text-align:center;font-weight:bold;font-size:12px;letter-spacing:1px;padding:3px 0;border-bottom:2px dashed #000;margin-bottom:4px;">*** ${copyLabel.toUpperCase()} ***</div>`;
+  return /<body[^>]*>/i.test(html)
+    ? html.replace(/(<body[^>]*>)/i, `$1${banner}`)
+    : banner + html;
+};
+
+export const printFromInvoiceStudio = async (docType, data, docNumber, printerNameOverride, copyLabel) => {
   let blocks = null, paperKey = 'A4';
   try {
     const res = await invoiceStudioApi.resolve(docType);
@@ -50,7 +63,7 @@ export const printFromInvoiceStudio = async (docType, data, docNumber, printerNa
   const printWindow = connected ? null : openPrintWindow('width=500,height=700');
 
   const qrDataUrls = await resolveInvoiceQrDataUrls(blocks, data);
-  const html = buildInvoicePrintDocument(blocks, paper.w, paper.h, data, qrDataUrls);
+  const html = stampCopyLabel(buildInvoicePrintDocument(blocks, paper.w, paper.h, data, qrDataUrls), copyLabel);
 
   if (connected) {
     const result = await printHTML(role, html, { docType, docNumber, printerNameOverride });
@@ -102,9 +115,9 @@ export const buildSalesBillStudioData = (sale, items, tenant) => ({
   amount_paid: sale.Amount_Paid, balance: sale.Balance_Amount,
 });
 
-export const printThermalReceipt = async (sale, items, tenant, printerNameOverride) => {
+export const printThermalReceipt = async (sale, items, tenant, printerNameOverride, copyLabel) => {
   const studioData = buildSalesBillStudioData(sale, items, tenant);
-  const studioAttempt = await printFromInvoiceStudio('SALES_BILL', studioData, sale.Invoice_Number, printerNameOverride);
+  const studioAttempt = await printFromInvoiceStudio('SALES_BILL', studioData, sale.Invoice_Number, printerNameOverride, copyLabel);
   if (studioAttempt.printed) return studioAttempt.result;
 
   const MAX_CHARS = 48;
@@ -116,6 +129,7 @@ export const printThermalReceipt = async (sale, items, tenant, printerNameOverri
   };
 
   const lines = [];
+  if (copyLabel) { lines.push(center(`*** ${copyLabel.toUpperCase()} ***`)); lines.push(doubleLine); }
   lines.push(center(tenant?.Company_Name || 'JEWELLERY STORE'));
   if (tenant?.GST_No) lines.push(center(`GST: ${tenant.GST_No}`));
   if (tenant?.Phone) lines.push(center(`Ph: ${tenant.Phone}`));
