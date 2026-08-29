@@ -548,6 +548,7 @@ export const excelImportApi = {
   importPurity: (file) => importFile('purity', file),
   importGemstones: (file) => importFile('gemstones', file),
   importVendors: (file) => importFile('vendors', file),
+  importOrders: (file) => importFile('orders', file),
   downloadTemplate: (type) => api.get(`/excel-import/template/${type}`, { responseType: 'blob' }),
 };
 

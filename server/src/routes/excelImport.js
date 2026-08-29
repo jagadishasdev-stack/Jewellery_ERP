@@ -40,6 +40,13 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const { auditLog } = require('../utils/auditLogger');
 const { getMetalTypes, getMetalTypesWithPurity } = require('../utils/metalTypes');
+const { nextNumber } = require('../utils/numberFormat');
+const dayjs = require('dayjs');
+// Needed to strict-parse a plain-text date cell (DD-MM-YYYY etc.) — a real
+// Excel *date-formatted* cell already arrives as a JS Date object (via
+// parseSheet's cellDates:true) and never needs this at all; this only
+// covers CSV/text-cell dates typed in by hand.
+dayjs.extend(require('dayjs/plugin/customParseFormat'));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -51,7 +58,12 @@ const upload = multer({
 });
 
 function parseSheet(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+  // cellDates:true only changes anything for a genuinely date-formatted
+  // Excel cell — none of the 7 pre-existing templates have a date column
+  // at all, so this is additive (needed for Orders' Order Date/Due Date),
+  // not a behavior change for stock/customers/itemtypes/designs/purity/
+  // gemstones/vendors.
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   return XLSX.utils.sheet_to_json(sheet, { defval: null, raw: true });
 }
@@ -90,6 +102,14 @@ const TEMPLATES = {
   purity: ['Purity Code', 'Metal Type', 'Karat', 'Percentage', 'Description', 'Hallmark Standard'],
   gemstones: ['Stone Code', 'Stone Name', 'Color', 'Clarity', 'Cut', 'Price Per Carat', 'Is Natural', 'Is Lab Grown'],
   vendors: ['Vendor Type', 'Vendor Name', 'Contact Person', 'Mobile', 'Email', 'Address', 'City', 'State', 'GST No', 'Opening Balance'],
+  // "Import Orders" — a Master/Reports/Utility audit gap. Scoped to
+  // Customer Order specifically (tbl_bin_orders, Order_Type='Customer',
+  // the exact table/route BillingHub's own "Order Booking" modal and the
+  // sidebar's "Customer Order" entry already use) rather than a vaguer
+  // generic "orders" — Purchase Orders already have their own dedicated
+  // creation flow (supplier/GST/payment terms) that isn't safe to
+  // bulk-import blind, so this is deliberately NOT that.
+  orders: ['Party Name', 'Party Mobile', 'Order Date', 'Item Description', 'Design Details', 'Purity', 'Estimated Weight', 'Due Date', 'Estimated Amount', 'Advance Amount', 'Remarks'],
 };
 
 // ── GET /api/excel-import/template/:type — a blank starter file ────────────────
@@ -277,6 +297,82 @@ router.post('/customers', upload.single('file'), authenticate, requirePermission
     await auditLog({
       tenantId, userId: req.user.userId, tableName: 'tbl_customer_master', recordId: null,
       actionType: 'INSERT', description: `Excel import: ${imported} customers imported by ${req.user.username} (${errors.length} rows skipped)`, req,
+    });
+
+    return sendSuccess(res, { imported, skipped: errors.length, totalRows: rows.length, errors }, `Imported ${imported} of ${rows.length} rows.`);
+  } catch (err) {
+    return sendError(res, 500, 'Failed to process the file: ' + err.message);
+  }
+});
+
+// ── POST /api/excel-import/orders ─────────────────────────────────────────────
+// Bulk-creates real tbl_bin_orders rows (Order_Type='Customer') — the same
+// table/route BillingHub's own "Order Booking" modal writes to, so an
+// imported order shows up in the Order Bin immediately, with the same
+// Voucher_ID registration a manually-created one gets (POST /bin/orders).
+router.post('/orders', upload.single('file'), authenticate, requirePermission('tenant_management'), async (req, res) => {
+  if (!req.file) return sendError(res, 400, 'No file uploaded.');
+  const tenantId = req.user.tenantId;
+  const errors = [];
+  let imported = 0;
+
+  const parseDate = (v) => {
+    if (!v) return null;
+    const d = v instanceof Date ? dayjs(v) : dayjs(String(v), ['YYYY-MM-DD', 'DD-MM-YYYY', 'DD/MM/YYYY', 'MM/DD/YYYY'], true);
+    return d.isValid() ? d.format('YYYY-MM-DD') : null;
+  };
+
+  try {
+    const rows = parseSheet(req.file.buffer);
+    if (!rows.length) return sendError(res, 400, 'The file has no data rows.');
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const rowNum = i + 2;
+      const partyName = String(r['Party Name'] || '').trim();
+      const orderDate = parseDate(r['Order Date']);
+
+      if (!partyName) { errors.push(`Row ${rowNum}: Party Name is required — skipped.`); continue; }
+      if (!orderDate) { errors.push(`Row ${rowNum} (${partyName}): a valid Order Date is required (YYYY-MM-DD or DD-MM-YYYY) — skipped.`); continue; }
+
+      try {
+        const voucherId = await nextNumber({ tenantId, table: 'tbl_voucher_master', column: 'Voucher_ID', prefix: 'ORD', tenantCode: '', padWidth: 5 });
+        const trx = await db.transaction();
+        try {
+          const [order] = await trx('tbl_bin_orders').insert({
+            Tenant_ID: tenantId, Voucher_ID: voucherId, Order_Type: 'Customer',
+            Party_Name: partyName,
+            Party_Mobile: r['Party Mobile'] ? String(r['Party Mobile']).replace(/\D/g, '') : null,
+            Order_Date: orderDate,
+            Item_Description: r['Item Description'] || null,
+            Design_Details: r['Design Details'] || null,
+            Purity: r['Purity'] || null,
+            Estimated_Weight: num(r['Estimated Weight'], null),
+            Due_Date: parseDate(r['Due Date']),
+            Estimated_Amount: num(r['Estimated Amount'], 0),
+            Advance_Amount: num(r['Advance Amount'], 0),
+            Remarks: r['Remarks'] ? `${r['Remarks']} (bulk imported)` : 'Bulk imported',
+            Status: 'Pending', Created_By: req.user.username,
+          }).returning('*');
+          await trx('tbl_voucher_master').insert({
+            Voucher_ID: voucherId, Tenant_ID: tenantId, Voucher_Type: 'ORDER',
+            Reference_ID: order.Order_ID, Reference_Table: 'tbl_bin_orders', Status: 'Active',
+            Description: `Customer order — ${partyName} (bulk import)`, Created_By: req.user.username,
+          });
+          await trx.commit();
+          imported++;
+        } catch (insErr) {
+          await trx.rollback();
+          errors.push(`Row ${rowNum} (${partyName}): SKIPPED — ${insErr.message}`);
+        }
+      } catch (voucherErr) {
+        errors.push(`Row ${rowNum} (${partyName}): SKIPPED — ${voucherErr.message}`);
+      }
+    }
+
+    await auditLog({
+      tenantId, userId: req.user.userId, tableName: 'tbl_bin_orders', recordId: null,
+      actionType: 'INSERT', description: `Excel import: ${imported} customer orders imported by ${req.user.username} (${errors.length} rows skipped)`, req,
     });
 
     return sendSuccess(res, { imported, skipped: errors.length, totalRows: rows.length, errors }, `Imported ${imported} of ${rows.length} rows.`);

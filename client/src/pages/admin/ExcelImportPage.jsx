@@ -30,6 +30,11 @@ const IMPORT_TYPES = {
   purity: { label: 'Purity Master', fn: excelImportApi.importPurity, columns: ['Purity Code', 'Karat', 'Percentage', 'Description', 'Hallmark Standard'], global: true },
   gemstones: { label: 'Gemstones', fn: excelImportApi.importGemstones, columns: ['Stone Code', 'Stone Name', 'Color', 'Clarity', 'Cut', 'Price Per Carat', 'Is Natural', 'Is Lab Grown'], global: true },
   vendors: { label: 'Vendors / Karigars', fn: excelImportApi.importVendors, columns: ['Vendor Type (Supplier or Karigar)', 'Vendor Name', 'Contact Person', 'Mobile', 'Email', 'Address', 'City', 'State', 'GST No', 'Opening Balance'] },
+  // Scoped to Customer Order specifically — lands in the same Order Bin
+  // (tbl_bin_orders) BillingHub's own "Order Booking" modal writes to.
+  // Purchase Orders aren't covered — they need supplier/GST/payment-terms
+  // handling that isn't safe to bulk-import blind.
+  orders: { label: 'Customer Orders', fn: excelImportApi.importOrders, columns: ['Party Name', 'Party Mobile', 'Order Date', 'Item Description', 'Design Details', 'Purity', 'Estimated Weight', 'Due Date', 'Estimated Amount', 'Advance Amount', 'Remarks'] },
 };
 
 export default function ExcelImportPage() {
