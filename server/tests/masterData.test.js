@@ -120,6 +120,31 @@ describe('Designs', () => {
     expect(row).toBeDefined();
     expect(row.Type_Name).toBe('QA Master Test Ring (renamed)');
   });
+
+  /**
+   * FIXED (client-side, this pass): Add Stock's Design dropdown never
+   * filtered by the selected Item Type at all — picking "Ring" still
+   * offered every design regardless of type. tbl_design_master.Type_ID has
+   * always existed for this; GET /designs just never accepted a filter.
+   */
+  test('FIXED: GET /designs?typeId= narrows to only designs of that item type', async () => {
+    const ring = await db('tbl_item_type_master').where({ Type_Code: `${QA}-RING` }).first();
+    const otherType = await db('tbl_item_type_master').where({ Type_Code: `${QA}-BANG` }).first()
+      || (await db('tbl_item_type_master').insert({ Type_Code: `${QA}-BANG`, Type_Name: 'QA Master Test Bangle', Category: 'Plain' }).returning('*'))[0];
+    await request(app).post('/api/master/designs').set(auth())
+      .send({ Design_Code: `${QA}-D3`, Design_Name: 'QA Design Bangle Only', Type_ID: otherType.Type_ID });
+
+    const res = await request(app).get('/api/master/designs').set(auth()).query({ typeId: ring.Type_ID });
+    expect(res.status).toBe(200);
+    expect(res.body.data.some(d => d.Design_Code === `${QA}-D2`)).toBe(true); // Ring design present
+    expect(res.body.data.some(d => d.Design_Code === `${QA}-D3`)).toBe(false); // Bangle design excluded
+
+    // Design row must go before the item type it references — the FK is a
+    // plain RESTRICT, and the file-level afterAll cleanup for designs runs
+    // too late (after this test's own item-type cleanup would already fail).
+    await db('tbl_design_master').where({ Design_Code: `${QA}-D3` }).del();
+    await db('tbl_item_type_master').where({ Type_Code: `${QA}-BANG` }).del();
+  });
 });
 
 // ── Gemstones (global) ──────────────────────────────────────────────────────

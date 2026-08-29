@@ -51,11 +51,15 @@ router.put('/item-types/:id', authenticate, async (req, res) => {
 // ─── Designs ──────────────────────────────────────────────────────────────────
 router.get('/designs', authenticate, async (req, res) => {
   try {
-    const designs = await db('tbl_design_master as d')
+    let qb = db('tbl_design_master as d')
       .leftJoin('tbl_item_type_master as t', 'd.Type_ID', 't.Type_ID')
-      .where({ 'd.Is_Active': true })
-      .select('d.*', 't.Type_Name', 't.Type_Code')
-      .orderBy('d.Design_Name');
+      .where({ 'd.Is_Active': true });
+    // Lets Add Stock narrow this dropdown to only the designs that belong
+    // to the Item Type already picked (e.g. picking "Ring" shouldn't offer
+    // Necklace designs) — the column has always been there (Type_ID), this
+    // was just never exposed as a filter.
+    if (req.query.typeId) qb = qb.where('d.Type_ID', req.query.typeId);
+    const designs = await qb.select('d.*', 't.Type_Name', 't.Type_Code').orderBy('d.Design_Name');
     return sendSuccess(res, designs);
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch designs.');

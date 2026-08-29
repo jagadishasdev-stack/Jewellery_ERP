@@ -53,6 +53,12 @@ export default function AddOrnamentPage() {
   const isDiamond = metalType === 'Diamond';
   const filteredPurities = (purities || []).filter((p) => !metalType || p.Metal_Type === metalType);
 
+  // Which Item Type is selected drives the Design dropdown — a Ring
+  // shouldn't offer Necklace designs. tbl_design_master.Type_ID has always
+  // existed for this; it just wasn't wired up to filter anything before.
+  const typeId = Form.useWatch('Type_ID', form);
+  const filteredDesigns = (designs || []).filter((d) => !typeId || d.Type_ID === typeId);
+
   // F2 opens the full option list for each of these — same as clicking them.
   const itemTypeLookup = useF2Lookup();
   const designLookup = useF2Lookup();
@@ -166,16 +172,17 @@ export default function AddOrnamentPage() {
                 <Col xs={12} md={8}>
                   <Form.Item name="Type_ID" label="Item Type (F2 to browse)" rules={[{ required: true }]}>
                     <Select placeholder="Select type" showSearch optionFilterProp="children"
-                      open={itemTypeLookup.open} onDropdownVisibleChange={itemTypeLookup.onOpenChange} onKeyDown={itemTypeLookup.onKeyDown}>
+                      open={itemTypeLookup.open} onDropdownVisibleChange={itemTypeLookup.onOpenChange} onKeyDown={itemTypeLookup.onKeyDown}
+                      onChange={() => form.setFieldValue('Design_ID', undefined)}>
                       {(itemTypes || []).map((t) => <Option key={t.Type_ID} value={t.Type_ID}>{t.Type_Name}</Option>)}
                     </Select>
                   </Form.Item>
                 </Col>
                 <Col xs={12} md={8}>
                   <Form.Item name="Design_ID" label="Design (F2 to browse)">
-                    <Select placeholder="Select design" allowClear showSearch optionFilterProp="children"
+                    <Select placeholder={typeId ? 'Select design' : 'Select item type first'} allowClear showSearch optionFilterProp="children"
                       open={designLookup.open} onDropdownVisibleChange={designLookup.onOpenChange} onKeyDown={designLookup.onKeyDown}>
-                      {(designs || []).map((d) => <Option key={d.Design_ID} value={d.Design_ID}>{d.Design_Name}</Option>)}
+                      {filteredDesigns.map((d) => <Option key={d.Design_ID} value={d.Design_ID}>{d.Design_Name}</Option>)}
                     </Select>
                   </Form.Item>
                 </Col>
