@@ -14,6 +14,7 @@ const { inferMetalTypeFromPurityText, isValidMetalType, getMetalTypes } = requir
 const { nextNumber } = require('../utils/numberFormat');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
+const { appendMetalLedgerEntry } = require('../utils/metalLedger');
 const dayjs = require('dayjs');
 
 // Reused across every route below that accepts an optional Metal_Type —
@@ -546,6 +547,15 @@ router.post('/pure-gold', authenticate, [
     }).returning('*');
     await registerVoucher(trx, tid, voucherId, 'PURE_GOLD', gold.Gold_ID, 'tbl_bin_pure_gold',
       `${req.body.Gold_Type || 'Gold'} — ${req.body.Gross_Weight}g from ${req.body.Supplier_Name}`, req.user.username);
+    // Metal Transaction ledger — this bin entry coming in is a real
+    // Addition to the tenant's running metal balance, not just a status
+    // flag anymore. Same transaction, so it can never happen without the
+    // bin row itself succeeding.
+    await appendMetalLedgerEntry({
+      trx, tenantId: tid, metalType: gold.Metal_Type, transactionType: 'Addition',
+      weightChange: gold.Net_Weight, referenceType: 'PURE_GOLD_BIN', referenceId: gold.Gold_ID,
+      notes: `Purchased from ${req.body.Supplier_Name}`, createdBy: req.user.username,
+    });
     await trx.commit();
     return sendSuccess(res, gold, `Pure gold entry created. Voucher: ${voucherId}`, 201);
   } catch (err) { await trx.rollback(); return sendError(res, 500, 'Failed.'); }
@@ -563,15 +573,25 @@ router.put('/pure-gold/:id', authenticate, async (req, res) => {
 
 router.post('/pure-gold/:id/dispose', authenticate, async (req, res) => {
   const { method, remarks } = req.body; // Manufacturing | Direct_Sale | Transfer
+  const trx = await db.transaction();
   try {
-    const [g] = await db('tbl_bin_pure_gold')
+    const existing = await trx('tbl_bin_pure_gold').where({ Gold_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    if (!existing) { await trx.rollback(); return sendError(res, 404, 'Not found.'); }
+    const [g] = await trx('tbl_bin_pure_gold')
       .where({ Gold_ID: req.params.id, Tenant_ID: req.user.tenantId })
       .update({ Status: method === 'Direct_Sale' ? 'Sold' : method === 'Manufacturing' ? 'For_Manufacturing' : 'Transferred',
         Disposed_By: method, Disposed_At: new Date(), Remarks: remarks || null, Modified_Date: new Date() })
       .returning('*');
-    if (!g) return sendError(res, 404, 'Not found.');
+    // Metal Transaction ledger — the gold leaving this bin (however it's
+    // disposed) is a real Issue against the running balance.
+    await appendMetalLedgerEntry({
+      trx, tenantId: req.user.tenantId, metalType: g.Metal_Type, transactionType: 'Issue',
+      weightChange: -Math.abs(g.Net_Weight), referenceType: 'PURE_GOLD_BIN', referenceId: g.Gold_ID,
+      notes: `Disposed via ${method}${remarks ? ` — ${remarks}` : ''}`, createdBy: req.user.username,
+    });
+    await trx.commit();
     return sendSuccess(res, g, `Gold entry marked as ${g.Status}.`);
-  } catch (err) { return sendError(res, 500, 'Failed.'); }
+  } catch (err) { await trx.rollback(); return sendError(res, 500, 'Failed.'); }
 });
 
 // ── Dashboard summary across all bins ────────────────────────────────────────

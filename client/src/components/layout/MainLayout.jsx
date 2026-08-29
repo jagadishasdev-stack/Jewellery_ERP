@@ -359,7 +359,10 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   // surface.
   const dealerTransactionItem = (permissions.karigar_management && (isEnabled('goldsmith') || isEnabled('manufacturing')))
     ? { key: '/dealer-transaction', label: '🤝 Dealer Transaction' } : null;
-  const purchaseChildren = [purchaseGroup, karigarGroup, dealerTransactionItem].filter(Boolean);
+  // Metal Transaction — genuinely new (Missing Feature Report), same
+  // gate as Purchase since it's a metal-procurement-adjacent ledger.
+  const metalTransactionItem = (isEnabled('purchase') || isEnabled('old_gold')) ? { key: '/metal-transaction-ledger', label: '⚖️ Metal Transaction' } : null;
+  const purchaseChildren = [purchaseGroup, karigarGroup, dealerTransactionItem, metalTransactionItem].filter(Boolean);
   if (purchaseChildren.length) transactionChildren.push({ key: 'txn-purchase-group', type: 'group', label: 'PURCHASE', children: purchaseChildren });
 
   // Jobcard Prediction — genuinely new (Missing Feature Report), same gate

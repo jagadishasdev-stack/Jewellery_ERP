@@ -43,6 +43,7 @@ import PacketStockPage from './pages/inventory/PacketStockPage';
 import JobcardPredictionPage from './pages/manufacturing/JobcardPredictionPage';
 import BranchOrdersPage from './pages/transfer/BranchOrdersPage';
 import DealerTransactionPage from './pages/karigar/DealerTransactionPage';
+import MetalTransactionLedgerPage from './pages/karigar/MetalTransactionLedgerPage';
 import BranchPerformancePage from './pages/reports/BranchPerformancePage';
 import DayClosePage from './pages/reports/DayClosePage';
 import InvoiceTemplatePage from './pages/invoice/InvoiceTemplatePage';
@@ -245,6 +246,7 @@ function App() {
         <Route path="/jobcard-prediction" element={<JobcardPredictionPage />} />
         <Route path="/branch-orders" element={<BranchOrdersPage />} />
         <Route path="/dealer-transaction" element={<DealerTransactionPage />} />
+        <Route path="/metal-transaction-ledger" element={<MetalTransactionLedgerPage />} />
         <Route path="/repair" element={<RepairPage />} />
         <Route path="/repair/job-cards" element={<JobCardReport />} />
         <Route path="/pawnbroking" element={<PawnbrokingPage />} />
