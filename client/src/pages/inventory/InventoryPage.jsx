@@ -13,7 +13,8 @@ import { ornamentsApi, masterApi } from '../../api/modules';
 import { formatCurrency, formatWeight } from '../../utils/calculations';
 import OrnamentDetailDrawer from './OrnamentDetailDrawer';
 import PageTour from '../../components/PageTour';
-import { METAL_TYPES, METAL_TYPE_COLORS } from '../../utils/metalTypes';
+import { METAL_TYPE_COLORS } from '../../utils/metalTypes';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -22,6 +23,7 @@ export default function InventoryPage() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ search: '', typeId: '', metalType: '', isAvailable: '', page: 1, limit: 50 });
   const [detailId, setDetailId] = useState(null);
+  const { metalTypes } = useMetalTypes();
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const addBtnRef = useRef(null);
@@ -183,7 +185,7 @@ export default function InventoryPage() {
             allowClear
             onChange={(v) => setFilters((f) => ({ ...f, metalType: v || '', page: 1 }))}
           >
-            {METAL_TYPES.map((m) => <Option key={m} value={m}>{m}</Option>)}
+            {metalTypes.map((m) => <Option key={m} value={m}>{m}</Option>)}
           </Select>
           <Select
             placeholder="Availability"

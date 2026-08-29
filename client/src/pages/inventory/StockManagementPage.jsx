@@ -34,7 +34,8 @@ import PageTour from '../../components/PageTour';
 import EmptyState from '../../components/states/EmptyState';
 import KPICard from '../../components/KPICard';
 import dayjs from 'dayjs';
-import { METAL_TYPES, METAL_TYPE_COLORS } from '../../utils/metalTypes';
+import { METAL_TYPE_COLORS } from '../../utils/metalTypes';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -45,6 +46,7 @@ function StockEntryModal({ open, onClose, entryType, onSuccess }) {
   const [priceCalc, setPriceCalc] = useState(null);
   const { goldRate, rates } = useGoldRate();
   const { user } = useAuthStore();
+  const { metalTypes, metalTypesWithPurity } = useMetalTypes();
   const qc = useQueryClient();
 
   const { data: itemTypes } = useQuery({ queryKey: ['item-types'], queryFn: () => masterApi.getItemTypes().then(r => r.data.data) });
@@ -55,9 +57,11 @@ function StockEntryModal({ open, onClose, entryType, onSuccess }) {
   const { data: makingCharges } = useQuery({ queryKey: ['making-charges'], queryFn: () => masterExtApi.getMakingCharges().then(r => r.data.data) });
 
   // See AddOrnamentPage.jsx for why metal type gates the Purity dropdown
-  // and whether Purity/gold rate are required at all.
+  // and whether Purity/gold rate are required at all. Was hardcoded to
+  // `metalType === 'Diamond'`, which silently didn't apply to any custom
+  // no-purity metal type an admin adds via Master Management.
   const metalType = Form.useWatch('Metal_Type', form);
-  const isDiamond = metalType === 'Diamond';
+  const isDiamond = !!metalType && metalTypesWithPurity.length > 0 && !metalTypesWithPurity.includes(metalType);
   const filteredPurities = (purities || []).filter(p => !metalType || p.Metal_Type === metalType);
 
   const saveMutation = useMutation({
@@ -133,7 +137,7 @@ function StockEntryModal({ open, onClose, entryType, onSuccess }) {
         <Row gutter={16}>
           <Col xs={8}><Form.Item name="Metal_Type" label="Metal Type" rules={[{required:true, message: 'Select the metal type'}]} initialValue="Gold">
             <Select onChange={() => form.setFieldValue('Purity_ID', undefined)}>
-              {METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}
+              {metalTypes.map(m => <Option key={m} value={m}>{m}</Option>)}
             </Select>
           </Form.Item></Col>
           <Col xs={8}><Form.Item name="Type_ID" label="Item Type" rules={[{required:true}]}>
@@ -274,6 +278,7 @@ function StockEntryModal({ open, onClose, entryType, onSuccess }) {
 function EditOrnamentModal({ ornamentId, open, onClose }) {
   const [form] = Form.useForm();
   const qc = useQueryClient();
+  const { metalTypes } = useMetalTypes();
   const { data: purities } = useQuery({ queryKey: ['purities'], queryFn: () => masterApi.getPurities().then(r => r.data.data) });
 
   const { data: ornament } = useQuery({
@@ -299,7 +304,7 @@ function EditOrnamentModal({ ornamentId, open, onClose }) {
       <Form form={form} layout="vertical" onFinish={v => updateMutation.mutate(v)}>
         <Row gutter={16}>
           <Col xs={12}><Form.Item name="Metal_Type" label="Metal Type" rules={[{required:true}]}>
-            <Select>{METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}</Select>
+            <Select>{metalTypes.map(m => <Option key={m} value={m}>{m}</Option>)}</Select>
           </Form.Item></Col>
           <Col xs={12}><Form.Item name="Hallmark_Certificate_No" label="Hallmark No"><Input /></Form.Item></Col>
         </Row>
@@ -339,6 +344,7 @@ export default function StockManagementPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user } = useAuthStore();
+  const { metalTypes } = useMetalTypes();
 
   // Filters
   const [filters, setFilters] = useState({
@@ -636,7 +642,7 @@ export default function StockManagementPage() {
           structural control the spec asks for instead of buried in the
           filter row. */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        {['', ...METAL_TYPES].map((m) => {
+        {["", ...metalTypes].map((m) => {
           const active = (filters.metalType || '') === m;
           return (
             <button

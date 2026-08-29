@@ -25,6 +25,7 @@ import {
   masterApi, masterExtApi, karigarApi, tenantApi, floorsApi,
 } from '../../api/modules';
 import PageTour from '../../components/PageTour';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -152,6 +153,8 @@ function MasterSection({ title, hint, queryKey, fetchFn, createFn, updateFn, fie
 // ── Main Master Hub Page ──────────────────────────────────────────────────────
 export default function MasterHub() {
   const { data: itemTypes } = useQuery({ queryKey: ['item-types'], queryFn: () => masterApi.getItemTypes().then(r => r.data.data) });
+  const { data: allPurities } = useQuery({ queryKey: ['purities'], queryFn: () => masterApi.getPurities().then(r => r.data.data) });
+  const { metalTypesWithPurity } = useMetalTypes();
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const howItWorksRef = useRef(null);
@@ -312,6 +315,30 @@ export default function MasterHub() {
         <TabPane tab={<span><GoldOutlined /> Metal & Purity</span>} key="metal">
           <Row gutter={[16, 16]}>
             <Col xs={24} lg={12}>
+              <Card title="Metal Type Master" size="small" style={{ borderRadius: 8 }}>
+                <Alert message="Gold, Silver, Platinum, Diamond are pre-set — add a custom metal type here (e.g. a house-branded alloy) and it becomes selectable everywhere Metal Type is used: Add Stock, Purity, Purchase, Bin Management." type="info" showIcon style={{ marginBottom: 8, fontSize: 11 }} />
+                <MasterSection
+                  title="Metal Type"
+                  hint="A custom type is usable everywhere the moment you add it — no separate setup needed"
+                  queryKey="metal-types"
+                  fetchFn={masterApi.getMetalTypes}
+                  createFn={masterApi.createMetalType}
+                  updateFn={masterApi.updateMetalType}
+                  rowKey="Metal_Type_ID"
+                  fields={[
+                    { name: 'Metal_Name', label: 'Metal Name', required: true, placeholder: 'Rose Gold' },
+                    { name: 'Description', label: 'Description', placeholder: 'House-branded rose gold alloy' },
+                    { name: 'Has_Purity', label: 'Has Purity (Karat/Fineness)', type: 'boolean', default: true },
+                    {
+                      name: 'Default_Purity_ID', label: 'Default Purity', type: 'select',
+                      options: (allPurities || []).map((p) => ({ value: p.Purity_ID, label: `${p.Purity_Code} (${p.Percentage}%)` })),
+                    },
+                  ]}
+                />
+              </Card>
+            </Col>
+
+            <Col xs={24} lg={12}>
               <Card title="Purity Master" size="small" style={{ borderRadius: 8 }}>
                 <Alert message="Purities define the karat/fineness. 22K = 91.67%, 24K = 99.9%. These auto-calculate gold value in billing." type="info" showIcon style={{ marginBottom: 8, fontSize: 11 }} />
                 <MasterSection
@@ -324,7 +351,7 @@ export default function MasterHub() {
                   rowKey="Purity_ID"
                   fields={[
                     { name: 'Purity_Code', label: 'Code', required: true, placeholder: '22K' },
-                    { name: 'Metal_Type', label: 'Metal Type', type: 'select', options: ['Gold', 'Silver', 'Platinum'] },
+                    { name: 'Metal_Type', label: 'Metal Type', type: 'select', options: metalTypesWithPurity },
                     { name: 'Karat', label: 'Karat', required: true, type: 'number' },
                     { name: 'Percentage', label: 'Purity %', required: true, type: 'number', step: 0.01 },
                     { name: 'Hallmark_Standard', label: 'Hallmark', placeholder: 'BIS 916' },

@@ -321,6 +321,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
       adminChildren.push({ key: '/admin/print-history', label: '🧾 Print History' });
       adminChildren.push({ key: '/admin/excel-import', label: '📊 Excel Bulk Import' });
       adminChildren.push({ key: '/admin/theme-settings', label: '🎨 Theme Settings' });
+      adminChildren.push({ key: '/admin/company-settings', label: '🏢 Company Settings' });
       // Every tenant now designs their own barcode tag here — moved out of
       // the global_master-only block below (Super Admin still reaches the
       // same page, just also sees a tenant picker + the global default).

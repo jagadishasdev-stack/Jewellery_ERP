@@ -11,17 +11,21 @@ import { formatCurrency, formatWeight } from '../../utils/calculations';
 import { printNonTagIssueVoucher } from '../../utils/approvalVoucherPrint';
 import ApprovalNavTabs from './ApprovalNavTabs';
 import PageTour from '../../components/PageTour';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
 
-const METAL_TYPES = ['Gold', 'Silver', 'Platinum', 'Diamond', 'Other'];
-
 const emptyDraft = { Item_Type: '', Design_Type: '', Category: '', Gross_Weight: null, Metal_Type: 'Gold', Approx_Value: null, Image_URL: null, Remarks: '' };
 
 export default function NonTagIssuePage() {
   const navigate = useNavigate();
+  const { metalTypes } = useMetalTypes();
+  // "Other" isn't a real configured metal type — kept as a fixed fallback
+  // for a genuinely mixed/unclassifiable item (this field isn't validated
+  // server-side), appended after the live list rather than baked into it.
+  const metalTypeOptions = [...metalTypes, 'Other'];
   const [partyId, setPartyId] = useState(null);
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
@@ -192,7 +196,7 @@ export default function NonTagIssuePage() {
               <Col xs={12} md={6}><InputNumber placeholder="Gross Wt (g)" style={{ width: '100%', marginBottom: 8 }} min={0} step={0.001} value={draft.Gross_Weight} onChange={v => setDraft(p => ({ ...p, Gross_Weight: v }))} /></Col>
               <Col xs={12} md={6}>
                 <Select style={{ width: '100%', marginBottom: 8 }} value={draft.Metal_Type} onChange={v => setDraft(p => ({ ...p, Metal_Type: v }))}>
-                  {METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}
+                  {metalTypeOptions.map(m => <Option key={m} value={m}>{m}</Option>)}
                 </Select>
               </Col>
               <Col xs={12} md={6}><InputNumber placeholder="Approx Value (₹)" style={{ width: '100%', marginBottom: 8 }} min={0} value={draft.Approx_Value} onChange={v => setDraft(p => ({ ...p, Approx_Value: v }))} /></Col>

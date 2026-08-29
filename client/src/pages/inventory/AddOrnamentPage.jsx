@@ -11,7 +11,7 @@ import { calculateOrnamentPrice, formatCurrency } from '../../utils/calculations
 import { useGoldRate } from '../../hooks/useGoldRate';
 import FloorCounterTraySelect from '../../components/FloorCounterTraySelect';
 import PageTour from '../../components/PageTour';
-import { METAL_TYPES, METAL_TYPES_WITH_PURITY } from '../../utils/metalTypes';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
 import { useF2Lookup } from '../../hooks/useF2Lookup';
 
@@ -45,12 +45,19 @@ export default function AddOrnamentPage() {
   const { data: purities } = useQuery({ queryKey: ['purities'], queryFn: () => masterApi.getPurities().then((r) => r.data.data) });
   const { data: gemstones } = useQuery({ queryKey: ['gemstones'], queryFn: () => masterApi.getGemstones().then((r) => r.data.data) });
   const { data: vendors } = useQuery({ queryKey: ['vendors-all'], queryFn: () => karigarApi.getVendors().then((r) => r.data.data) });
+  const { metalTypes, metalTypesWithPurity } = useMetalTypes();
 
   // Which metal type is selected drives the Purity dropdown (a Platinum
   // item shouldn't offer 22K gold purities) and whether Purity/gold rate
-  // are required at all — a loose Diamond parcel has neither.
+  // are required at all — a loose parcel-type metal (Diamond, or any
+  // custom metal type an admin marks Has_Purity=false) has neither.
+  // Previously hardcoded to `metalType === 'Diamond'` specifically, which
+  // silently didn't apply to any custom no-purity metal type an admin adds.
   const metalType = Form.useWatch('Metal_Type', form);
-  const isDiamond = metalType === 'Diamond';
+  // metalTypesWithPurity.length check avoids a false-positive "isDiamond"
+  // flash for every metal type during the brief window before the live
+  // list has loaded.
+  const isDiamond = !!metalType && metalTypesWithPurity.length > 0 && !metalTypesWithPurity.includes(metalType);
   const filteredPurities = (purities || []).filter((p) => !metalType || p.Metal_Type === metalType);
 
   // Which Item Type is selected drives the Design dropdown — a Ring
@@ -165,7 +172,7 @@ export default function AddOrnamentPage() {
                       open={metalTypeLookup.open} onDropdownVisibleChange={metalTypeLookup.onOpenChange} onKeyDown={metalTypeLookup.onKeyDown}
                       onChange={() => form.setFieldValue('Purity_ID', undefined)}
                     >
-                      {METAL_TYPES.map((m) => <Option key={m} value={m}>{m}</Option>)}
+                      {metalTypes.map((m) => <Option key={m} value={m}>{m}</Option>)}
                     </Select>
                   </Form.Item>
                 </Col>

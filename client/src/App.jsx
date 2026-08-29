@@ -57,6 +57,7 @@ import SpecialStockPage from './pages/inventory/SpecialStockPage';
 import PrinterSettingsPage from './pages/admin/PrinterSettingsPage';
 import PrintHistoryPage from './pages/admin/PrintHistoryPage';
 import ThemeSettingsPage from './pages/admin/ThemeSettingsPage';
+import CompanySettingsPage from './pages/admin/CompanySettingsPage';
 import LabelDesignerPage from './pages/admin/LabelDesignerPage';
 import TransferPage from './pages/transfer/TransferPage';
 import PurchasePage from './pages/purchase/PurchasePage';
@@ -201,6 +202,7 @@ function App() {
         <Route path="/admin/printer-settings" element={<ProtectedRoute permission="tenant_management"><PrinterSettingsPage /></ProtectedRoute>} />
         <Route path="/admin/print-history" element={<ProtectedRoute permission="tenant_management"><PrintHistoryPage /></ProtectedRoute>} />
         <Route path="/admin/theme-settings" element={<ProtectedRoute permission="tenant_management"><ThemeSettingsPage /></ProtectedRoute>} />
+        <Route path="/admin/company-settings" element={<ProtectedRoute permission="tenant_management"><CompanySettingsPage /></ProtectedRoute>} />
         {/* tenant_management, not global_master — every tenant admin designs their own tag now, not just Super Admin (who has both permissions anyway) */}
         <Route path="/admin/label-designer" element={<ProtectedRoute permission="tenant_management"><LabelDesignerPage /></ProtectedRoute>} />
         <Route path="/floors" element={<FloorsPage />} />

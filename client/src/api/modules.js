@@ -29,6 +29,9 @@ export const masterApi = {
   getPurities: () => api.get('/master/purities'),
   createPurity: (data) => api.post('/master/purities', data),
   updatePurity: (id, data) => api.put(`/master/purities/${id}`, data),
+  getMetalTypes: () => api.get('/master/metal-types'),
+  createMetalType: (data) => api.post('/master/metal-types', data),
+  updateMetalType: (id, data) => api.put(`/master/metal-types/${id}`, data),
 };
 
 // ─── Ornaments / Inventory ────────────────────────────────────────────────────

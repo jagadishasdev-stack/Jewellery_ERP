@@ -7,7 +7,7 @@ const { generateArticleNumber } = require('../utils/invoiceNumber');
 const { auditLog } = require('../utils/auditLogger');
 const { modeFilter, modeVal, applyStockVisibility } = require('../utils/dataModeFilter');
 const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
-const { METAL_TYPES } = require('../utils/metalTypes');
+const { isValidMetalType, getMetalTypes } = require('../utils/metalTypes');
 
 // ─── GET /api/ornaments  (with filters) ───────────────────────────────────────
 router.get('/', authenticate, requireValidBranch, async (req, res) => {
@@ -196,7 +196,10 @@ router.post('/', authenticate, requireValidBranch, [
   body('Current_Gold_Rate').isFloat({ min: 0 }).withMessage('Gold rate required'),
   body('Base_Making_Charge_Per_Gram').isFloat({ min: 0 }).withMessage('Making charge required'),
   body('Purchase_Cost').isFloat({ min: 0 }).withMessage('Purchase cost required'),
-  body('Metal_Type').isIn(METAL_TYPES).withMessage(`Metal type must be one of: ${METAL_TYPES.join(', ')}`),
+  body('Metal_Type').custom(async (value) => {
+    if (!(await isValidMetalType(value))) throw new Error(`Metal type must be one of: ${(await getMetalTypes()).join(', ')}`);
+    return true;
+  }),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());

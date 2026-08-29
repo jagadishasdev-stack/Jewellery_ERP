@@ -14,7 +14,8 @@ import { message } from 'antd';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
 import { useDataMode } from '../../contexts/DataModeContext';
-import { METAL_TYPES, METAL_TYPE_COLORS } from '../../utils/metalTypes';
+import { METAL_TYPE_COLORS } from '../../utils/metalTypes';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 
 const { Option } = Select;
 
@@ -29,6 +30,7 @@ const exportCSV = (data, filename) => {
 
 export default function InventoryReportsPage() {
   const { isUnofficial } = useDataMode();
+  const { metalTypes } = useMetalTypes();
   const [activeTab, setActiveTab] = useState('current');
   // Drives the "isolated" per-metal stock report — leaving it unset shows
   // every metal's stock combined, same as before this existed.
@@ -213,7 +215,7 @@ export default function InventoryReportsPage() {
           <Card title="Stock by Metal" bodyStyle={{padding:'12px 14px'}} style={{borderRadius:8,marginBottom:14}}
             extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(byMetal,'stock_by_metal')}>CSV</Button>}>
             <Row gutter={[10,10]}>
-              {METAL_TYPES.map((metal) => {
+              {metalTypes.map((metal) => {
                 const row = byMetal.find(m => m.Metal_Type === metal) || {};
                 const isActive = metalFilter === metal;
                 return (
@@ -240,7 +242,7 @@ export default function InventoryReportsPage() {
               allowClear placeholder="All metals" style={{width:160}}
               value={metalFilter} onChange={setMetalFilter}
             >
-              {METAL_TYPES.map(m => <Option key={m} value={m}>{m} only</Option>)}
+              {metalTypes.map(m => <Option key={m} value={m}>{m} only</Option>)}
             </Select>
           </Space>
 

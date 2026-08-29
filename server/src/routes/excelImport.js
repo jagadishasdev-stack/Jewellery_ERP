@@ -39,7 +39,7 @@ const db = require('../db/tenantDb').tenantDb;
 const { sendSuccess, sendError } = require('../utils/response');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const { auditLog } = require('../utils/auditLogger');
-const { METAL_TYPES, METAL_TYPES_WITH_PURITY } = require('../utils/metalTypes');
+const { getMetalTypes, getMetalTypesWithPurity } = require('../utils/metalTypes');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -117,6 +117,10 @@ router.post('/stock', upload.single('file'), authenticate, requirePermission('te
     const rows = parseSheet(req.file.buffer);
     if (!rows.length) return sendError(res, 400, 'The file has no data rows.');
 
+    // Fetched once outside the row loop — one DB round-trip for the whole
+    // import instead of one per row.
+    const metalTypes = await getMetalTypes();
+
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       const rowNum = i + 2; // +1 for header row, +1 for 1-indexing
@@ -154,7 +158,7 @@ router.post('/stock', upload.single('file'), authenticate, requirePermission('te
       // Purity's own metal type; otherwise fall back to Gold (same default
       // the column itself has for every other write path).
       const rawMetal = String(r['Metal Type'] || '').trim();
-      let metalType = METAL_TYPES.find((m) => m.toLowerCase() === rawMetal.toLowerCase());
+      let metalType = metalTypes.find((m) => m.toLowerCase() === rawMetal.toLowerCase());
       if (rawMetal && !metalType) warnings.push(`Row ${rowNum} (${articleNumber}): imported, but Metal Type "${rawMetal}" not recognized — defaulted to ${purityMetalType || 'Gold'}.`);
       if (!metalType) metalType = purityMetalType || 'Gold';
 
@@ -395,6 +399,10 @@ router.post('/purity', upload.single('file'), authenticate, requirePermission('t
     const rows = parseSheet(req.file.buffer);
     if (!rows.length) return sendError(res, 400, 'The file has no data rows.');
 
+    // Fetched once outside the row loop — one DB round-trip for the whole
+    // import instead of one per row.
+    const metalTypesWithPurity = await getMetalTypesWithPurity();
+
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       const rowNum = i + 2;
@@ -408,7 +416,7 @@ router.post('/purity', upload.single('file'), authenticate, requirePermission('t
       if (existing) { skipped.push(`Row ${rowNum} (${code}): SKIPPED — Purity Code already exists, not overwritten.`); continue; }
 
       const rawMetal = String(r['Metal Type'] || '').trim();
-      const metalType = METAL_TYPES_WITH_PURITY.find((m) => m.toLowerCase() === rawMetal.toLowerCase());
+      const metalType = metalTypesWithPurity.find((m) => m.toLowerCase() === rawMetal.toLowerCase());
       if (rawMetal && !metalType) warnings.push(`Row ${rowNum} (${code}): imported, but Metal Type "${rawMetal}" not recognized — defaulted to Gold.`);
 
       try {

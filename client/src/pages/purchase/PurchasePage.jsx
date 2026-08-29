@@ -11,7 +11,7 @@ import { formatCurrency } from '../../utils/calculations';
 import { useGoldRate } from '../../hooks/useGoldRate';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
-import { METAL_TYPES } from '../../utils/metalTypes';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
 import { useF2Lookup } from '../../hooks/useF2Lookup';
 
@@ -26,6 +26,7 @@ export default function PurchasePage() {
   const [form] = Form.useForm();
   const [payForm] = Form.useForm();
   const { goldRate } = useGoldRate();
+  const { metalTypes } = useMetalTypes();
   const qc = useQueryClient();
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
@@ -265,7 +266,7 @@ export default function PurchasePage() {
                 <Col xs={5}>
                   <Form.Item name={`metal_${idx}`} label="Metal" initialValue="Gold" rules={[{ required: true, message: 'Required' }]}>
                     <Select size="small" onChange={() => form.setFieldValue(`purity_${idx}`, undefined)}>
-                      {METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}
+                      {metalTypes.map(m => <Option key={m} value={m}>{m}</Option>)}
                     </Select>
                   </Form.Item>
                 </Col>

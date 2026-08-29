@@ -1,11 +1,10 @@
-// Mirrors server/src/utils/metalTypes.js — kept as one small shared list so
-// every dropdown/filter/tag color across Inventory pages and reports agrees
-// on the same four values instead of drifting.
-export const METAL_TYPES = ['Gold', 'Silver', 'Platinum', 'Diamond'];
-
-// Purity (karat/fineness) doesn't apply to a Diamond stock item.
-export const METAL_TYPES_WITH_PURITY = ['Gold', 'Silver', 'Platinum'];
-
+// The metal-type LIST itself is no longer hardcoded here — it's live,
+// admin-editable data (Master Management > Metal & Purity > Metal Type
+// Master, backed by tbl_metal_type_master) fetched via useMetalTypes()
+// (client/src/hooks/useMetalTypes.js). This file now only keeps the
+// display-only color mapping, which isn't part of "is this a valid metal
+// type" at all — a custom metal type with no entry here just falls back to
+// the default tag color wherever it's rendered.
 export const METAL_TYPE_COLORS = {
   Gold: 'gold',
   Silver: 'default',

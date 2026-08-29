@@ -21,7 +21,7 @@ import { printFromInvoiceStudio } from '../../utils/thermalReceipt';
 import { useGoldRate } from '../../hooks/useGoldRate';
 import PageTour from '../../components/PageTour';
 import dayjs from 'dayjs';
-import { METAL_TYPES } from '../../utils/metalTypes';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
 import { useF2Lookup } from '../../hooks/useF2Lookup';
 
@@ -104,6 +104,7 @@ const printBillOrStudio = async (docType, docNumber, studioData, title, rows, fo
 export default function PurchaseHub() {
   const navigate = useNavigate();
   const { goldRate, rates } = useGoldRate();
+  const { metalTypes } = useMetalTypes();
   const qc = useQueryClient();
   const [activeModal, setActiveModal] = useState(null);
   const [form] = Form.useForm();
@@ -478,7 +479,7 @@ export default function PurchaseHub() {
             <Col xs={5}>
               <Form.Item name={`metal_${idx}`} label="Metal" initialValue={DEFAULT_METAL_BY_MODAL[activeModal] || 'Gold'} rules={[{required:true, message:'Required'}]}>
                 <Select size="small" onChange={() => form.setFieldValue(`purity_${idx}`, undefined)}>
-                  {METAL_TYPES.map(m => <Option key={m} value={m}>{m}</Option>)}
+                  {metalTypes.map(m => <Option key={m} value={m}>{m}</Option>)}
                 </Select>
               </Form.Item>
             </Col>

@@ -3,7 +3,16 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db/knex');
 const { sendSuccess, sendError, sendValidationError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
-const { METAL_TYPES_WITH_PURITY } = require('../utils/metalTypes');
+const { isValidMetalTypeWithPurity } = require('../utils/metalTypes');
+
+// Reusable across every route in this file that validates a Metal_Type
+// field against the live tbl_metal_type_master list (see /metal-types
+// below) rather than a hardcoded array — a custom metal type an admin adds
+// is valid here immediately, no code change needed.
+const metalTypeWithPurityValidator = body('Metal_Type').optional().custom(async (value) => {
+  if (!(await isValidMetalTypeWithPurity(value))) throw new Error('Metal_Type must be an active metal type that has purity.');
+  return true;
+});
 
 // ─── Item Types ───────────────────────────────────────────────────────────────
 router.get('/item-types', authenticate, async (req, res) => {
@@ -171,7 +180,7 @@ router.post('/purities', authenticate, [
   body('Purity_Code').trim().notEmpty(),
   body('Karat').isFloat({ min: 1 }),
   body('Percentage').isFloat({ min: 1, max: 100 }),
-  body('Metal_Type').optional().isIn(METAL_TYPES_WITH_PURITY),
+  metalTypeWithPurityValidator,
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
@@ -202,7 +211,7 @@ router.post('/purities', authenticate, [
 router.put('/purities/:id', authenticate, [
   body('Karat').optional().isFloat({ min: 1 }),
   body('Percentage').optional().isFloat({ min: 1, max: 100 }),
-  body('Metal_Type').optional().isIn(METAL_TYPES_WITH_PURITY),
+  metalTypeWithPurityValidator,
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
@@ -217,6 +226,62 @@ router.put('/purities/:id', authenticate, [
     if (err.code === '23505') return sendError(res, 409, 'Purity code already exists.');
     console.error('Purity update error:', err.message);
     return sendError(res, 500, 'Failed to update purity.');
+  }
+});
+
+// ─── Metal Types ──────────────────────────────────────────────────────────────
+// The live source of truth behind server/src/utils/metalTypes.js's
+// getMetalTypes()/isValidMetalType() helpers — replacing what used to be a
+// hardcoded array. Global (no Tenant_ID), same as Purity/Item Type/Design.
+router.get('/metal-types', authenticate, async (req, res) => {
+  try {
+    const metalTypes = await db('tbl_metal_type_master').where({ Is_Active: true }).orderBy('Metal_Name');
+    return sendSuccess(res, metalTypes);
+  } catch (err) {
+    return sendError(res, 500, 'Failed to fetch metal types.');
+  }
+});
+
+router.post('/metal-types', authenticate, [
+  body('Metal_Name').trim().notEmpty(),
+  body('Default_Purity_ID').optional({ nullable: true }).isInt(),
+  body('Has_Purity').optional().isBoolean(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const [row] = await db('tbl_metal_type_master').insert({
+      Metal_Name: req.body.Metal_Name,
+      Description: req.body.Description || null,
+      Default_Purity_ID: req.body.Default_Purity_ID || null,
+      Has_Purity: req.body.Has_Purity !== undefined ? req.body.Has_Purity : true,
+      Is_Active: true,
+    }).returning('*');
+    return sendSuccess(res, row, 'Metal type created.', 201);
+  } catch (err) {
+    if (err.code === '23505') return sendError(res, 409, 'Metal type already exists.');
+    console.error('Metal type create error:', err.message);
+    return sendError(res, 500, 'Failed to create metal type.');
+  }
+});
+
+router.put('/metal-types/:id', authenticate, [
+  body('Default_Purity_ID').optional({ nullable: true }).isInt(),
+  body('Has_Purity').optional().isBoolean(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const [updated] = await db('tbl_metal_type_master')
+      .where({ Metal_Type_ID: req.params.id })
+      .update({ ...req.body, Modified_Date: new Date() })
+      .returning('*');
+    if (!updated) return sendError(res, 404, 'Metal type not found.');
+    return sendSuccess(res, updated, 'Metal type updated.');
+  } catch (err) {
+    if (err.code === '23505') return sendError(res, 409, 'Metal type already exists.');
+    console.error('Metal type update error:', err.message);
+    return sendError(res, 500, 'Failed to update metal type.');
   }
 });
 

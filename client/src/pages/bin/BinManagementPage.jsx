@@ -20,7 +20,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { binApi } from '../../api/modules';
 import PageTour from '../../components/PageTour';
 import { useModules } from '../../hooks/useModules';
-import { METAL_TYPES } from '../../utils/metalTypes';
+import { useMetalTypes } from '../../hooks/useMetalTypes';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -139,6 +139,7 @@ function VoucherSearch() {
 // ════════════════════════════════════════════════════════════════════════════
 function PurchaseBinTab() {
   const qc = useQueryClient();
+  const { metalTypes } = useMetalTypes();
   const [filter, setFilter] = useState({ status: '', search: '', page: 1 });
   const [modalOpen, setModalOpen] = useState(false);
   const [editRow, setEditRow] = useState(null);
@@ -262,7 +263,7 @@ function PurchaseBinTab() {
             </Col>
             <Col xs={24} sm={12}>
               <Form.Item name="Metal_Type" label="Metal Type" initialValue="Gold">
-                <Select options={METAL_TYPES.map(m => ({ value: m, label: m }))} />
+                <Select options={metalTypes.map(m => ({ value: m, label: m }))} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12}>
@@ -339,6 +340,7 @@ function PurchaseBinTab() {
 // ════════════════════════════════════════════════════════════════════════════
 function SalesReturnBinTab() {
   const qc = useQueryClient();
+  const { metalTypes } = useMetalTypes();
   const [filter, setFilter] = useState({ status: '', search: '', page: 1 });
   const [modalOpen, setModalOpen] = useState(false);
   const [editRow, setEditRow] = useState(null);
@@ -450,7 +452,7 @@ function SalesReturnBinTab() {
             </Col>
             <Col xs={24} sm={12}>
               <Form.Item name="Metal_Type" label="Metal Type" initialValue="Gold">
-                <Select options={METAL_TYPES.map(m => ({ value: m, label: m }))} />
+                <Select options={metalTypes.map(m => ({ value: m, label: m }))} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12}>
@@ -511,6 +513,7 @@ function SalesReturnBinTab() {
 // ════════════════════════════════════════════════════════════════════════════
 function OrderBinTab() {
   const qc = useQueryClient();
+  const { metalTypes } = useMetalTypes();
   const [filter, setFilter] = useState({ status: '', order_type: '', search: '', page: 1 });
   const [modalOpen, setModalOpen] = useState(false);
   const [editRow, setEditRow] = useState(null);
@@ -628,7 +631,7 @@ function OrderBinTab() {
             </Col>
             <Col xs={24} sm={8}>
               <Form.Item name="Metal_Type" label="Metal Type" initialValue="Gold">
-                <Select options={METAL_TYPES.map(m => ({ value: m, label: m }))} />
+                <Select options={metalTypes.map(m => ({ value: m, label: m }))} />
               </Form.Item>
             </Col>
             <Col xs={24} sm={8}>

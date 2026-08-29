@@ -44,6 +44,46 @@ test('sales targets round-trip through GET/PUT /tenant/settings', async () => {
   expect(parseFloat(after.body.data.Monthly_Collection_Target)).toBe(1200000);
 });
 
+/**
+ * FIXED (new feature): GST No / PAN / address existed as real backend
+ * fields with literally no UI to edit them, and TDS% didn't exist at all
+ * — see the new Company Settings page (client/src/pages/admin/
+ * CompanySettingsPage.jsx). TDS% defaults to 0 and is stored for reference
+ * only — no automatic deduction logic anywhere yet, deliberately.
+ */
+test('GST No / PAN / Address / TDS% round-trip through GET/PUT /tenant/settings', async () => {
+  const before = await request(app).get('/api/tenant/settings').set(auth());
+  expect(before.status).toBe(200);
+  expect(parseFloat(before.body.data.TDS_Percentage)).toBe(0); // real column default
+
+  const update = await request(app).put('/api/tenant/settings').set(auth()).send({
+    GST_No: '29QATEST1234F1Z5', PAN_No: 'QATES1234F',
+    Address_Line1: 'QA Test Shop', City: 'QA City', State: 'QA State', Pincode: '123456',
+    TDS_Percentage: 2.5,
+  });
+  expect(update.status).toBe(200);
+
+  const after = await request(app).get('/api/tenant/settings').set(auth());
+  expect(after.body.data.GST_No).toBe('29QATEST1234F1Z5');
+  expect(after.body.data.PAN_No).toBe('QATES1234F');
+  expect(after.body.data.Address_Line1).toBe('QA Test Shop');
+  expect(after.body.data.City).toBe('QA City');
+  expect(parseFloat(after.body.data.TDS_Percentage)).toBe(2.5);
+});
+
+test('PUT /tenant/settings cannot be used to smuggle a license/activation change through', async () => {
+  const before = await db('tbl_tenant_master').where({ Tenant_ID: tenant.tenantId }).first();
+  const res = await request(app).put('/api/tenant/settings').set(auth()).send({
+    Is_Active: false, Max_Users: 99999, Max_Branches: 99999,
+    License_Key: 'HIJACKED-KEY', License_Expiry_Date: '2099-01-01',
+  });
+  expect(res.status).toBe(200); // succeeds — but the dangerous fields are silently dropped, not applied
+  const after = await db('tbl_tenant_master').where({ Tenant_ID: tenant.tenantId }).first();
+  expect(after.Is_Active).toBe(before.Is_Active);
+  expect(after.License_Key).toBe(before.License_Key);
+  expect(String(after.License_Expiry_Date)).toBe(String(before.License_Expiry_Date));
+});
+
 test('a Wholesale sale with Cash Memo invoice type is recorded as sent, not silently forced to Retail/Tax Invoice', async () => {
   const ornament = await request(app).post('/api/ornaments').set(auth()).send({
     Type_ID: typeId, Metal_Type: 'Gold', Gross_Weight: 5, Net_Gold_Weight: 4.5, Current_Gold_Rate: 6000,

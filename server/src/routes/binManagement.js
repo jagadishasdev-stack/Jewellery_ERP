@@ -10,11 +10,20 @@ const { sendSuccess, sendError, sendValidationError } = require('../utils/respon
 const { authenticate } = require('../middleware/auth');
 const { auditLog } = require('../utils/auditLogger');
 const { modeVal } = require('../utils/dataModeFilter');
-const { inferMetalTypeFromPurityText, METAL_TYPES } = require('../utils/metalTypes');
+const { inferMetalTypeFromPurityText, isValidMetalType, getMetalTypes } = require('../utils/metalTypes');
 const { nextNumber } = require('../utils/numberFormat');
 const { postJournal } = require('../utils/accountingEngine');
 const { resolveLedgerForPayment } = require('../utils/paymentLedgerMap');
 const dayjs = require('dayjs');
+
+// Reused across every route below that accepts an optional Metal_Type —
+// validates against the live tbl_metal_type_master list (see
+// routes/master.js's /metal-types) rather than a hardcoded array, so a
+// custom metal type an admin adds is valid here immediately.
+const optionalMetalTypeValidator = body('Metal_Type').optional().custom(async (value) => {
+  if (!(await isValidMetalType(value))) throw new Error(`Metal_Type must be one of: ${(await getMetalTypes()).join(', ')}`);
+  return true;
+});
 
 // ── Voucher ID Generator ────────────────────────────────────────────────────────
 const PREFIXES = {
@@ -132,7 +141,7 @@ router.post('/purchase', authenticate, [
   body('Purchase_Date').isISO8601().withMessage('Purchase date required'),
   body('Gross_Weight').isFloat({ min: 0.001 }).withMessage('Gross weight required'),
   body('Purchase_Amount').isFloat({ min: 1 }).withMessage('Purchase amount required'),
-  body('Metal_Type').optional().isIn(METAL_TYPES).withMessage(`Metal_Type must be one of: ${METAL_TYPES.join(', ')}`),
+  optionalMetalTypeValidator,
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
@@ -270,7 +279,7 @@ router.post('/sales-return', authenticate, [
   body('Customer_Name').trim().notEmpty().withMessage('Customer name required'),
   body('Return_Date').isISO8601().withMessage('Return date required'),
   body('Gross_Weight').isFloat({ min: 0.001 }).withMessage('Weight required'),
-  body('Metal_Type').optional().isIn(METAL_TYPES).withMessage(`Metal_Type must be one of: ${METAL_TYPES.join(', ')}`),
+  optionalMetalTypeValidator,
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
@@ -383,7 +392,7 @@ router.post('/orders', authenticate, [
   body('Party_Name').trim().notEmpty().withMessage('Party name required'),
   body('Order_Date').isISO8601().withMessage('Order date required'),
   body('Order_Type').isIn(['Customer','Karigar','Supplier']).withMessage('Order type required'),
-  body('Metal_Type').optional().isIn(METAL_TYPES).withMessage(`Metal_Type must be one of: ${METAL_TYPES.join(', ')}`),
+  optionalMetalTypeValidator,
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
@@ -487,7 +496,7 @@ router.post('/pure-gold', authenticate, [
   // than requiring every entry to pick it — but the column still exists
   // (see METAL_TYPES) so an unusual pure-silver/platinum holding can be
   // recorded accurately instead of being forced into Gold.
-  body('Metal_Type').optional().isIn(METAL_TYPES).withMessage(`Metal_Type must be one of: ${METAL_TYPES.join(', ')}`),
+  optionalMetalTypeValidator,
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());

@@ -35,6 +35,7 @@ afterAll(async () => {
   await db('tbl_design_master').where('Design_Code', 'like', `${QA}%`).del();
   await db('tbl_gemstone_master').where('Stone_Code', 'like', `${QA}%`).del();
   await db('tbl_purity_master').where('Purity_Code', 'like', `${QA}%`).del();
+  await db('tbl_metal_type_master').where('Metal_Name', 'like', `${QA}%`).del();
   await db('tbl_huid_master').where('HUID_Number', 'like', `${QA}%`).del();
   // Tenant-scoped tables — cleaned up automatically by testTenant.teardown()
   // deleting the whole disposable tenant, but these have no FK cascade from
@@ -236,6 +237,105 @@ describe('Purities', () => {
   test('PUT /purities/:id 404s for a nonexistent purity', async () => {
     const res = await request(app).put('/api/master/purities/9999999').set(auth()).send({ Percentage: 50 });
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * FIXED (real feature, this pass): the metal type list used to be a
+ * hardcoded array (server/src/utils/metalTypes.js) — no admin could add a
+ * custom metal type at all. Now backed by this real, global (no Tenant_ID,
+ * same as Item Type/Design/Purity) master table, and every validator that
+ * used to check against the hardcoded array (ornaments.js, binManagement.js,
+ * this file's own Purity routes) now checks this table live — a custom
+ * metal type added here is valid everywhere immediately.
+ */
+describe('Metal Types', () => {
+  test('the 4 seeded defaults exist and Diamond has Has_Purity=false', async () => {
+    const res = await request(app).get('/api/master/metal-types').set(auth());
+    expect(res.status).toBe(200);
+    const names = res.body.data.map(m => m.Metal_Name);
+    expect(names).toEqual(expect.arrayContaining(['Gold', 'Silver', 'Platinum', 'Diamond']));
+    const diamond = res.body.data.find(m => m.Metal_Name === 'Diamond');
+    expect(diamond.Has_Purity).toBe(false);
+  });
+
+  test('POST /metal-types requires Metal_Name', async () => {
+    const res = await request(app).post('/api/master/metal-types').set(auth()).send({});
+    expect(res.status).toBe(422);
+  });
+
+  test('creates a custom metal type, defaults Has_Purity to true, rejects a duplicate name', async () => {
+    const res = await request(app).post('/api/master/metal-types').set(auth())
+      .send({ Metal_Name: `${QA}-RoseGold`, Description: 'QA custom alloy' });
+    expect(res.status).toBe(201);
+    expect(res.body.data.Has_Purity).toBe(true);
+    expect(res.body.data.Is_Active).toBe(true);
+
+    const dup = await request(app).post('/api/master/metal-types').set(auth())
+      .send({ Metal_Name: `${QA}-RoseGold` });
+    expect(dup.status).toBe(409);
+  });
+
+  test('a custom metal type with Has_Purity=false is immediately usable', async () => {
+    const created = await request(app).post('/api/master/metal-types').set(auth())
+      .send({ Metal_Name: `${QA}-Bronze`, Has_Purity: false });
+    expect(created.status).toBe(201);
+    expect(created.body.data.Has_Purity).toBe(false);
+  });
+
+  test('PUT /metal-types/:id updates a metal type, 404s for an unknown id', async () => {
+    const created = await request(app).post('/api/master/metal-types').set(auth())
+      .send({ Metal_Name: `${QA}-Editable` });
+    const res = await request(app).put(`/api/master/metal-types/${created.body.data.Metal_Type_ID}`).set(auth())
+      .send({ Description: 'renamed description' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.Description).toBe('renamed description');
+
+    const missing = await request(app).put('/api/master/metal-types/9999999').set(auth()).send({ Description: 'x' });
+    expect(missing.status).toBe(404);
+  });
+
+  /**
+   * The real proof this is "fully live everywhere": a custom metal type
+   * added via POST /metal-types is accepted immediately by the ornament
+   * creation validator, which used to only accept the 4 hardcoded values.
+   */
+  test('FIXED: a custom metal type is immediately valid for POST /ornaments (used to be rejected — hardcoded list)', async () => {
+    await request(app).post('/api/master/metal-types').set(auth()).send({ Metal_Name: `${QA}-Titanium` });
+    const typeId = (await db('tbl_item_type_master').first()).Type_ID;
+
+    const res = await request(app).post('/api/ornaments').set(auth()).send({
+      Type_ID: typeId, Metal_Type: `${QA}-Titanium`, Gross_Weight: 5, Net_Gold_Weight: 5,
+      Current_Gold_Rate: 100, Base_Making_Charge_Per_Gram: 10, Purchase_Cost: 500, Total_Price: 600,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data.Metal_Type).toBe(`${QA}-Titanium`);
+
+    await db('tbl_ornament_master').where({ Ornament_ID: res.body.data.Ornament_ID }).del();
+  });
+
+  test('an unrecognized Metal_Type is still rejected for POST /ornaments', async () => {
+    const typeId = (await db('tbl_item_type_master').first()).Type_ID;
+    const res = await request(app).post('/api/ornaments').set(auth()).send({
+      Type_ID: typeId, Metal_Type: 'NotARealMetal', Gross_Weight: 5, Net_Gold_Weight: 5,
+      Current_Gold_Rate: 100, Base_Making_Charge_Per_Gram: 10, Purchase_Cost: 500, Total_Price: 600,
+    });
+    expect(res.status).toBe(422);
+  });
+
+  test('Purity creation rejects a metal type that has Has_Purity=false', async () => {
+    // tbl_purity_master.Metal_Type is varchar(20) — keep the QA name short.
+    await request(app).post('/api/master/metal-types').set(auth()).send({ Metal_Name: `${QA}-NoPur`, Has_Purity: false });
+    const res = await request(app).post('/api/master/purities').set(auth())
+      .send({ Purity_Code: `${QA}-NP1`, Karat: 10, Percentage: 50, Metal_Type: `${QA}-NoPur` });
+    expect(res.status).toBe(422);
+  });
+
+  test('a custom Has_Purity=true metal type is immediately valid for Purity creation', async () => {
+    await request(app).post('/api/master/metal-types').set(auth()).send({ Metal_Name: `${QA}-HasPur`, Has_Purity: true });
+    const res = await request(app).post('/api/master/purities').set(auth())
+      .send({ Purity_Code: `${QA}-HP1`, Karat: 10, Percentage: 50, Metal_Type: `${QA}-HasPur` });
+    expect(res.status).toBe(201);
   });
 });
 
