@@ -336,7 +336,13 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   // — those stay put, matching the earlier sign-off to leave Admin
   // untouched. A fuller Utility consolidation is a separate follow-up.
   if (permissions.tenant_management) {
-    transactionChildren.push({ key: '/admin/sync-status', icon: <SyncOutlined />, label: '🛠 Utility (Sync Status)' });
+    transactionChildren.push({
+      key: 'txn-utility-group', icon: <SyncOutlined />, label: '🛠 Utility',
+      children: [
+        { key: '/admin/sync-status', label: 'Sync Status' },
+        { key: '/admin/backup', label: 'Backup' },
+      ],
+    });
   }
 
   const salesChildren = [billingGroup, repairGroup].filter(Boolean);

@@ -756,6 +756,12 @@ export const jobcardPredictionApi = {
   setStatus: (id, status) => api.put(`/jobcard-prediction/${id}/status`, { Status: status }),
 };
 
+// ─── Backup ───────────────────────────────────────────────────────────────────────
+export const backupApi = {
+  tables: () => api.get('/backup/tables'),
+  export: () => api.get('/backup/export'),
+};
+
 // ─── Metal Transaction Ledger ──────────────────────────────────────────────────────
 export const metalLedgerApi = {
   list: (params) => api.get('/metal-ledger', { params }),
