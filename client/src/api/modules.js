@@ -745,6 +745,16 @@ export const masterExtApi = {
   registerHUID: (data) => api.post('/master/huid', data),
 };
 
+// ─── Packet Stock ────────────────────────────────────────────────────────────────
+export const packetStockApi = {
+  list: (params) => api.get('/packet-stock', { params }),
+  getById: (id) => api.get(`/packet-stock/${id}`),
+  create: (data) => api.post('/packet-stock', data),
+  addItem: (id, data) => api.post(`/packet-stock/${id}/items`, data),
+  removeItem: (id, itemId) => api.delete(`/packet-stock/${id}/items/${itemId}`),
+  close: (id) => api.post(`/packet-stock/${id}/close`),
+};
+
 // ─── Sync ───────────────────────────────────────────────────────────────────────
 // The cloud half of the sync engine (server/src/routes/sync.js) has always
 // been real and tested — this is its first client-side UI, previously

@@ -343,7 +343,10 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
 
   if (approvalGroup) transactionChildren.push({ key: 'txn-approval-group', type: 'group', label: 'APPROVAL', children: [approvalGroup] });
 
-  const stockChildren = [inventoryGroup, binGroup, floorGroup].filter(Boolean);
+  // Packet Stock — genuinely new (Missing Feature Report), gated the same
+  // way as Inventory itself since it's the same permission surface.
+  const packetStockItem = permissions.inventory ? { key: '/packet-stock', label: '📦 Packet Stock' } : null;
+  const stockChildren = [inventoryGroup, binGroup, floorGroup, packetStockItem].filter(Boolean);
   if (stockChildren.length) transactionChildren.push({ key: 'txn-stock-group', type: 'group', label: 'STOCK', children: stockChildren });
 
   const purchaseChildren = [purchaseGroup, karigarGroup].filter(Boolean);

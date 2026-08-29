@@ -38,6 +38,28 @@ test('POST /set requires rate_22k', async () => {
   expect(res.status).toBe(400);
 });
 
+test('POST /set rejects a user with zero real operational permissions', async () => {
+  // Previously ungated beyond plain login — any authenticated user,
+  // even one with no billing/inventory/accounts/tenant_management
+  // permission at all, could change the tenant's live rate.
+  const [role] = await db('tbl_role_master').insert({
+    Role_Name: 'QA No-Permission Role', Permissions: JSON.stringify({}), Is_Active: true,
+  }).returning('*');
+  const [noPermUser] = await db('tbl_user_master').insert({
+    Tenant_ID: tenant.tenantId, Username: 'qa_no_perm_user',
+    Password_Hash: bcrypt.hashSync('QaNoPerm@2026', 10), Password_Salt: 'x',
+    Role_ID: role.Role_ID, Full_Name: 'QA No Permission User', Is_Active: true, All_Branch_Access: true,
+  }).returning('*');
+  const login = await request(app).post('/api/auth/login').send({ username: 'qa_no_perm_user', password: 'QaNoPerm@2026', tenantId: tenant.tenantId });
+  const noPermToken = login.body.data.token;
+
+  const res = await request(app).post('/api/gold-rate/set').set({ Authorization: `Bearer ${noPermToken}` }).send({ rate_22k: 6500 });
+  expect(res.status).toBe(403);
+
+  await db('tbl_user_master').where({ User_ID: noPermUser.User_ID }).del();
+  await db('tbl_role_master').where({ Role_ID: role.Role_ID }).del();
+});
+
 test('POST /set creates today\'s rate and auto-derives 24K/18K/14K/Silver 999 from the 22K rate when not given explicitly', async () => {
   const res = await request(app).post('/api/gold-rate/set').set(auth()).send({ rate_22k: 6300, rate_silver: 85 });
   expect(res.status).toBe(200);

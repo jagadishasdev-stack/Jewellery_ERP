@@ -52,9 +52,22 @@ router.get('/live', authenticate, async (req, res) => {
 });
 
 // ─── POST /api/gold-rate/set ───────────────────────────────────────────────────
-// Admin sets TODAY's rate for their tenant.
+// Sets TODAY's rate for the tenant. Previously gated on nothing beyond
+// plain login — any authenticated user, including one with zero real
+// module permissions, could change the shop's live rate (it feeds every
+// bill's calculation immediately, tenant-wide, via socket broadcast).
+// Deliberately NOT locked to an admin-only permission or a real
+// approval workflow — rate changes happen many times a day and are core
+// to daily billing at a real counter; over-restricting who can set it
+// could break real staff who currently rely on doing this themselves.
+// This closes only the actual gap: a user needs at least one real
+// operational permission (billing, inventory, or accounts), not zero.
 router.post('/set', authenticate, async (req, res) => {
   const tenantId = req.user.tenantId;
+  const perms = req.user.permissions || {};
+  if (!perms.sales && !perms.inventory && !perms.accounts && !perms.tenant_management) {
+    return sendError(res, 403, 'You do not have permission to set the gold rate.');
+  }
   const { rate_22k, rate_24k, rate_18k, rate_14k, rate_silver, rate_platinum } = req.body;
 
   if (!rate_22k) return sendError(res, 400, '22K rate is required.');

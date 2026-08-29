@@ -50,6 +50,7 @@ const productCatalogRoutes = require('./routes/productCatalog');
 const mobileAuthRoutes = require('./routes/mobileAuth');
 const paymentsRoutes = require('./routes/payments');
 const binManagementRoutes = require('./routes/binManagement');
+const packetStockRoutes = require('./routes/packetStock');
 const smsConfigRoutes = require('./routes/smsConfig');
 const pushConfigRoutes = require('./routes/pushConfig');
 const deviceLicensesRoutes = require('./routes/deviceLicenses');
@@ -195,6 +196,7 @@ app.use('/api/mobile', mobileAuthRoutes);
 // later, but it must not be live.
 // app.use('/api/payments', paymentsRoutes);
 app.use('/api/bin', binManagementRoutes);
+app.use('/api/packet-stock', packetStockRoutes);
 app.use('/api/sms-config', smsConfigRoutes);
 app.use('/api/push-config', pushConfigRoutes);
 app.use('/api/device-licenses', deviceLicensesRoutes);
