@@ -41,20 +41,34 @@ const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
 
-// ── Menu items builder (unchanged logic) ──────────────────────────────────────
+// ── Menu items builder ─────────────────────────────────────────────────────────
+// Every operational/transactional group below is built EXACTLY as before —
+// same key, icon, label, children, same permission/module guard — the only
+// change from the pre-reorg version is that each one is now assembled into
+// `transactionChildren` instead of being pushed straight into the top-level
+// `items` array. Nothing was renamed, merged, or given a new destination;
+// this is a pure regrouping under one collapsible "Transaction" menu so the
+// sidebar isn't ~15 permanently-expanded top-level groups at once. Genuinely
+// ambiguous items (which existing group folds where, whether a module like
+// Dealer Transaction gets built at all) were deliberately left OUT of this
+// pass — see the Transaction Menu Audit — so nothing here invents a new
+// route or resolves a duplicate without sign-off.
 const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial = false) => {
   const items = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
     { key: '/help', icon: <QuestionCircleOutlined style={{ color: '#B8860B' }} />, label: '❓ Help / How to Use' },
   ];
 
+  // ── Groups that fold into the new Transaction menu (built here, pushed below) ──
+  let billingGroup = null;
   if (permissions.sales && (isEnabled('retail_sales') || isEnabled('wholesale_sales') || isEnabled('estimate') || isEnabled('order_booking'))) {
     const children = [];
     if (isEnabled('retail_sales') || isEnabled('wholesale_sales')) children.push({ key: '/billing', label: '💎 Billing Center' });
     if (isEnabled('retail_sales')) children.push({ key: '/pos', label: '🛒 Retail POS' });
-    if (children.length) items.push({ key: 'billing-group', icon: <ShoppingCartOutlined />, label: 'Billing', children });
+    if (children.length) billingGroup = { key: 'billing-group', icon: <ShoppingCartOutlined />, label: 'Billing', children };
   }
 
+  let inventoryGroup = null;
   if (permissions.inventory && isEnabled('inventory')) {
     const inventoryChildren = [
       { key: '/inventory', label: 'Stock' },
@@ -67,10 +81,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
     if (permissions.tenant_management) {
       inventoryChildren.push({ key: '/inventory/special-stock', label: '⭐ Special Stock' });
     }
-    items.push({
-      key: 'inventory-group', icon: <AppstoreOutlined />, label: 'Inventory',
-      children: inventoryChildren,
-    });
+    inventoryGroup = { key: 'inventory-group', icon: <AppstoreOutlined />, label: 'Inventory', children: inventoryChildren };
   }
 
   if (isEnabled('inventory')) {
@@ -85,8 +96,9 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
     });
   }
 
+  let purchaseGroup = null;
   if (isEnabled('purchase') || isEnabled('old_gold')) {
-    items.push({
+    purchaseGroup = {
       key: 'purchase-group', icon: <ShoppingCartOutlined style={{ color: '#B8860B' }} />, label: '🛍️ Purchase',
       children: [
         { key: '/purchase/hub', label: '🥇 Purchase Hub' },
@@ -98,11 +110,12 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         // from here too now.
         { key: '/karigar', label: '🏭 Suppliers / Vendors' },
       ],
-    });
+    };
   }
 
+  let karigarGroup = null;
   if (permissions.karigar_management && (isEnabled('goldsmith') || isEnabled('manufacturing'))) {
-    items.push({
+    karigarGroup = {
       key: 'karigar-group', icon: <GoldOutlined />, label: 'Karigar / Goldsmith',
       children: [
         { key: '/karigar', label: 'Karigar List' },
@@ -110,11 +123,12 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/karigar/return', label: 'Return Goods' },
         { key: '/karigar/settlement', label: 'Settlement' },
       ],
-    });
+    };
   }
 
+  let approvalGroup = null;
   if (permissions.approval_management && isEnabled('approval_module')) {
-    items.push({
+    approvalGroup = {
       key: 'approval-group', icon: <SwapOutlined style={{ color: '#B8860B' }} />, label: '🔄 Approval Out',
       children: [
         { key: '/approval', label: 'Pending Approvals' },
@@ -125,25 +139,27 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/approval/non-tag/receive', label: 'Non-Tagged Receive' },
         { key: '/approval/parties', label: 'Party Master' },
       ],
-    });
+    };
   }
 
+  let repairGroup = null;
   if (isEnabled('repair')) {
-    items.push({
+    repairGroup = {
       key: 'repair-group', icon: <ToolOutlined />, label: 'Repair',
       children: [
         { key: '/repair', label: 'Repair Orders' },
         { key: '/repair/job-cards', label: '🔧 Job Cards' },
       ],
-    });
+    };
   }
 
   if (isEnabled('pawnbroking')) {
     items.push({ key: '/pawnbroking', icon: <BankOutlined />, label: 'Pawnbroking' });
   }
 
+  let insuranceItem = null;
   if (isEnabled('insurance_amc')) {
-    items.push({ key: '/insurance-amc', icon: <SafetyOutlined />, label: 'Insurance & AMC' });
+    insuranceItem = { key: '/insurance-amc', icon: <SafetyOutlined />, label: 'Insurance & AMC' };
   }
 
   if (isEnabled('hr_payroll')) {
@@ -162,8 +178,9 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   // Book, manual Vouchers) — gated on the Accounts & Finance permission
   // only, same as the reports-group's own accounts check, since this is
   // core bookkeeping rather than an optional add-on module.
+  let accountingGroup = null;
   if (permissions.accounts) {
-    items.push({
+    accountingGroup = {
       key: 'accounting-group', icon: <BankOutlined style={{ color: '#1890ff' }} />, label: '📘 Accounting',
       children: [
         { key: '/accounting', label: '📊 Dashboard' },
@@ -179,7 +196,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/accounting/vouchers', label: '✍️ Voucher Entry' },
         { key: '/accounting/financial-year-close', label: '🔒 Financial Year Close' },
       ],
-    });
+    };
   }
 
   if (isEnabled('rate_booking_agent_commission')) {
@@ -190,8 +207,9 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
     items.push({ key: '/compliance', icon: <FileProtectOutlined />, label: 'Compliance' });
   }
 
+  let manufacturingItem = null;
   if (isEnabled('manufacturing_bom')) {
-    items.push({ key: '/manufacturing', icon: <BuildOutlined />, label: 'Manufacturing / BOM' });
+    manufacturingItem = { key: '/manufacturing', icon: <BuildOutlined />, label: 'Manufacturing / BOM' };
   }
 
   if (isEnabled('guarantor_certification') || isEnabled('reorder_rfid_card_charges')) {
@@ -206,8 +224,9 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
     items.push({ key: '/permissions', icon: <SafetyCertificateOutlined />, label: 'Permission Overrides' });
   }
 
+  let customersItem = null;
   if (isEnabled('customers') || isEnabled('dealers')) {
-    items.push({ key: '/customers', icon: <TeamOutlined />, label: isEnabled('dealers') && !isEnabled('customers') ? 'Dealers' : 'Customers' });
+    customersItem = { key: '/customers', icon: <TeamOutlined />, label: isEnabled('dealers') && !isEnabled('customers') ? 'Dealers' : 'Customers' };
   }
 
   items.push({ key: '/masters', icon: <SettingOutlined style={{ color: '#B8860B' }} />, label: '⚙️ Master Setup' });
@@ -222,17 +241,19 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   if (isEnabled('bin_sales_return')) binChildren.push({ key: '/bin?tab=sales-return', label: '↩️ Sales Return Bin' });
   if (isEnabled('bin_orders')) binChildren.push({ key: '/bin?tab=orders', label: '📋 Order Bin' });
   if (isEnabled('bin_pure_gold')) binChildren.push({ key: '/bin?tab=pure-gold', label: '🥇 Pure Gold Bin' });
+  let binGroup = null;
   if (binChildren.length) {
-    items.push({
+    binGroup = {
       key: 'bin-group',
       icon: <AppstoreOutlined style={{ color: '#B8860B' }} />,
       label: '🗄️ Master Bin',
       children: [{ key: '/bin', label: '📊 Bin Dashboard' }, ...binChildren],
-    });
+    };
   }
 
+  let savingsGroup = null;
   if (isEnabled('savings_scheme') || isEnabled('digi_gold') || isEnabled('lucky_draw')) {
-    items.push({
+    savingsGroup = {
       key: 'savings-group', icon: <GoldOutlined style={{ color: '#FFD700' }} />, label: '🪙 Savings Club',
       children: [
         { key: '/savings', label: '📊 Dashboard' },
@@ -245,9 +266,10 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/savings/reports', label: '📈 Reports & Draw' },
         { key: '/savings/agents', label: '🤝 Agent Management' },
       ],
-    });
+    };
   }
 
+  let floorGroup = null;
   if (isEnabled('floors') || isEnabled('stock_transfer')) {
     const floorChildren = [
       { key: '/floors', label: 'Floors & Counters' },
@@ -258,14 +280,12 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
     if (permissions.tenant_management && isUnofficial) {
       floorChildren.push({ key: '/floors/hidden-stock', label: '🔒 Hidden Stock' });
     }
-    items.push({
-      key: 'floor-group', icon: <ApartmentOutlined />, label: 'Floor Management',
-      children: floorChildren,
-    });
+    floorGroup = { key: 'floor-group', icon: <ApartmentOutlined />, label: 'Floor Management', children: floorChildren };
   }
 
+  let reportsGroup = null;
   if ((permissions.accounts || permissions.sales) && isEnabled('reports')) {
-    items.push({
+    reportsGroup = {
       key: 'reports-group', icon: <BarChartOutlined />, label: '📊 Reports',
       children: [
         { key: '/reports', label: '🏠 Reports Hub' },
@@ -290,7 +310,40 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/reports/sales', label: '📜 Legacy Sales' },
         { key: '/reports/day-close', label: '🔒 Day Close' },
       ],
-    });
+    };
+  }
+
+  // ── Assemble the Transaction menu — every operational group above,
+  // organized under the section labels from the Transaction Menu spec.
+  // A `type: 'group'` entry is just a non-clickable section label in antd's
+  // Menu — its children render inline the moment Transaction itself is
+  // opened, no extra click needed; it does not change what any item does,
+  // only how it's visually grouped.
+  const transactionChildren = [];
+  if (reportsGroup) transactionChildren.push(reportsGroup);
+
+  const salesChildren = [billingGroup, repairGroup].filter(Boolean);
+  if (salesChildren.length) transactionChildren.push({ key: 'txn-sales-group', type: 'group', label: 'SALES', children: salesChildren });
+
+  if (approvalGroup) transactionChildren.push({ key: 'txn-approval-group', type: 'group', label: 'APPROVAL', children: [approvalGroup] });
+
+  const stockChildren = [inventoryGroup, binGroup, floorGroup].filter(Boolean);
+  if (stockChildren.length) transactionChildren.push({ key: 'txn-stock-group', type: 'group', label: 'STOCK', children: stockChildren });
+
+  const purchaseChildren = [purchaseGroup, karigarGroup].filter(Boolean);
+  if (purchaseChildren.length) transactionChildren.push({ key: 'txn-purchase-group', type: 'group', label: 'PURCHASE', children: purchaseChildren });
+
+  if (manufacturingItem) transactionChildren.push({ key: 'txn-workshop-group', type: 'group', label: 'WORKSHOP', children: [manufacturingItem] });
+
+  if (accountingGroup) transactionChildren.push({ key: 'txn-accounts-group', type: 'group', label: 'ACCOUNTS', children: [accountingGroup] });
+
+  if (savingsGroup) transactionChildren.push(savingsGroup);
+
+  const otherChildren = [insuranceItem, customersItem].filter(Boolean);
+  if (otherChildren.length) transactionChildren.push({ key: 'txn-other-group', type: 'group', label: 'OTHER', children: otherChildren });
+
+  if (transactionChildren.length) {
+    items.splice(2, 0, { key: 'transaction-group', icon: <ShoppingCartOutlined style={{ color: '#B8860B' }} />, label: 'Transaction', children: transactionChildren });
   }
 
   if (permissions.edit_invoice_template && isEnabled('invoice_studio')) {
@@ -527,7 +580,12 @@ function SidebarContent({ collapsed, onNavigate, currentPath, menuItems }) {
           theme="dark"
           mode="inline"
           selectedKeys={[currentPath]}
-          defaultOpenKeys={collapsed ? [] : ['inventory-group','karigar-group','approval-group','reports-group','admin-group','savings-group','floor-group','purchase-group','repair-group','billing-group','accounting-group']}
+          // Everything that used to be auto-open here now lives one level
+          // deeper, inside the (deliberately collapsed) Transaction menu —
+          // that's the actual complexity reduction: previously ~11 groups
+          // were permanently expanded at once. 'admin-group' is the one
+          // group NOT folded into Transaction, so it keeps its old behavior.
+          defaultOpenKeys={collapsed ? [] : ['admin-group']}
           style={{ background: '#1A1A1A', borderRight: 0, paddingTop: 8 }}
           items={menuItems}
           onClick={({ key }) => { if (!key.includes('-group') && !key.includes('-div')) onNavigate(key); }}
