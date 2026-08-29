@@ -296,6 +296,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
       children: [
         { key: '/reports', label: '🏠 Reports Hub' },
         { key: '/reports/sales-bill-history', label: '🧾 Sales Bill History' },
+        { key: '/reports/masters', label: '📋 Masters Report' },
         { key: 'reports-div', type: 'divider' },
         { key: '/reports/sales-reports', label: '📈 Sales Reports' },
         { key: '/reports/inventory-reports', label: '📦 Inventory Reports' },
@@ -392,6 +393,29 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
 
   if (accountingGroup) transactionChildren.push({ key: 'txn-accounts-group', type: 'group', label: 'ACCOUNTS', children: [accountingGroup] });
 
+  // Utility — pure navigation convenience links (Transaction Menu spec:
+  // "organizational change first, no business logic change"). Every one
+  // of these pages already exists and is already reachable from its own
+  // original location (Reports/Accounting/Admin/Floor Management) — this
+  // does NOT move or remove any of those, it just also surfaces them here,
+  // grouped the way the reference software's own Utility menu groups them,
+  // each gated by the exact same permission its original entry uses.
+  const utilityChildren = [];
+  if ((permissions.accounts || permissions.sales) && isEnabled('reports')) {
+    utilityChildren.push({ key: '/reports/day-close', label: '🔒 Day Close' });
+  }
+  utilityChildren.push({ key: '/utility/rate-entry', label: '💰 Rate Entry' });
+  if (permissions.tenant_management) {
+    utilityChildren.push({ key: '/admin/printer-settings', label: '🖨️ Printer Assign' });
+  }
+  if (permissions.accounts) {
+    utilityChildren.push({ key: '/accounting/financial-year-close', label: '📅 Year Close' });
+  }
+  if (isEnabled('floors') || isEnabled('stock_transfer')) {
+    utilityChildren.push({ key: '/transfer', label: '🔄 Floor Transfer' });
+  }
+  if (utilityChildren.length) transactionChildren.push({ key: 'txn-utility-group', type: 'group', label: 'UTILITY', children: utilityChildren });
+
   if (savingsGroup) transactionChildren.push(savingsGroup);
 
   const otherChildren = [insuranceItem, customersItem].filter(Boolean);
@@ -417,8 +441,12 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
       adminChildren.push({ key: '/admin/sa-dashboard', label: '🏢 Master Dashboard' });
       adminChildren.push({ key: '/admin/tenants',      label: 'Tenants' });
       adminChildren.push({ key: '/admin/device-licenses', label: '📱 Image App Devices' });
-      adminChildren.push({ key: '/admin/masters',      label: '📋 All Masters' });
-      adminChildren.push({ key: '/admin/master',       label: 'Quick Master' });
+      // Both are older/parallel master screens — ⚙️ Master Setup (top-level
+      // menu) is the canonical one now; these stay reachable (not deleted,
+      // nothing that already links here breaks) but clearly marked as the
+      // legacy alternates so a new user isn't left guessing which to use.
+      adminChildren.push({ key: '/admin/masters',      label: '📋 All Masters (Legacy)' });
+      adminChildren.push({ key: '/admin/master',       label: 'Quick Master (Legacy)' });
     }
     if (permissions.tenant_management) {
       adminChildren.push({ key: '/admin/users',   label: '👤 Users' });

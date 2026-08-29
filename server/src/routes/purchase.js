@@ -81,7 +81,7 @@ const genPurchaseNumber = async (tenantId) => nextNumber({
 
 // ── GET /api/purchase  ────────────────────────────────────────────────────────
 router.get('/', authenticate, requireValidBranch, async (req, res) => {
-  const { status, supplierId, page = 1, limit = 30 } = req.query;
+  const { status, supplierId, purchaseType, page = 1, limit = 30 } = req.query;
   try {
     let qb = db('tbl_purchase_header as p')
       .leftJoin('tbl_vendor_master as v','p.Supplier_ID','v.Vendor_ID')
@@ -98,10 +98,14 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
       );
     if (status) qb = qb.where('p.Status', status);
     if (supplierId) qb = qb.where('p.Supplier_ID', supplierId);
+    if (purchaseType) qb = qb.where('p.Purchase_Type', purchaseType);
     // Count with a clean subquery — avoids GROUP BY conflicts
-    const [{ count }] = await withBranch(db('tbl_purchase_header')
-      .where('Tenant_ID', req.user.tenantId), req)
-      .count('Purchase_ID as count');
+    let countQb = withBranch(db('tbl_purchase_header')
+      .where('Tenant_ID', req.user.tenantId), req);
+    if (status) countQb = countQb.where('Status', status);
+    if (supplierId) countQb = countQb.where('Supplier_ID', supplierId);
+    if (purchaseType) countQb = countQb.where('Purchase_Type', purchaseType);
+    const [{ count }] = await countQb.count('Purchase_ID as count');
     const data = await qb.orderBy('p.Purchase_Date','desc')
       .limit(parseInt(limit)).offset((parseInt(page)-1)*parseInt(limit));
     return sendSuccess(res, { items: data, total: parseInt(count) });

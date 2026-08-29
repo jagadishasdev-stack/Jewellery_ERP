@@ -46,6 +46,15 @@ export default function FinancialReportsPage() {
     queryFn: () => reportsApi.financial({ fromDate, toDate }).then(r => r.data.data || {}),
   });
 
+  // Existed as a real, working backend route since earlier this project
+  // (supports a ?mode= filter — Cash/UPI/Credit Card/...) but had no
+  // client page reading it at all. Reusing this page's own date range.
+  const { data: collectionData, isLoading: collectionLoading } = useQuery({
+    queryKey: ['collection-by-mode', fromDate, toDate],
+    queryFn: () => reportsApi.collectionByMode({ fromDate, toDate }).then(r => r.data.data || {}),
+    enabled: activeTab === 'collection-by-mode',
+  });
+
   const cashBook = financialData?.cashBook || [];
   const bankBook = financialData?.bankBook || [];
   const dayBook = financialData?.dayBook || [];
@@ -122,6 +131,40 @@ export default function FinancialReportsPage() {
           <Table
             scroll={{ x: "max-content" }} columns={dayBookCols} dataSource={dayBook} rowKey={(r,i)=>i} size="small" loading={isLoading} pagination={{pageSize:25}} />
         </Card>
+      ),
+    },
+    {
+      // The "Credit Card report" Master-menu gap — Credit Card is just one
+      // of the modes this already breaks down (Cash/UPI/Cheque/... too),
+      // so one generic tab covers it rather than a redundant single-mode page.
+      key: 'collection-by-mode', label: <span>💳 Collection by Payment Mode</span>,
+      children: (
+        <>
+          <Row gutter={[10,10]} style={{marginBottom:14}}>
+            {(collectionData?.byMode||[]).map((m) => (
+              <Col xs={12} md={6} key={m.Payment_Mode}>
+                <Card bodyStyle={{padding:'10px 12px'}} style={{borderRadius:8,border:'none',boxShadow:'0 1px 4px rgba(0,0,0,.07)',borderTop:'3px solid #B8860B'}}>
+                  <Statistic title={<Text style={{fontSize:11,color:'#888'}}>{m.Payment_Mode}</Text>}
+                    value={parseFloat(m.amount||0)} formatter={formatCurrency}
+                    valueStyle={{color:'#B8860B',fontSize:16,fontWeight:700}} />
+                  <Text type="secondary" style={{fontSize:11}}>{m.transactions} txns</Text>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+          <Card title="Collection by Payment Mode" bodyStyle={{padding:0}} style={{borderRadius:8}}
+            extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(collectionData?.byMode||[],'collection_by_mode')}>CSV</Button>}>
+            <Table
+              scroll={{ x: "max-content" }} size="small" loading={collectionLoading} rowKey="Payment_Mode" pagination={false}
+              dataSource={collectionData?.byMode||[]}
+              columns={[
+                { title: 'Payment Mode', dataIndex: 'Payment_Mode', render: v => <Tag color={v === 'Credit Card' ? 'purple' : 'blue'}>{v}</Tag> },
+                { title: 'Transactions', dataIndex: 'transactions' },
+                { title: 'Amount Collected', dataIndex: 'amount', render: v => <Text strong style={{color:'#B8860B'}}>{formatCurrency(v)}</Text> },
+              ]}
+            />
+          </Card>
+        </>
       ),
     },
     {

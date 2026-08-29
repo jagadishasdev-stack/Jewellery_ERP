@@ -907,6 +907,34 @@ router.get('/financial', authenticate, requireValidBranch, async (req, res) => {
   }
 });
 
+// ─── GET /api/reports/customer-ageing ─────────────────────────────────────────
+// Master menu audit gap: customer-outstanding (below) already gives a
+// per-customer total, but no ageing breakdown — a receivable that's 5
+// days old and one that's 200 days old land in the same number. This
+// buckets each outstanding invoice by days-since-sale into the standard
+// 0-30/31-60/61-90/90+ AR ageing bands.
+router.get('/customer-ageing', authenticate, requireValidBranch, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const dm = modeVal(req);
+    const rows = await withBranch(db('tbl_sales_header')
+      .where('Tenant_ID', tenantId).where('Data_Mode', dm)
+      .whereIn('Payment_Status', ['Partial', 'Pending']).whereNotNull('Customer_ID').where('Balance_Amount', '>', 0), req)
+      .groupByRaw('"Customer_ID", "Customer_Name", "Customer_Mobile"')
+      .select(
+        'Customer_ID', 'Customer_Name', 'Customer_Mobile',
+        db.raw(`COALESCE(SUM(CASE WHEN CURRENT_DATE - "Sale_Date"::date <= 30 THEN "Balance_Amount" ELSE 0 END), 0) as bucket_0_30`),
+        db.raw(`COALESCE(SUM(CASE WHEN CURRENT_DATE - "Sale_Date"::date BETWEEN 31 AND 60 THEN "Balance_Amount" ELSE 0 END), 0) as bucket_31_60`),
+        db.raw(`COALESCE(SUM(CASE WHEN CURRENT_DATE - "Sale_Date"::date BETWEEN 61 AND 90 THEN "Balance_Amount" ELSE 0 END), 0) as bucket_61_90`),
+        db.raw(`COALESCE(SUM(CASE WHEN CURRENT_DATE - "Sale_Date"::date > 90 THEN "Balance_Amount" ELSE 0 END), 0) as bucket_90_plus`),
+        db.raw(`COALESCE(SUM("Balance_Amount"), 0) as total_outstanding`),
+        db.raw(`MIN(CURRENT_DATE - "Sale_Date"::date) as oldest_days`),
+      )
+      .orderBy('total_outstanding', 'desc');
+    return sendSuccess(res, rows);
+  } catch (err) { return sendError(res, 500, 'Failed to generate customer ageing report.'); }
+});
+
 // ─── GET /api/reports/customer-outstanding ────────────────────────────────────
 router.get('/customer-outstanding', authenticate, requireValidBranch, async (req, res) => {
   try {

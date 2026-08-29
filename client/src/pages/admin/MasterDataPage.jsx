@@ -1,8 +1,9 @@
 import React, { useState, useRef } from 'react';
 import {
   Tabs, Table, Button, Modal, Form, Input, InputNumber,
-  Select, Switch, Typography, Card, message, Tag,
+  Select, Switch, Typography, Card, message, Tag, Alert,
 } from 'antd';
+import { Link } from 'react-router-dom';
 import { PlusOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { masterApi } from '../../api/modules';
@@ -133,6 +134,10 @@ export default function MasterDataPage() {
       <div className="page-header">
         <Title level={4} style={{ margin: 0 }}>Master Data Management</Title>
       </div>
+      <Alert
+        type="info" showIcon closable style={{ marginBottom: 12 }}
+        message={<span>⚙️ <Link to="/masters">Master Setup</Link> is now the main master screen — this page still works and nothing here has moved, use whichever you prefer.</span>}
+      />
       <Card style={{ borderRadius: 8 }}>
         <div ref={tabsRef}>
         <Tabs defaultActiveKey="types">

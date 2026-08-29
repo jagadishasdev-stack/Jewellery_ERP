@@ -174,6 +174,9 @@ export const reportsApi = {
   designPerformance: () => api.get('/reports/design-performance'),
   branchPerformance: () => api.get('/reports/branch-performance'),
   barcodeReport: (params) => api.get('/reports/barcode-report', { params }),
+  customerAgeing: () => api.get('/reports/customer-ageing'),
+  collectionByMode: (params) => api.get('/reports/collection-by-mode', { params }),
+  stockLevel: () => api.get('/ornaments/stock-level'),
 };
 
 // ─── Floors & Counters ────────────────────────────────────────────────────────

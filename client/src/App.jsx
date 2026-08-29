@@ -77,6 +77,8 @@ import SalesReportsPage from './pages/reports/SalesReportsPage';
 import InventoryReportsPage from './pages/reports/InventoryReportsPage';
 import FinancialReportsPage from './pages/reports/FinancialReportsPage';
 import CustomerReportsPage from './pages/reports/CustomerReportsPage';
+import MastersReportPage from './pages/reports/MastersReportPage';
+import RateEntryPage from './pages/utility/RateEntryPage';
 import GiftVoucherManagementPage from './pages/reports/GiftVoucherManagementPage';
 import GstReturnsPage from './pages/reports/GstReturnsPage';
 import SchemeReportsPage from './pages/reports/SchemeReportsPage';
@@ -233,6 +235,8 @@ function App() {
         <Route path="/reports/inventory-reports" element={<InventoryReportsPage />} />
         <Route path="/reports/financial-reports" element={<FinancialReportsPage />} />
         <Route path="/reports/customer-reports" element={<CustomerReportsPage />} />
+        <Route path="/reports/masters" element={<MastersReportPage />} />
+        <Route path="/utility/rate-entry" element={<RateEntryPage />} />
         <Route path="/reports/gift-vouchers" element={<GiftVoucherManagementPage />} />
         <Route path="/reports/gst-returns" element={<GstReturnsPage />} />
         <Route path="/reports/scheme-reports" element={<SchemeReportsPage />} />

@@ -24,13 +24,13 @@ const REPORT_CATEGORIES = [
     key: 'inventory', icon: <GoldOutlined style={{ fontSize: 32, color: '#52c41a' }} />,
     title: 'Inventory Reports', color: '#52c41a', badge: 'Stock', badgeColor: 'green',
     route: '/reports/inventory-reports',
-    reports: ['Current Stock', 'Dead Stock', 'Fast Moving Stock', 'Slow Moving Stock', 'Item Movement Report', 'Closing Report'],
+    reports: ['Current Stock', 'Dead Stock', 'Fast Moving Stock', 'Slow Moving Stock', 'Item Movement Report', 'Reorder Level Alert', 'Closing Report'],
   },
   {
     key: 'financial', icon: <BankOutlined style={{ fontSize: 32, color: '#1890ff' }} />,
     title: 'Financial Reports', color: '#1890ff', badge: 'Finance', badgeColor: 'blue',
     route: '/reports/financial-reports',
-    reports: ['Cash Book', 'Bank Book', 'Day Book', 'Ledger Report', 'Profit & Loss', 'Balance Sheet'],
+    reports: ['Cash Book', 'Bank Book', 'Day Book', 'Collection by Payment Mode', 'Ledger Report', 'Profit & Loss', 'Balance Sheet'],
   },
   {
     key: 'gst-returns', icon: <FileProtectOutlined style={{ fontSize: 32, color: '#B8860B' }} />,
@@ -42,7 +42,7 @@ const REPORT_CATEGORIES = [
     key: 'customer', icon: <TeamOutlined style={{ fontSize: 32, color: '#722ed1' }} />,
     title: 'Customer Reports', color: '#722ed1', badge: 'CRM', badgeColor: 'purple',
     route: '/reports/customer-reports',
-    reports: ['Customer Ledger', 'Purchase History', 'Customer Outstanding'],
+    reports: ['Customer Ledger', 'Purchase History', 'Customer Outstanding', 'Customer Ageing (Days Db/Cr)'],
   },
   {
     key: 'scheme', icon: <LineChartOutlined style={{ fontSize: 32, color: '#fa8c16' }} />,

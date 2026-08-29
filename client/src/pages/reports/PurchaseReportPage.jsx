@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   Table, Card, Typography, DatePicker, Button, Space, Tag, Row, Col,
-  Statistic, Descriptions, Modal, message,
+  Statistic, Descriptions, Modal, message, Select,
 } from 'antd';
 import { DownloadOutlined, PrinterOutlined, EyeOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
+const { Option } = Select;
 
 const exportCSV = (data, filename) => {
   if (!data?.length) { message.warning('No data.'); return; }
@@ -27,6 +28,10 @@ const exportCSV = (data, filename) => {
 export default function PurchaseReportPage() {
   const [dateRange, setDateRange] = useState([dayjs().startOf('month'), dayjs()]);
   const [detailPurchase, setDetailPurchase] = useState(null);
+  // 'Old Gold' is the reference-software "Old Metal Purchase" report — a
+  // filter on this same register rather than a separate page, since it's
+  // the exact same purchase data, just narrowed to one Purchase_Type.
+  const [typeFilter, setTypeFilter] = useState(undefined);
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const dateRangeRef = useRef(null);
@@ -39,8 +44,8 @@ export default function PurchaseReportPage() {
   ];
 
   const { data: purchases, isLoading } = useQuery({
-    queryKey: ['purchases-all'],
-    queryFn: () => purchaseApi.getAll({ limit: 200 }).then(r => r.data.data.items),
+    queryKey: ['purchases-all', typeFilter],
+    queryFn: () => purchaseApi.getAll({ limit: 200, purchaseType: typeFilter || undefined }).then(r => r.data.data.items),
   });
 
   const { data: purchaseDetail } = useQuery({
@@ -89,6 +94,11 @@ export default function PurchaseReportPage() {
         <div ref={dateRangeRef}>
         <Space>
           <RangePicker value={dateRange} onChange={d => d && setDateRange(d)} format="DD-MMM-YYYY" />
+          <Select value={typeFilter} onChange={setTypeFilter} allowClear placeholder="All Types" style={{ width: 150 }}>
+            <Option value="Stock">Stock</Option>
+            <Option value="Consignment">Consignment</Option>
+            <Option value="Old Gold">Old Gold (Old Metal Purchase)</Option>
+          </Select>
           <Button icon={<DownloadOutlined />} onClick={() => exportCSV(filtered, 'purchase_register')}>Export CSV</Button>
           <Button icon={<PrinterOutlined />} onClick={() => window.print()}>Print</Button>
         </Space>

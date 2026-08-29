@@ -52,6 +52,14 @@ export default function InventoryReportsPage() {
     queryKey: ['inv-movement'],
     queryFn: () => reportsApi.itemMovement().then(r => r.data.data || []),
   });
+  // GET /ornaments/stock-level existed since early in this project but had
+  // no report page anywhere reading it — a Reorder Level alert list was
+  // effectively invisible unless someone queried the API directly.
+  const { data: rolData, isLoading: rolLoading } = useQuery({
+    queryKey: ['inv-reorder-level'],
+    queryFn: () => reportsApi.stockLevel().then(r => r.data.data || []),
+    enabled: activeTab === 'reorder-level',
+  });
   const { data: floorStock, isLoading: floorLoading } = useQuery({
     queryKey: ['inv-floor-stock'],
     queryFn: () => floorsApi.getLiveStock({ groupBy: 'floor' }).then(r => r.data.data),
@@ -319,6 +327,25 @@ export default function InventoryReportsPage() {
           extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(movementData||[],'item_movement')}>CSV</Button>}>
           <Table
             scroll={{ x: "max-content" }} columns={movementCols} dataSource={movementData||[]} rowKey="Ornament_ID" size="small" pagination={{pageSize:25}} />
+        </Card>
+      ),
+    },
+    {
+      key: 'reorder-level', label: <span><WarningOutlined style={{color:'#fa8c16'}} /> Reorder Level</span>,
+      children: (
+        <Card title="Items At or Below Reorder Level" bodyStyle={{padding:0}} style={{borderRadius:8}}
+          extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(rolData||[],'reorder_level_alert')}>CSV</Button>}>
+          <Table
+            scroll={{ x: "max-content" }} size="small" loading={rolLoading} rowKey="Ornament_ID" pagination={{pageSize:25}}
+            dataSource={rolData||[]}
+            locale={{ emptyText: 'Nothing is at or below its reorder level right now.' }}
+            columns={[
+              { title: 'Article Number', dataIndex: 'Article_Number', render: v => <Text code style={{fontSize:11}}>{v}</Text> },
+              { title: 'Item Type', dataIndex: 'Type_Name' },
+              { title: 'Current Stock', dataIndex: 'Stock_Quantity', render: v => <Tag color="red">{v}</Tag> },
+              { title: 'Reorder Level', dataIndex: 'Min_Stock_Level' },
+            ]}
+          />
         </Card>
       ),
     },

@@ -56,6 +56,12 @@ export default function CustomerReportsPage() {
     enabled: activeTab === 'outstanding',
   });
 
+  const { data: ageingData, isLoading: ageingLoading } = useQuery({
+    queryKey: ['customer-ageing'],
+    queryFn: () => reportsApi.customerAgeing().then(r => r.data.data || []),
+    enabled: activeTab === 'ageing',
+  });
+
   const { data: historyData, isLoading: histLoading } = useQuery({
     queryKey: ['customer-history', selectedCustomer],
     queryFn: () => customersApi.getHistory(selectedCustomer).then(r => r.data.data || []),
@@ -238,6 +244,31 @@ export default function CustomerReportsPage() {
             scroll={{ x: "max-content" }} columns={outstandingCols} dataSource={outstandingData||[]} rowKey="Customer_ID"
             size="small" loading={outLoading} pagination={{pageSize:20}}
             expandable={{ expandedRowRender: (record) => <OutstandingInvoicesRow record={record} /> }} />
+        </Card>
+      ),
+    },
+    {
+      // Outstanding (above) gives one total per customer — this bucket
+      // ages each one by days-since-sale, the standard AR ageing bands,
+      // so a 5-day-old balance and a 200-day-old one don't look the same.
+      key: 'ageing', label: <span>📅 Days Customer Db/Cr (Ageing)</span>,
+      children: (
+        <Card title="Customer Ageing (Days Outstanding)" bodyStyle={{padding:0}} style={{borderRadius:8}}
+          extra={<Button size="small" icon={<DownloadOutlined />} onClick={()=>exportCSV(ageingData||[],'customer_ageing')}>CSV</Button>}>
+          <Table
+            scroll={{ x: "max-content" }} rowKey="Customer_ID" size="small" loading={ageingLoading} pagination={{pageSize:20}}
+            dataSource={ageingData||[]}
+            columns={[
+              { title: 'Customer', dataIndex: 'Customer_Name', render: v => <Text strong>{v}</Text> },
+              { title: 'Mobile', dataIndex: 'Customer_Mobile' },
+              { title: '0-30 Days', dataIndex: 'bucket_0_30', render: v => parseFloat(v) > 0 ? formatCurrency(v) : '-' },
+              { title: '31-60 Days', dataIndex: 'bucket_31_60', render: v => parseFloat(v) > 0 ? <Text style={{color:'#fa8c16'}}>{formatCurrency(v)}</Text> : '-' },
+              { title: '61-90 Days', dataIndex: 'bucket_61_90', render: v => parseFloat(v) > 0 ? <Text style={{color:'#ff7a45'}}>{formatCurrency(v)}</Text> : '-' },
+              { title: '90+ Days', dataIndex: 'bucket_90_plus', render: v => parseFloat(v) > 0 ? <Text strong style={{color:'#ff4d4f'}}>{formatCurrency(v)}</Text> : '-' },
+              { title: 'Total Outstanding', dataIndex: 'total_outstanding', render: v => <Text strong style={{color:'#B8860B'}}>{formatCurrency(v)}</Text> },
+              { title: 'Oldest (Days)', dataIndex: 'oldest_days' },
+            ]}
+          />
         </Card>
       ),
     },
