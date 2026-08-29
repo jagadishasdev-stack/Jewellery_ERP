@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Form, Input, InputNumber, Select, Button, Card, Row, Col,
-  Divider, Typography, Space, message, Alert,
+  Divider, Typography, Space, message, Alert, Table, Tag, Tooltip,
 } from 'antd';
-import { SaveOutlined, CalculatorOutlined } from '@ant-design/icons';
+import { SaveOutlined, CalculatorOutlined, BarcodeOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ornamentsApi, masterApi, karigarApi } from '../../api/modules';
 import { calculateOrnamentPrice, formatCurrency } from '../../utils/calculations';
 import { useGoldRate } from '../../hooks/useGoldRate';
+import { printBarcodeLabel } from '../../utils/thermalReceipt';
+import { useAuthStore } from '../../store/authStore';
 import FloorCounterTraySelect from '../../components/FloorCounterTraySelect';
 import PageTour from '../../components/PageTour';
 import { useMetalTypes } from '../../hooks/useMetalTypes';
@@ -25,6 +27,13 @@ export default function AddOrnamentPage() {
   const editId = searchParams.get('edit');
   const [priceCalc, setPriceCalc] = useState(null);
   const { goldRate } = useGoldRate();
+  const { user } = useAuthStore();
+  // Every piece added in THIS session (not the tenant's whole stock list —
+  // that's what /inventory itself is for) — so after saving, the admin
+  // sees it right here on the same big screen instead of bouncing away,
+  // and can print its barcode without leaving to go find the row
+  // elsewhere. Cleared on navigating away since the component unmounts.
+  const [recentlyAdded, setRecentlyAdded] = useState([]);
 
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const classificationRef = useRef(null);
@@ -37,7 +46,7 @@ export default function AddOrnamentPage() {
     { title: '2. Weight Details', description: 'Enter gross weight, net gold weight, stone weight and the wastage % you charge — plus stone type/count if this piece has stones set in it.', target: () => weightRef.current },
     { title: '3. Pricing', description: 'Set the gold rate, making charge per gram, any discount %, and the purchase cost you paid — these feed the price calculator on the right.', target: () => pricingRef.current },
     { title: '4. Price Calculator', description: 'Updates live as you fill in weight and pricing — shows gold value, making charges, wastage, GST and the final MRP the customer will pay.', target: () => calcRef.current },
-    { title: '5. Save Ornament', description: 'Once everything looks correct, click here to add this piece to your stock — it will then be searchable and sellable from POS.', target: () => saveRef.current },
+    { title: '5. Save Ornament', description: 'Once everything looks correct, click here to add this piece to your stock — it appears immediately in the list below, ready to print its barcode, and the form clears so you can keep entering the next piece without leaving this screen.', target: () => saveRef.current },
   ];
 
   const { data: itemTypes } = useQuery({ queryKey: ['item-types'], queryFn: () => masterApi.getItemTypes().then((r) => r.data.data) });
@@ -118,12 +127,44 @@ export default function AddOrnamentPage() {
 
   const saveMutation = useMutation({
     mutationFn: (data) => editId ? ornamentsApi.update(editId, data) : ornamentsApi.create(data),
-    onSuccess: () => {
-      message.success(editId ? 'Ornament updated!' : 'Ornament added to inventory!');
-      navigate('/inventory');
+    onSuccess: (res) => {
+      if (editId) {
+        message.success('Ornament updated!');
+        navigate('/inventory');
+        return;
+      }
+      message.success(`Added: ${res.data.data.Article_Number} — ready for the next piece.`);
+      setRecentlyAdded((prev) => [res.data.data, ...prev]);
+      form.resetFields();
+      setPriceCalc(null);
+      // resetFields() only restores each field's own declared initialValue
+      // — Current_Gold_Rate has none (it's set programmatically below,
+      // same as the very first load) and would otherwise sit blank until
+      // the admin happens to touch something.
+      form.setFieldValue('Current_Gold_Rate', goldRate);
     },
     onError: (err) => message.error(err.response?.data?.message || 'Save failed.'),
   });
+
+  const printLabel = (ornament) => printBarcodeLabel(ornament, user?.companyName).then((result) => {
+    if (!result?.success) message.warning('Label sent to the fallback print dialog — the configured barcode printer may be offline.');
+  });
+
+  const recentColumns = [
+    { title: 'Article No', dataIndex: 'Article_Number', render: (v) => <Text code copyable style={{ fontSize: 12 }}>{v}</Text> },
+    { title: 'Metal', dataIndex: 'Metal_Type', width: 90, render: (v) => <Tag>{v}</Tag> },
+    { title: 'Item Type', width: 120, render: (_, r) => (itemTypes || []).find((t) => t.Type_ID === r.Type_ID)?.Type_Name || '-' },
+    { title: 'Purity', width: 90, render: (_, r) => (purities || []).find((p) => p.Purity_ID === r.Purity_ID)?.Purity_Code || '-' },
+    { title: 'Gross Wt', dataIndex: 'Gross_Weight', width: 90, render: (v) => `${parseFloat(v || 0).toFixed(3)}g` },
+    { title: 'MRP', dataIndex: 'Total_Price', width: 110, render: (v) => formatCurrency(v) },
+    {
+      title: '', width: 60, render: (_, r) => (
+        <Tooltip title="Print Barcode Label">
+          <Button size="small" type="text" icon={<BarcodeOutlined />} onClick={() => printLabel(r)} />
+        </Tooltip>
+      ),
+    },
+  ];
 
   const onFinish = (values) => {
     const data = {
@@ -377,6 +418,28 @@ export default function AddOrnamentPage() {
           </Col>
         </Row>
       </Form>
+
+      {/* Stays on this screen after every save (rather than bouncing to the
+          list) so the admin can enter several pieces of stock in a row and
+          see each one land here immediately, barcode included — no need to
+          go find the row on the /inventory grid and print it separately. */}
+      {!editId && recentlyAdded.length > 0 && (
+        <Card
+          title={`Added This Session (${recentlyAdded.length})`}
+          size="small"
+          style={{ borderRadius: 8, marginTop: 16 }}
+          extra={<Button size="small" icon={<DeleteOutlined />} onClick={() => setRecentlyAdded([])}>Clear list</Button>}
+        >
+          <Table
+            size="small"
+            rowKey="Ornament_ID"
+            dataSource={recentlyAdded}
+            columns={recentColumns}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+          />
+        </Card>
+      )}
 
       <PageTour steps={tourSteps} />
     </div>
