@@ -347,7 +347,11 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   // Packet Stock — genuinely new (Missing Feature Report), gated the same
   // way as Inventory itself since it's the same permission surface.
   const packetStockItem = permissions.inventory ? { key: '/packet-stock', label: '📦 Packet Stock' } : null;
-  const stockChildren = [inventoryGroup, binGroup, floorGroup, packetStockItem].filter(Boolean);
+  // Branch Orders — genuinely new (Missing Feature Report), gated the
+  // same way as Floor Management/Transfer since it's the same permission
+  // surface (branch stock movement).
+  const branchOrdersItem = (isEnabled('floors') || isEnabled('stock_transfer')) ? { key: '/branch-orders', label: '🔀 Branch Orders' } : null;
+  const stockChildren = [inventoryGroup, binGroup, floorGroup, packetStockItem, branchOrdersItem].filter(Boolean);
   if (stockChildren.length) transactionChildren.push({ key: 'txn-stock-group', type: 'group', label: 'STOCK', children: stockChildren });
 
   const purchaseChildren = [purchaseGroup, karigarGroup].filter(Boolean);

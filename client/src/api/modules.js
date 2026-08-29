@@ -753,6 +753,15 @@ export const jobcardPredictionApi = {
   setStatus: (id, status) => api.put(`/jobcard-prediction/${id}/status`, { Status: status }),
 };
 
+// ─── Branch Order Requests ────────────────────────────────────────────────────────
+export const branchOrderRequestApi = {
+  list: (params) => api.get('/branch-order-request', { params }),
+  create: (data) => api.post('/branch-order-request', data),
+  approve: (id, data) => api.post(`/branch-order-request/${id}/approve`, data),
+  reject: (id) => api.post(`/branch-order-request/${id}/reject`),
+  linkTransfer: (id, data) => api.post(`/branch-order-request/${id}/link-transfer`, data),
+};
+
 // ─── Packet Stock ────────────────────────────────────────────────────────────────
 export const packetStockApi = {
   list: (params) => api.get('/packet-stock', { params }),
