@@ -43,7 +43,12 @@ const PURCHASE_TYPES = [
 ];
 
 const EXCHANGE_TYPES = [
-  { key: 'old_gold', icon: '🔄', title: 'Old Gold Purchase', subtitle: 'Buy old gold from customer', color: '#fa8c16', badge: 'Old Gold', badgeColor: 'orange' },
+  // Clarified per the Transaction Menu Audit's Duplicate C1: this is the
+  // standalone reception/valuation flow (no sale happening right now) —
+  // distinct from POS's "Old Gold Exchange" card, which reduces the
+  // CURRENT bill's total mid-sale. Both are real and both stay; this
+  // subtitle exists so staff pick the right one instead of guessing.
+  { key: 'old_gold', icon: '🔄', title: 'Old Gold Purchase', subtitle: 'Buy old gold — no sale in progress (for a mid-sale exchange, use Old Gold Exchange in POS instead)', color: '#fa8c16', badge: 'Old Gold', badgeColor: 'orange' },
   { key: 'gold_exchange', icon: '↔️', title: 'Gold Exchange', subtitle: 'Exchange old gold for new', color: '#722ed1', badge: 'Exchange', badgeColor: 'purple' },
   { key: 'silver_exchange', icon: '🔃', title: 'Silver Exchange', subtitle: 'Exchange old silver items', color: '#555', badge: 'Silver Exch', badgeColor: 'default' },
 ];

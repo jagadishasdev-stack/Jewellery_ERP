@@ -104,7 +104,11 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
       key: 'purchase-group', icon: <ShoppingCartOutlined style={{ color: '#B8860B' }} />, label: '🛍️ Purchase',
       children: [
         { key: '/purchase/hub', label: '🥇 Purchase Hub' },
-        { key: '/purchase', label: '📜 Purchase History' },
+        // Relabeled per the Transaction Menu Audit's Duplicate C2: this
+        // page also creates new Draft purchases (approve/pay-supplier
+        // included), not just a read-only history list — "History"
+        // undersold what it does and risked staff missing it entirely.
+        { key: '/purchase', label: '📋 Purchase List & Approvals' },
         // The only page that can create/edit a Supplier record was
         // gated behind the Karigar menu below, which needs Goldsmith or
         // Manufacturing enabled — a pure Retailer/Wholesaler tenant with
@@ -345,7 +349,16 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
     });
   }
 
-  const salesChildren = [billingGroup, repairGroup].filter(Boolean);
+  // Customer Order — BillingHub's "Order Booking" modal already creates
+  // directly into tbl_bin_orders (binApi.createOrder), the SAME table
+  // Order Bin manages under Stock → Master Bin — confirmed while
+  // resolving the Transaction Menu Audit's Duplicate C6: this was never
+  // two datasets, just "create here" (Billing) / "track here" (Order
+  // Bin) for one real table. This is a convenience link to that same
+  // live data from where the spec expects "Customer Order" to sit, not a
+  // second copy of anything.
+  const customerOrderItem = isEnabled('bin_orders') ? { key: '/bin?tab=orders', label: '📋 Customer Order' } : null;
+  const salesChildren = [billingGroup, customerOrderItem, repairGroup].filter(Boolean);
   if (salesChildren.length) transactionChildren.push({ key: 'txn-sales-group', type: 'group', label: 'SALES', children: salesChildren });
 
   if (approvalGroup) transactionChildren.push({ key: 'txn-approval-group', type: 'group', label: 'APPROVAL', children: [approvalGroup] });
