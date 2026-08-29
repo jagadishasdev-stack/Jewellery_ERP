@@ -131,7 +131,7 @@ export default function DashboardPage() {
   // ── Business-type header colours ──────────────────────────────────────────
   const BT_CONFIG = {
     RETAILER:     { color: '#B8860B', label: '🏪 Retailer Dashboard',     bg: '#B8860B' },
-    WHOLESALER:   { color: '#1890ff', label: '🏭 Wholesaler Dashboard',    bg: '#1890ff' },
+    WHOLESALER:   { color: '#69b1ff', label: '🏭 Wholesaler Dashboard',    bg: '#69b1ff' }, // light blue (was AntD primary blue #1890ff)
     MANUFACTURER: { color: '#52c41a', label: '⚙️ Manufacturer Dashboard', bg: '#52c41a' },
     HYBRID:       { color: '#722ed1', label: '💎 JewelSphere Dashboard', bg: '#722ed1' },
   };
