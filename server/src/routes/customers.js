@@ -128,6 +128,10 @@ router.put('/:id', authenticate, async (req, res) => {
     if (!updated) return sendError(res, 404, 'Customer not found.');
     return sendSuccess(res, updated, 'Customer updated.');
   } catch (err) {
+    // Customer_Code is unique across the whole system (not just this
+    // tenant) — this only became reachable from the UI once manual code
+    // editing was added, so give it a real message instead of a bare 500.
+    if (err.code === '23505') return sendError(res, 409, 'That customer code is already in use.');
     return sendError(res, 500, 'Failed to update customer.');
   }
 });

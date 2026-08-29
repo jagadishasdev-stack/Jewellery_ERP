@@ -236,6 +236,14 @@ export default function CustomersPage() {
                 <Input size="large" placeholder="10-digit mobile" maxLength={10} />
               </Form.Item>
             </Col>
+            {editingCustomer && (
+              <Col xs={24} sm={12}>
+                <Form.Item name="Customer_Code" label="Customer Code" rules={[{ required: true }]}
+                  extra="Must stay unique — changing this doesn't relabel past invoices.">
+                  <Input placeholder="Customer code" />
+                </Form.Item>
+              </Col>
+            )}
             <Col xs={24} sm={12}>
               <Form.Item name="Email" label="Email">
                 <Input type="email" placeholder="customer@email.com" />

@@ -67,4 +67,17 @@ describe('Customer KYC / category fields', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.Customer_Category).toBe('Platinum');
   });
+
+  test('PUT /api/customers/:id can manually edit Customer_Code (was auto-generated, never editable from the UI before)', async () => {
+    const res = await request(app).put(`/api/customers/${customerId}`).set(auth()).send({ Customer_Code: 'QA-MANUAL-CODE-1' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.Customer_Code).toBe('QA-MANUAL-CODE-1');
+  });
+
+  test('PUT /api/customers/:id rejects a Customer_Code already used by another customer with a friendly 409, not a raw 500', async () => {
+    const other = await request(app).post('/api/customers').set(auth()).send({ Customer_Name: 'QA Code Collision Target', Mobile_1: '9822300003' });
+    const res = await request(app).put(`/api/customers/${other.body.data.Customer_ID}`).set(auth()).send({ Customer_Code: 'QA-MANUAL-CODE-1' });
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/already in use/);
+  });
 });

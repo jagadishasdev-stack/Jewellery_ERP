@@ -54,9 +54,10 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
       .leftJoin('tbl_customer_master as c', 'r.Customer_ID', 'c.Customer_ID')
       .leftJoin('tbl_vendor_master as k', 'r.Assigned_Karigar_ID', 'k.Vendor_ID')
       .leftJoin('tbl_vendor_master as ok', 'r.Original_Karigar_ID', 'ok.Vendor_ID')
+      .leftJoin('tbl_repair_category_master as rc', 'r.Category_ID', 'rc.Category_ID')
       .where('r.Tenant_ID', req.user.tenantId)
       .modify((q) => withBranch(q, req, 'r.Branch_ID'))
-      .select('r.*', 'c.Customer_Name as Cust_Name', 'k.Vendor_Name as Karigar_Name', 'ok.Vendor_Name as Original_Karigar_Name');
+      .select('r.*', 'c.Customer_Name as Cust_Name', 'k.Vendor_Name as Karigar_Name', 'ok.Vendor_Name as Original_Karigar_Name', 'rc.Category_Name');
     if (status) qb = qb.where('r.Status', status);
     // Clean count to avoid GROUP BY issue with JOINs
     let countQb = db('tbl_repair_orders').where('Tenant_ID', req.user.tenantId);

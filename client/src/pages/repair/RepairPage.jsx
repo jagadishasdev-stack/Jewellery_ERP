@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import { PlusOutlined, ToolOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { repairApi, karigarApi, customersApi } from '../../api/modules';
+import { repairApi, karigarApi, customersApi, simpleMastersApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
 import PageTour from '../../components/PageTour';
 import { useActionShortcuts } from '../../hooks/useActionShortcuts';
@@ -71,6 +71,11 @@ export default function RepairPage() {
     queryFn: () => karigarApi.getList().then(r => r.data.data),
   });
 
+  const { data: repairCategories } = useQuery({
+    queryKey: ['repair-category-master'],
+    queryFn: () => simpleMastersApi.getRepairCategories().then(r => r.data.data),
+  });
+
   const createMutation = useMutation({
     mutationFn: (data) => repairApi.create(data),
     onSuccess: (res) => {
@@ -117,6 +122,7 @@ export default function RepairPage() {
     { title: 'Job Card', dataIndex: 'Job_Card_Number', render: v => <Text code style={{ fontSize: 11 }}>{v}</Text> },
     { title: 'Customer', dataIndex: 'Customer_Name', render: (v, r) => v || r.Customer_Name_Direct || '-' },
     { title: 'Item', dataIndex: 'Item_Description', render: v => <Text ellipsis style={{ maxWidth: 150 }}>{v}</Text> },
+    { title: 'Category', dataIndex: 'Category_Name', render: v => v ? <Tag>{v}</Tag> : '-' },
     { title: 'Repair Karigar', dataIndex: 'Karigar_Name', render: v => v || 'Unassigned' },
     {
       title: 'Original Maker', dataIndex: 'Original_Karigar_Name',
@@ -237,6 +243,11 @@ export default function RepairPage() {
           </Row>
           <Form.Item name="Item_Description" label="Item Description" rules={[{ required: true }]}>
             <Input placeholder="e.g. Gold Necklace — 22K — 15g (customer's item)" />
+          </Form.Item>
+          <Form.Item name="Category_ID" label="Repair Category (optional)">
+            <Select allowClear placeholder="Polishing, Sizing, Stone Setting, ...">
+              {(repairCategories || []).map(c => <Option key={c.Category_ID} value={c.Category_ID}>{c.Category_Name}</Option>)}
+            </Select>
           </Form.Item>
           <Row gutter={16}>
             <Col xs={8}>

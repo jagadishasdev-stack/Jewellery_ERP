@@ -63,3 +63,16 @@ test('delivery posts to the ledger under the ACTUAL payment mode used, not alway
   const entries = await db('tbl_accounting_entries').where({ Journal_ID: journal.Journal_ID });
   expect(entries.some((e) => e.Ledger_Account === 'UPI Clearing Account' && e.Entry_Type === 'Dr')).toBe(true);
 });
+
+test('a repair can be tagged with a Repair Category, and the list route returns its name via the join', async () => {
+  const category = await request(app).post('/api/simple-masters/repair-category').set(auth()).send({ Category_Name: 'QA Sizing' });
+  const categoryId = category.body.data.Category_ID;
+
+  const create = await request(app).post('/api/repair').set(auth()).send({ Item_Description: 'QA Categorized Bangle', Category_ID: categoryId });
+  expect(create.status).toBe(201);
+  expect(create.body.data.Category_ID).toBe(categoryId);
+
+  const list = await request(app).get('/api/repair').set(auth());
+  const row = list.body.data.items.find((r) => r.Repair_ID === create.body.data.Repair_ID);
+  expect(row.Category_Name).toBe('QA Sizing');
+});
