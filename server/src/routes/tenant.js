@@ -6,6 +6,7 @@ const { sendSuccess, sendError, sendValidationError } = require('../utils/respon
 const { authenticate, requireSuperAdmin, requirePermission } = require('../middleware/auth');
 const { STANDARD_ACCOUNTS } = require('../utils/standardChartOfAccounts');
 const { resolveShortcuts } = require('../utils/shortcuts');
+const { provisionTenantDatabase, dropDatabase, prepareLocalMySqlTemplate } = require('../utils/tenantProvisioning');
 
 // ─── GET /api/tenant/branches ─────────────────────────────────────────────────
 // includeInactive=true (Super Admin only) also returns deactivated branches,
@@ -194,16 +195,41 @@ router.post('/create', authenticate, requireSuperAdmin, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
 
-  const trx = await db.transaction();
-  try {
-    const { adminUsername, adminPassword, ...tenantData } = req.body;
+  const { adminUsername, adminPassword, ...tenantData } = req.body;
 
-    // Create tenant
-    await trx('tbl_tenant_master').insert({
-      ...tenantData,
-      Is_Active: true,
-      Created_By: req.user.username,
-    });
+  // Cheap existence check before provisioning a whole database for a
+  // request that would fail on uniqueness anyway.
+  const existing = await db('tbl_tenant_master')
+    .where('Tenant_ID', tenantData.Tenant_ID).orWhere('License_Key', tenantData.License_Key).first();
+  if (existing) return sendError(res, 409, 'Tenant ID or License Key already exists.');
+
+  // Every tenant created from here on gets a real, dedicated Postgres
+  // database of its own from day one (see utils/tenantProvisioning.js) —
+  // rather than sharing the control-plane DB with every other tenant,
+  // which is what every tenant created before this did. A brand-new
+  // tenant starts with zero data, which is exactly what makes this safe:
+  // there's nothing to migrate, only the initial seed rows below, written
+  // directly into the new database from the start.
+  let provisioned;
+  try {
+    provisioned = await provisionTenantDatabase(tenantData.Tenant_ID);
+  } catch (err) {
+    console.error('Tenant database provisioning failed:', err.message);
+    return sendError(res, 500, `Failed to provision tenant database: ${err.message}`);
+  }
+  const { knex: tenantKnex, connection } = provisioned;
+
+  const trx = await tenantKnex.transaction();
+  try {
+    // Every tenant-scoped table's Tenant_ID column has a real foreign key
+    // to tbl_tenant_master.Tenant_ID, enforced WITHIN the same database
+    // (migrations create a full tbl_tenant_master table in every database,
+    // including this new dedicated one). The authoritative tenant record
+    // only ever lives in the control plane (inserted further below, once
+    // this database is fully seeded and ready) — this local copy exists
+    // solely to satisfy that same-database foreign key check on every
+    // tenant-scoped insert that follows; nothing ever reads it back out.
+    await trx('tbl_tenant_master').insert({ ...tenantData, Is_Active: true, Created_By: req.user.username });
 
     // Create head office branch
     await trx('tbl_branch_master').insert({
@@ -215,10 +241,16 @@ router.post('/create', authenticate, requireSuperAdmin, [
       City: tenantData.City || 'Bangalore',
     });
 
-    // Create admin user
+    // Create admin user. Role_ID comes from the control-plane's own role
+    // list (role permissions are always resolved from there — see
+    // auth.js's "Control-plane connection ... tbl_role_master ... always
+    // live here" comment) — it resolves to the same Role_ID value that
+    // was just copied into this tenant's own local tbl_role_master by
+    // provisionTenantDatabase, satisfying tbl_user_master.Role_ID's real
+    // foreign key within this new database.
     const salt = await bcrypt.genSalt(12);
     const hash = await bcrypt.hash(adminPassword, salt);
-    const adminRole = await trx('tbl_role_master').where({ Role_Name: 'Client Admin' }).first();
+    const adminRole = await db('tbl_role_master').where({ Role_Name: 'Client Admin' }).first();
 
     await trx('tbl_user_master').insert({
       Tenant_ID: tenantData.Tenant_ID,
@@ -266,8 +298,9 @@ router.post('/create', authenticate, requireSuperAdmin, [
       }))
     );
 
-    // Copy global invoice templates — serialize JSON columns explicitly
-    const globalTemplates = await trx('tbl_invoice_template_master').whereNull('Tenant_ID');
+    // Copy global invoice templates from the control plane — serialize
+    // JSON columns explicitly.
+    const globalTemplates = await db('tbl_invoice_template_master').whereNull('Tenant_ID');
     if (globalTemplates.length > 0) {
       const JSON_COLS = ['Field_Visibility', 'Field_Order', 'Field_Labels', 'Slideshow_Image_URLs'];
       // Sync_UUID must be stripped too — leaving it in copies the GLOBAL
@@ -292,13 +325,14 @@ router.post('/create', authenticate, requireSuperAdmin, [
       await trx('tbl_invoice_template_master').insert(tenantTemplates);
     }
 
-    await trx.commit();
-
-    // ── Auto-provision modules based on business type (non-blocking) ─────────
+    // Auto-provision modules based on business type — tbl_erp_modules
+    // itself was already copied into this tenant's own database by
+    // provisionTenantDatabase (it's genuinely global reference data), so
+    // read it from there rather than the control plane.
     const businessType = tenantData.Business_Type || 'HYBRID';
     const btColMap = { RETAILER: 'Default_Retailer', WHOLESALER: 'Default_Wholesaler', MANUFACTURER: 'Default_Manufacturer', HYBRID: 'Default_Hybrid' };
     const btCol = btColMap[businessType] || 'Default_Hybrid';
-    const allModules = await db('tbl_erp_modules');
+    const allModules = await trx('tbl_erp_modules');
     if (allModules.length > 0) {
       const moduleRows = allModules.map(m => ({
         Tenant_ID: tenantData.Tenant_ID,
@@ -306,17 +340,43 @@ router.post('/create', authenticate, requireSuperAdmin, [
         Is_Enabled: m.Is_Core ? true : !!m[btCol],
         Enabled_By: req.user.username,
       }));
-      await db('tbl_tenant_modules').insert(moduleRows).onConflict(['Tenant_ID','Module_Key']).ignore();
+      await trx('tbl_tenant_modules').insert(moduleRows).onConflict(['Tenant_ID', 'Module_Key']).ignore();
     }
+
+    await trx.commit();
+
+    // Only NOW does the tenant "go live" in the control-plane registry —
+    // with DB_Host/etc already pointing at its own database, so
+    // authenticate()'s per-request tenantDb resolution (see middleware/
+    // auth.js) routes every one of this tenant's requests there from the
+    // very first login. If anything above failed, nothing was ever
+    // written to the control plane at all — the tenant simply doesn't
+    // exist from the registry's perspective, and the catch block below
+    // drops the orphaned database.
+    await db('tbl_tenant_master').insert({
+      ...tenantData,
+      Is_Active: true,
+      Created_By: req.user.username,
+      DB_Host: connection.host, DB_Port: connection.port, DB_Name: connection.database,
+      DB_User: connection.user, DB_Password: connection.password, DB_SSL: connection.ssl,
+      DB_Provisioned_At: new Date(),
+    });
+
+    // Local MySQL — prepared, not started. See prepareLocalMySqlTemplate's
+    // own doc comment for why this doesn't spin up a live server here.
+    prepareLocalMySqlTemplate(tenantData.Tenant_ID);
 
     return sendSuccess(res, { tenantId: tenantData.Tenant_ID }, 'Tenant created successfully.', 201);
   } catch (err) {
-    await trx.rollback();
+    await trx.rollback().catch(() => {});
+    await dropDatabase(connection.database).catch(() => {});
     console.error('Tenant create error:', err.message);
     console.error('Tenant create code:', err.code);
     console.error('Tenant create detail:', err.detail);
     if (err.code === '23505') return sendError(res, 409, 'Tenant ID or License Key already exists.');
     return sendError(res, 500, `Failed to create tenant: ${err.message}`);
+  } finally {
+    await tenantKnex.destroy().catch(() => {});
   }
 });
 
