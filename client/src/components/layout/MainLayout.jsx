@@ -371,7 +371,11 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   // same way as Floor Management/Transfer since it's the same permission
   // surface (branch stock movement).
   const branchOrdersItem = (isEnabled('floors') || isEnabled('stock_transfer')) ? { key: '/branch-orders', label: '🔀 Branch Orders' } : null;
-  const stockChildren = [inventoryGroup, binGroup, floorGroup, packetStockItem, branchOrdersItem].filter(Boolean);
+  // Stock Reconciliation — confirmed genuinely missing (Master/Reports/
+  // Utility audit round 2), gated the same as Inventory since it directly
+  // adjusts ornament stock quantities.
+  const stockReconItem = permissions.inventory ? { key: '/inventory/stock-reconciliation', label: '🔍 Stock Reconciliation' } : null;
+  const stockChildren = [inventoryGroup, binGroup, floorGroup, packetStockItem, branchOrdersItem, stockReconItem].filter(Boolean);
   if (stockChildren.length) transactionChildren.push({ key: 'txn-stock-group', type: 'group', label: 'STOCK', children: stockChildren });
 
   // Dealer Transaction — genuinely new (Missing Feature Report), same

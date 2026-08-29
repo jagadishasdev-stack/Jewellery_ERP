@@ -49,6 +49,14 @@ export const ornamentsApi = {
   classificationSummary: () => api.get('/reports/stock-classification-summary'),
 };
 
+// ─── Stock Reconciliation (physical count vs system) ──────────────────────────
+export const stockReconciliationApi = {
+  getAll: () => api.get('/stock-reconciliation'),
+  getById: (id) => api.get(`/stock-reconciliation/${id}`),
+  create: (data) => api.post('/stock-reconciliation/create', data),
+  apply: (id) => api.post(`/stock-reconciliation/${id}/apply`),
+};
+
 // ─── Customers ────────────────────────────────────────────────────────────────
 export const customersApi = {
   getAll: (params) => api.get('/customers', { params }),
