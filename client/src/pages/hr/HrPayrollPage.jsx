@@ -126,6 +126,29 @@ function IncentiveSlabsTab() {
   );
 }
 
+// Holiday List — the backend (tbl_holiday_master, hr.js GET/POST /holidays)
+// was fully built earlier but nothing in the client ever called it; the
+// only trace of "Holiday" anywhere was as one dropdown value in the
+// Attendance tab's status picker. This is the actual holiday-calendar
+// management screen — genuinely missing before, per the Transaction Menu
+// spec's Master list.
+function HolidayListTab() {
+  return (
+    <GenericCrudTab
+      queryKey={['holidays']} listFn={hrApi.getHolidays} createFn={hrApi.createHoliday}
+      title="New Holiday" rowKey="Holiday_ID"
+      fields={[
+        { name: 'Holiday_Date', label: 'Date', type: 'date', required: true },
+        { name: 'Holiday_Name', label: 'Holiday Name', required: true },
+      ]}
+      columns={[
+        { title: 'Date', dataIndex: 'Holiday_Date', render: (v) => dayjs(v).format('DD-MMM-YYYY (dddd)') },
+        { title: 'Holiday', dataIndex: 'Holiday_Name' },
+      ]}
+    />
+  );
+}
+
 function PayrollTab() {
   const qc = useQueryClient();
   const [openRun, setOpenRun] = useState(null);
@@ -220,6 +243,7 @@ export default function HrPayrollPage() {
         { key: 'attendance', label: 'Attendance', children: <AttendanceTab /> },
         { key: 'salary', label: 'Salary Structure', children: <SalaryStructureTab /> },
         { key: 'incentive-slabs', label: 'Incentive Slabs', children: <IncentiveSlabsTab /> },
+        { key: 'holidays', label: 'Holiday List', children: <HolidayListTab /> },
         { key: 'payroll', label: 'Payroll', children: <PayrollTab /> },
       ]} />
       </div>

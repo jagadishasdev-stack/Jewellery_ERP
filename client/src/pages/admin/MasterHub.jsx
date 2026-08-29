@@ -22,7 +22,7 @@ import {
 } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  masterApi, masterExtApi, karigarApi, tenantApi, floorsApi,
+  masterApi, masterExtApi, karigarApi, tenantApi, floorsApi, complianceApi, simpleMastersApi,
 } from '../../api/modules';
 import PageTour from '../../components/PageTour';
 import { useMetalTypes } from '../../hooks/useMetalTypes';
@@ -498,26 +498,115 @@ export default function MasterHub() {
               </Card>
             </Col>
             <Col xs={24} lg={10}>
-              <Card title="GST / Tax Rates" size="small" style={{ borderRadius: 8 }}>
-                <Table
-            scroll={{ x: "max-content" }} size="small" pagination={false}
-                  dataSource={[
-                    { item: 'Gold Jewellery', hsn: '7113', rate: '3%', cgst: '1.5%', sgst: '1.5%' },
-                    { item: 'Silver Jewellery', hsn: '7113', rate: '3%', cgst: '1.5%', sgst: '1.5%' },
-                    { item: 'Diamond Jewellery', hsn: '7113', rate: '3%', cgst: '1.5%', sgst: '1.5%' },
-                    { item: 'Gold Coins / Bars', hsn: '7108', rate: '3%', cgst: '1.5%', sgst: '1.5%' },
-                    { item: 'Repair Service', hsn: '9988', rate: '18%', cgst: '9%', sgst: '9%' },
-                    { item: 'Making Charges', hsn: '9988', rate: '5%', cgst: '2.5%', sgst: '2.5%' },
-                  ]}
-                  rowKey="item"
-                  columns={[
-                    { title: 'Item', dataIndex: 'item' },
-                    { title: 'HSN', dataIndex: 'hsn', render: v => <Text code>{v}</Text> },
-                    { title: 'GST', dataIndex: 'rate', render: v => <Tag color="orange">{v}</Tag> },
-                    { title: 'CGST+SGST', dataIndex: 'cgst', render: (v, r) => `${v} + ${r.sgst}` },
+              <Card title="Tax Type / HSN Master" size="small" style={{ borderRadius: 8 }}>
+                {/* Was a hardcoded, non-editable sample table before —
+                    tbl_hsn_master and its GET/POST routes (compliance.js)
+                    already existed and worked, just never reachable from
+                    any master screen. Real CRUD now, not a display-only
+                    reference list. */}
+                <MasterSection
+                  title="HSN / Tax Type" hint="Every item type's HSN Code should match one of these — GST % here drives billing."
+                  queryKey="hsn-master" fetchFn={complianceApi.getHsn} createFn={complianceApi.createHsn}
+                  rowKey="HSN_ID"
+                  fields={[
+                    { name: 'HSN_Code', label: 'HSN Code', required: true, placeholder: '7113' },
+                    { name: 'Description', label: 'Description', placeholder: 'Gold Jewellery' },
+                    { name: 'GST_Percentage', label: 'GST %', type: 'number', default: 3, step: 0.5 },
+                    { name: 'Is_Active', label: 'Active', type: 'boolean', default: true, showInTable: false },
                   ]}
                 />
-                <Alert message="GST rates for jewellery are fixed by GST law. Configure CGST vs IGST in Invoice Studio settings." type="warning" showIcon style={{ marginTop: 8, fontSize: 11 }} />
+                <Alert message="GST rates for jewellery are fixed by GST law — this is a reference master for HSN-wise billing, not a place to invent new rates." type="warning" showIcon style={{ marginTop: 8, fontSize: 11 }} />
+              </Card>
+            </Col>
+          </Row>
+        </TabPane>
+
+        <TabPane tab={<span><SettingOutlined /> Operations Masters</span>} key="operations">
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={12}>
+              <Card title="Repair Category" size="small" style={{ borderRadius: 8 }}>
+                <MasterSection
+                  title="Repair Category" hint="Categorizes repair job cards (Polishing, Sizing, Stone Setting, ...) with an optional default charge."
+                  queryKey="repair-category-master" fetchFn={simpleMastersApi.getRepairCategories}
+                  createFn={simpleMastersApi.createRepairCategory} updateFn={simpleMastersApi.updateRepairCategory}
+                  rowKey="Category_ID"
+                  fields={[
+                    { name: 'Category_Name', label: 'Category Name', required: true, placeholder: 'Stone Setting' },
+                    { name: 'Description', label: 'Description', type: 'textarea', showInTable: false },
+                    { name: 'Default_Charge', label: 'Default Charge (₹)', type: 'number', step: 10 },
+                    { name: 'Is_Active', label: 'Active', type: 'boolean', default: true, showInTable: false },
+                  ]}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="Size / Length Master" size="small" style={{ borderRadius: 8 }}>
+                <MasterSection
+                  title="Size" hint="Standardized sizes for Ring, Chain, Bangle, Bracelet — used for size-wise stock and order entry."
+                  queryKey="size-master" fetchFn={simpleMastersApi.getSizes}
+                  createFn={simpleMastersApi.createSize} updateFn={simpleMastersApi.updateSize}
+                  rowKey="Size_ID"
+                  fields={[
+                    { name: 'Size_Type', label: 'Type', type: 'select', required: true, options: ['Ring', 'Chain', 'Bangle', 'Bracelet'] },
+                    { name: 'Size_Code', label: 'Size Code', required: true, placeholder: '16' },
+                    { name: 'Size_Value_MM', label: 'Value (mm)', type: 'number', step: 0.1 },
+                    { name: 'Description', label: 'Description', showInTable: false },
+                    { name: 'Is_Active', label: 'Active', type: 'boolean', default: true, showInTable: false },
+                  ]}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="Item Weight Range" size="small" style={{ borderRadius: 8 }}>
+                <MasterSection
+                  title="Weight Range" hint="Buckets stock by weight band (e.g. 0–5g, 5–10g) for reports and quick filtering."
+                  queryKey="item-weight-range-master" fetchFn={simpleMastersApi.getItemWeightRanges}
+                  createFn={simpleMastersApi.createItemWeightRange} updateFn={simpleMastersApi.updateItemWeightRange}
+                  rowKey="Range_ID"
+                  fields={[
+                    { name: 'Range_Name', label: 'Range Name', required: true, placeholder: '0-5g' },
+                    { name: 'Weight_From', label: 'From (g)', type: 'number', step: 0.1, required: true },
+                    { name: 'Weight_To', label: 'To (g)', type: 'number', step: 0.1 },
+                    { name: 'Is_Active', label: 'Active', type: 'boolean', default: true, showInTable: false },
+                  ]}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="Cost Centre" size="small" style={{ borderRadius: 8 }}>
+                <MasterSection
+                  title="Cost Centre" hint="Tags expenses/production costs to a branch/department for cost-centre-wise reporting."
+                  queryKey="cost-centre-master" fetchFn={simpleMastersApi.getCostCentres}
+                  createFn={simpleMastersApi.createCostCentre} updateFn={simpleMastersApi.updateCostCentre}
+                  rowKey="Centre_ID"
+                  fields={[
+                    { name: 'Centre_Code', label: 'Code', required: true, placeholder: 'CC-01' },
+                    { name: 'Centre_Name', label: 'Name', required: true, placeholder: 'Workshop Floor' },
+                    { name: 'Description', label: 'Description', type: 'textarea', showInTable: false },
+                    { name: 'Is_Active', label: 'Active', type: 'boolean', default: true, showInTable: false },
+                  ]}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="Purchase Rate Type" size="small" style={{ borderRadius: 8 }}>
+                <MasterSection
+                  title="Purchase Rate Type" hint="Labels the rate basis used on a purchase entry (Market Rate, Fixed Rate, Negotiated, ...)."
+                  queryKey="purchase-rate-type-master" fetchFn={simpleMastersApi.getPurchaseRateTypes}
+                  createFn={simpleMastersApi.createPurchaseRateType} updateFn={simpleMastersApi.updatePurchaseRateType}
+                  rowKey="Type_ID"
+                  fields={[
+                    { name: 'Type_Name', label: 'Type Name', required: true, placeholder: 'Market Rate' },
+                    { name: 'Description', label: 'Description', showInTable: false },
+                    { name: 'Is_Active', label: 'Active', type: 'boolean', default: true, showInTable: false },
+                  ]}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="Design-wise Reorder Level" size="small" style={{ borderRadius: 8 }}>
+                <Alert message="Sets a per-design reorder threshold for this shop — separate from each item's own Min Stock Level. Designs with no override shown here use a default of 5." type="info" showIcon style={{ marginBottom: 8, fontSize: 12 }} />
+                <DesignReorderLevelSection />
               </Card>
             </Col>
           </Row>
@@ -528,6 +617,52 @@ export default function MasterHub() {
 
       <PageTour steps={tourSteps} />
     </div>
+  );
+}
+
+// ── Design-wise Reorder Level (tenant override on the global Design master) ──
+function DesignReorderLevelSection() {
+  const [editing, setEditing] = useState(null); // { Design_ID, Design_Code, Reorder_Level }
+  const [value, setValue] = useState(5);
+  const qc = useQueryClient();
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['design-reorder-level'],
+    queryFn: () => simpleMastersApi.getDesignReorderLevels().then(r => r.data.data),
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: () => simpleMastersApi.updateDesignReorderLevel(editing.Design_ID, { Reorder_Level: value }),
+    onSuccess: () => { message.success('Reorder level updated.'); qc.invalidateQueries(['design-reorder-level']); setEditing(null); },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to update.'),
+  });
+
+  return (
+    <>
+      <Table
+        scroll={{ x: 'max-content' }} size="small" dataSource={data || []} rowKey="Design_ID" loading={isLoading}
+        pagination={{ pageSize: 8, size: 'small' }}
+        columns={[
+          { title: 'Design Code', dataIndex: 'Design_Code' },
+          { title: 'Design Name', dataIndex: 'Design_Name' },
+          { title: 'Reorder Level', dataIndex: 'Reorder_Level', render: (v) => <Tag color="blue">{v}</Tag> },
+          {
+            title: '', width: 40,
+            render: (_, row) => (
+              <Button size="small" type="text" icon={<EditOutlined />}
+                onClick={() => { setEditing(row); setValue(row.Reorder_Level); }} />
+            ),
+          },
+        ]}
+      />
+      <Modal
+        title={`Reorder Level — ${editing?.Design_Code || ''}`}
+        open={!!editing} onCancel={() => setEditing(null)} onOk={() => saveMutation.mutate()}
+        confirmLoading={saveMutation.isPending}
+      >
+        <InputNumber style={{ width: '100%' }} min={0} value={value} onChange={setValue} addonAfter="pieces" />
+      </Modal>
+    </>
   );
 }
 

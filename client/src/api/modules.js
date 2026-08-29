@@ -650,6 +650,27 @@ export const complianceApi = {
   calculateLoyaltyPoints: (params) => api.get('/compliance/loyalty-slabs/calculate', { params }),
 };
 
+// ─── Operations Masters (Repair Category, Size, Item Weight Range, Cost Centre, Purchase Rate Type, Design Reorder Level) ──
+export const simpleMastersApi = {
+  getRepairCategories: () => api.get('/simple-masters/repair-category'),
+  createRepairCategory: (data) => api.post('/simple-masters/repair-category', data),
+  updateRepairCategory: (id, data) => api.put(`/simple-masters/repair-category/${id}`, data),
+  getSizes: () => api.get('/simple-masters/size'),
+  createSize: (data) => api.post('/simple-masters/size', data),
+  updateSize: (id, data) => api.put(`/simple-masters/size/${id}`, data),
+  getItemWeightRanges: () => api.get('/simple-masters/item-weight-range'),
+  createItemWeightRange: (data) => api.post('/simple-masters/item-weight-range', data),
+  updateItemWeightRange: (id, data) => api.put(`/simple-masters/item-weight-range/${id}`, data),
+  getCostCentres: () => api.get('/simple-masters/cost-centre'),
+  createCostCentre: (data) => api.post('/simple-masters/cost-centre', data),
+  updateCostCentre: (id, data) => api.put(`/simple-masters/cost-centre/${id}`, data),
+  getPurchaseRateTypes: () => api.get('/simple-masters/purchase-rate-type'),
+  createPurchaseRateType: (data) => api.post('/simple-masters/purchase-rate-type', data),
+  updatePurchaseRateType: (id, data) => api.put(`/simple-masters/purchase-rate-type/${id}`, data),
+  getDesignReorderLevels: () => api.get('/simple-masters/design-reorder-level'),
+  updateDesignReorderLevel: (designId, data) => api.put(`/simple-masters/design-reorder-level/${designId}`, data),
+};
+
 // ─── Manufacturing / BOM ──────────────────────────────────────────────────────────
 export const manufacturingApi = {
   getDepartments: () => api.get('/manufacturing/departments'),
