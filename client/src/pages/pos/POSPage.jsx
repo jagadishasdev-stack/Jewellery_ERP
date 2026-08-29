@@ -22,7 +22,7 @@ import {
   ShopOutlined, PlusOutlined, MinusCircleOutlined,
   CheckCircleFilled, ExclamationCircleOutlined, TagOutlined,
   WalletOutlined, BankOutlined, PictureOutlined, HistoryOutlined,
-  EyeOutlined, FileSearchOutlined,
+  EyeOutlined, FileSearchOutlined, FileImageOutlined,
 } from '@ant-design/icons';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -35,8 +35,9 @@ import { useSocket } from '../../hooks/useSocket';
 import { useGoldRate } from '../../hooks/useGoldRate';
 import { formatCurrency, formatWeight, calculateOldGoldExchange } from '../../utils/calculations';
 import CustomerSearchModal from './CustomerSearchModal';
-import { printThermalReceipt } from '../../utils/thermalReceipt';
+import { printThermalReceipt, buildSalesBillStudioData } from '../../utils/thermalReceipt';
 import PrinterOverrideButton from '../../components/PrinterOverrideButton';
+import InvoicePreviewModal from '../../components/InvoicePreviewModal';
 import SalesBillDetail from '../reports/SalesBillDetail';
 import PageTour from '../../components/PageTour';
 import EmptyState from '../../components/states/EmptyState';
@@ -115,6 +116,33 @@ export default function POSPage() {
     } finally {
       setReprintingId(null);
     }
+  };
+
+  // Preview before printing — shows the actual designed invoice (real
+  // saved colors/layout, real bill data) rather than sending straight to a
+  // printer blind. Deliberately NOT inserted into the auto-print that
+  // fires right after completing a sale (see createSaleMutation below) —
+  // that's intentionally fire-and-forget so checkout never waits on
+  // printing; this is an explicit, opt-in "Preview" action next to Reprint
+  // instead, for a bill the admin wants to check first.
+  const [previewState, setPreviewState] = useState({ open: false, saleId: null, docNumber: null, data: null });
+  const openPreview = async (saleId) => {
+    try {
+      const res = await salesApi.getById(saleId);
+      const { sale, items: saleItems } = res.data.data;
+      setPreviewState({
+        open: true, saleId,
+        docNumber: sale.Invoice_Number,
+        data: buildSalesBillStudioData(sale, saleItems, { Company_Name: user?.companyName, GST_No: user?.gstNo }),
+      });
+    } catch {
+      message.error('Failed to load this bill for preview.');
+    }
+  };
+  const closePreview = () => setPreviewState({ open: false, saleId: null, docNumber: null, data: null });
+  const printFromPreview = async () => {
+    await reprintBill(previewState.saleId);
+    closePreview();
   };
 
   // ── View a bill's full details — either by clicking a Recent Bill row,
@@ -1153,6 +1181,9 @@ export default function POSPage() {
                 <Tooltip key="view" title="View full bill details">
                   <Button type="text" size="small" icon={<EyeOutlined />} onClick={(e) => { e.stopPropagation(); setViewBillId(bill.Sale_ID); }} />
                 </Tooltip>,
+                <Tooltip key="preview" title="Preview the designed invoice before printing">
+                  <Button type="text" size="small" icon={<FileImageOutlined />} onClick={(e) => { e.stopPropagation(); openPreview(bill.Sale_ID); }} />
+                </Tooltip>,
                 <span key="reprint" onClick={(e) => e.stopPropagation()}>
                   <PrinterOverrideButton
                     loading={reprintingId === bill.Sale_ID}
@@ -1183,13 +1214,26 @@ export default function POSPage() {
         placement="right" width={screens.lg ? 880 : '100%'}
         open={!!viewBillId} onClose={() => setViewBillId(null)} loading={viewBillDetailLoading}
         extra={viewBillDetail && (
-          <PrinterOverrideButton label="Reprint" size="middle"
-            loading={reprintingId === viewBillDetail.sale.Sale_ID}
-            onPrint={(printerName) => reprintBill(viewBillDetail.sale.Sale_ID, printerName)} />
+          <Space>
+            <Button icon={<FileImageOutlined />} onClick={() => openPreview(viewBillDetail.sale.Sale_ID)}>Preview</Button>
+            <PrinterOverrideButton label="Reprint" size="middle"
+              loading={reprintingId === viewBillDetail.sale.Sale_ID}
+              onPrint={(printerName) => reprintBill(viewBillDetail.sale.Sale_ID, printerName)} />
+          </Space>
         )}
       >
         {viewBillDetail && <SalesBillDetail detail={viewBillDetail} statusColor={BILL_STATUS_COLOR} />}
       </Drawer>
+
+      <InvoicePreviewModal
+        open={previewState.open}
+        onClose={closePreview}
+        docType="SALES_BILL"
+        data={previewState.data}
+        docNumber={previewState.docNumber}
+        printing={reprintingId === previewState.saleId}
+        onConfirmPrint={printFromPreview}
+      />
 
       <PageTour steps={tourSteps} />
     </div>

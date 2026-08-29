@@ -75,26 +75,35 @@ export const printFromInvoiceStudio = async (docType, data, docNumber, printerNa
  * await this and show a distinct "saved, but printing failed" message
  * rather than assuming print always succeeds.
  */
+/**
+ * The exact data shape printThermalReceipt hands to the Invoice Studio
+ * SALES_BILL template — pulled out on its own so a "Preview" step (see
+ * InvoicePreviewModal.jsx) can render the SAME data the real print uses,
+ * rather than a second, hand-maintained copy of this mapping that could
+ * silently drift from what actually prints.
+ */
+export const buildSalesBillStudioData = (sale, items, tenant) => ({
+  shop_name: tenant?.Company_Name, shop_address: tenant?.Address, shop_city: tenant?.City,
+  shop_phone: tenant?.Phone, shop_gst: tenant?.GST_No,
+  invoice_no: sale.Invoice_Number, invoice_date: dayjs(sale.Sale_Date).format('DD-MMM-YYYY HH:mm'),
+  invoice_type: sale.Sale_Type, counter_name: sale.Counter_Name,
+  customer_name: sale.Customer_Name || 'Walk-in', customer_mobile: sale.Customer_Mobile,
+  items: items.map((item) => ({
+    item_name: item.Item_Type_Name || 'Item', purity: item.Purity_Code,
+    gross_weight: item.Gross_Weight, net_weight: item.Net_Gold_Weight || item.Gross_Weight,
+    rate: item.Gold_Rate_Per_Gram, making_charge: item.Making_Charge_Applied,
+    gst_amount: item.GST_Amount, huid: item.HUID_Number, hsn: item.HSN_Code, amount: item.Total_Line_Price,
+  })),
+  subtotal: sale.Subtotal_Amount, discount: sale.Discount_Amount, gst_amt: sale.GST_Amount,
+  cgst_amt: sale.CGST_Amount, sgst_amt: sale.SGST_Amount, igst_amt: sale.IGST_Amount,
+  old_gold_value: sale.Old_Gold_Exchange_Amount, scheme_adj: sale.Scheme_Adjustment_Amount,
+  voucher_amt: sale.Voucher_Amount, round_off: sale.Round_Off_Amount, net_payable: sale.Net_Payable_Amount,
+  payment_mode: sale.Payment_Mode, payment_ref: sale.Payment_Reference,
+  amount_paid: sale.Amount_Paid, balance: sale.Balance_Amount,
+});
+
 export const printThermalReceipt = async (sale, items, tenant, printerNameOverride) => {
-  const studioData = {
-    shop_name: tenant?.Company_Name, shop_address: tenant?.Address, shop_city: tenant?.City,
-    shop_phone: tenant?.Phone, shop_gst: tenant?.GST_No,
-    invoice_no: sale.Invoice_Number, invoice_date: dayjs(sale.Sale_Date).format('DD-MMM-YYYY HH:mm'),
-    invoice_type: sale.Sale_Type, counter_name: sale.Counter_Name,
-    customer_name: sale.Customer_Name || 'Walk-in', customer_mobile: sale.Customer_Mobile,
-    items: items.map((item) => ({
-      item_name: item.Item_Type_Name || 'Item', purity: item.Purity_Code,
-      gross_weight: item.Gross_Weight, net_weight: item.Net_Gold_Weight || item.Gross_Weight,
-      rate: item.Gold_Rate_Per_Gram, making_charge: item.Making_Charge_Applied,
-      gst_amount: item.GST_Amount, huid: item.HUID_Number, hsn: item.HSN_Code, amount: item.Total_Line_Price,
-    })),
-    subtotal: sale.Subtotal_Amount, discount: sale.Discount_Amount, gst_amt: sale.GST_Amount,
-    cgst_amt: sale.CGST_Amount, sgst_amt: sale.SGST_Amount, igst_amt: sale.IGST_Amount,
-    old_gold_value: sale.Old_Gold_Exchange_Amount, scheme_adj: sale.Scheme_Adjustment_Amount,
-    voucher_amt: sale.Voucher_Amount, round_off: sale.Round_Off_Amount, net_payable: sale.Net_Payable_Amount,
-    payment_mode: sale.Payment_Mode, payment_ref: sale.Payment_Reference,
-    amount_paid: sale.Amount_Paid, balance: sale.Balance_Amount,
-  };
+  const studioData = buildSalesBillStudioData(sale, items, tenant);
   const studioAttempt = await printFromInvoiceStudio('SALES_BILL', studioData, sale.Invoice_Number, printerNameOverride);
   if (studioAttempt.printed) return studioAttempt.result;
 
