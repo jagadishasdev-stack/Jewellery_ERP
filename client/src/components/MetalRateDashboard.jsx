@@ -205,7 +205,7 @@ function MetalCard({ metal, onEdit, canEdit }) {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 export default function MetalRateDashboard() {
-  const { rates, loading, refetch, updatedAt } = useGoldRate();
+  const { rates, loading, refetch, updatedAt, isBranchSpecific } = useGoldRate();
   const [modalOpen, setModalOpen] = useState(false);
   const [form] = Form.useForm();
   const { user } = useAuthStore();
@@ -359,6 +359,11 @@ export default function MetalRateDashboard() {
               {updatedAt
                 ? `Last updated ${dayjs(updatedAt).format('hh:mm A')} · ${dayjs(updatedAt).fromNow()}`
                 : 'Loading latest rates...'}
+              {updatedAt && (
+                <span style={{ marginLeft: 8, color: isBranchSpecific ? '#B8860B' : '#888', fontWeight: 600 }}>
+                  {isBranchSpecific ? '· This branch\'s own rate' : '· Tenant-wide default'}
+                </span>
+              )}
             </Text>
           </div>
 

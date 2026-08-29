@@ -11,17 +11,25 @@ const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
 
-let tenant, token;
-const auth = () => ({ Authorization: `Bearer ${token}` });
+let tenant, token, branchA, branchB;
+const auth = (branchId) => ({ Authorization: `Bearer ${token}`, ...(branchId ? { 'X-Branch-ID': branchId } : {}) });
 
 beforeAll(async () => {
   tenant = await testTenant.setup();
   const res = await request(app).post('/api/auth/login').send({ username: tenant.username, password: tenant.password, tenantId: tenant.tenantId });
   token = res.body.data.token;
+
+  branchA = `${tenant.tenantId}_GRA`;
+  branchB = `${tenant.tenantId}_GRB`;
+  await db('tbl_branch_master').insert([
+    { Branch_ID: branchA, Tenant_ID: tenant.tenantId, Branch_Name: 'QA Gold Rate Branch A', Branch_Code: 'GRA', Is_Active: true },
+    { Branch_ID: branchB, Tenant_ID: tenant.tenantId, Branch_Name: 'QA Gold Rate Branch B', Branch_Code: 'GRB', Is_Active: true },
+  ]);
 });
 
 afterAll(async () => {
   await db('tbl_tenant_rates').where({ Tenant_ID: tenant.tenantId }).del();
+  await db('tbl_branch_master').whereIn('Branch_ID', [branchA, branchB]).del();
   await testTenant.teardown();
   await db.destroy();
 });
@@ -149,4 +157,45 @@ test('Super Admin\'s /all-tenants includes today\'s rate for this tenant', async
   } finally {
     await db('tbl_user_master').where({ Username: SA_USERNAME }).del();
   }
+});
+
+describe('Branch-level rates', () => {
+  test('setting a rate with a branch selected does not touch the tenant-wide default', async () => {
+    await request(app).post('/api/gold-rate/set').set(auth()).send({ rate_22k: 6000 }); // tenant-wide default
+    const setBranchA = await request(app).post('/api/gold-rate/set').set(auth(branchA)).send({ rate_22k: 6600 });
+    expect(setBranchA.status).toBe(200);
+    expect(setBranchA.body.data.Branch_ID).toBe(branchA);
+
+    const defaultAfter = await request(app).get('/api/gold-rate/live').set(auth()).send();
+    expect(parseFloat(defaultAfter.body.data.rate_22k)).toBe(6000); // untouched by branch A's rate
+    expect(defaultAfter.body.data.is_branch_specific).toBe(false);
+  });
+
+  test('GET /live with a branch selected returns that branch\'s own rate, not the tenant default', async () => {
+    const res = await request(app).get('/api/gold-rate/live').set(auth(branchA)).send();
+    expect(res.status).toBe(200);
+    expect(parseFloat(res.body.data.rate_22k)).toBe(6600);
+    expect(res.body.data.is_branch_specific).toBe(true);
+    expect(res.body.data.branch_id).toBe(branchA);
+  });
+
+  test('a branch with no rate of its own falls back to the tenant-wide default, not branch A\'s rate', async () => {
+    const res = await request(app).get('/api/gold-rate/live').set(auth(branchB)).send();
+    expect(res.status).toBe(200);
+    expect(parseFloat(res.body.data.rate_22k)).toBe(6000); // the tenant default, not 6600
+    expect(res.body.data.is_branch_specific).toBe(false);
+  });
+
+  test('the "ALL" branch sentinel is never mistaken for a real branch id', async () => {
+    const res = await request(app).get('/api/gold-rate/live').set(auth('ALL')).send();
+    expect(res.status).toBe(200);
+    expect(parseFloat(res.body.data.rate_22k)).toBe(6000); // tenant default, not a query for Branch_ID='ALL'
+    expect(res.body.data.is_branch_specific).toBe(false);
+  });
+
+  test('a second /set call for the same branch on the same day updates in place, not a duplicate row', async () => {
+    await request(app).post('/api/gold-rate/set').set(auth(branchA)).send({ rate_22k: 6700 });
+    const count = await db('tbl_tenant_rates').where({ Tenant_ID: tenant.tenantId, Branch_ID: branchA }).count('Rate_ID as c').first();
+    expect(parseInt(count.c)).toBe(1);
+  });
 });

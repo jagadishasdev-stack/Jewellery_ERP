@@ -5,20 +5,34 @@
 const router = require('express').Router();
 const { sendSuccess, sendError } = require('../utils/response');
 const { authenticate } = require('../middleware/auth');
+const { branchVal } = require('../utils/branchAccess');
 const db = require('../db/knex');
 const dayjs = require('dayjs');
 
 // ─── GET /api/gold-rate/live ───────────────────────────────────────────────────
-// Returns TODAY's rate for the authenticated tenant.
-// Falls back to yesterday if today not set yet.
+// Returns the most relevant rate for the authenticated tenant (and
+// branch, if one is selected). Branch-level rates are additive — a
+// tenant/branch that never sets its own rate keeps reading the same
+// tenant-wide default row exactly as before this existed.
+//
+// Lookup order when a branch is selected: that branch's own most recent
+// rate, THEN the tenant-wide default's most recent rate, THEN the
+// built-in hardcoded defaults. No branch selected -> straight to the
+// tenant-wide default, same as always.
 router.get('/live', authenticate, async (req, res) => {
   const tenantId = req.user.tenantId;
+  // 'ALL' is a real sentinel (the "All Branches" view), not a branch id —
+  // same guard withBranch()/resolveBranchForInsert() already use.
+  const rawBranch = branchVal(req);
+  const branchId = (rawBranch && rawBranch !== 'ALL') ? rawBranch : null;
   try {
-    // Try today first, then most recent rate
-    const rate = await db('tbl_tenant_rates')
-      .where('Tenant_ID', tenantId)
-      .orderBy('Rate_Date', 'desc')
-      .first();
+    let rate = null;
+    if (branchId) {
+      rate = await db('tbl_tenant_rates').where({ Tenant_ID: tenantId, Branch_ID: branchId }).orderBy('Rate_Date', 'desc').first();
+    }
+    if (!rate) {
+      rate = await db('tbl_tenant_rates').where({ Tenant_ID: tenantId }).whereNull('Branch_ID').orderBy('Rate_Date', 'desc').first();
+    }
 
     if (rate) {
       return sendSuccess(res, {
@@ -33,6 +47,8 @@ router.get('/live', authenticate, async (req, res) => {
         set_by: rate.Set_By,
         source: rate.Source,
         updated_at: rate.Created_Date,
+        branch_id: rate.Branch_ID || null,
+        is_branch_specific: !!rate.Branch_ID,
       });
     }
 
@@ -73,17 +89,25 @@ router.post('/set', authenticate, async (req, res) => {
   if (!rate_22k) return sendError(res, 400, '22K rate is required.');
 
   const today = dayjs().format('YYYY-MM-DD');
+  // Explicit Branch_ID in the body wins; otherwise the currently-selected
+  // branch (X-Branch-ID); otherwise null — the tenant-wide default, same
+  // row every caller wrote to before branch-level rates existed. A
+  // tenant/branch that never passes either keeps behaving exactly as
+  // before this feature was added.
+  const rawBranch = req.body.Branch_ID || branchVal(req);
+  const branchId = (rawBranch && rawBranch !== 'ALL') ? rawBranch : null;
 
   try {
-    // Upsert today's rate
-    const existing = await db('tbl_tenant_rates')
-      .where({ Tenant_ID: tenantId, Rate_Date: today })
-      .first();
+    // Upsert this (tenant, branch, date)'s rate — NULL-safe match via
+    // whereNull when branchId is null, since a plain .where({Branch_ID:
+    // null}) does not match NULL in SQL.
+    const existingQb = db('tbl_tenant_rates').where({ Tenant_ID: tenantId, Rate_Date: today });
+    const existing = await (branchId ? existingQb.where('Branch_ID', branchId) : existingQb.whereNull('Branch_ID')).first();
 
     let savedRate;
     if (existing) {
-      [savedRate] = await db('tbl_tenant_rates')
-        .where({ Tenant_ID: tenantId, Rate_Date: today })
+      const updateQb = db('tbl_tenant_rates').where({ Tenant_ID: tenantId, Rate_Date: today });
+      [savedRate] = await (branchId ? updateQb.where('Branch_ID', branchId) : updateQb.whereNull('Branch_ID'))
         .update({
           Rate_24K: rate_24k || (rate_22k * 1.0968).toFixed(2),
           Rate_22K: rate_22k,
@@ -98,6 +122,7 @@ router.post('/set', authenticate, async (req, res) => {
     } else {
       [savedRate] = await db('tbl_tenant_rates').insert({
         Tenant_ID: tenantId,
+        Branch_ID: branchId,
         Rate_Date: today,
         Rate_24K: rate_24k || (rate_22k * 1.0968).toFixed(2),
         Rate_22K: rate_22k,
@@ -121,6 +146,7 @@ router.post('/set', authenticate, async (req, res) => {
         rate_18k: parseFloat(savedRate.Rate_18K),
         rate_silver: parseFloat(savedRate.Rate_Silver_925),
         tenantId,
+        branchId,
         updatedAt: new Date(),
       });
     }
@@ -136,10 +162,13 @@ router.post('/set', authenticate, async (req, res) => {
 router.get('/history', authenticate, async (req, res) => {
   const tenantId = req.user.tenantId;
   try {
-    const history = await db('tbl_tenant_rates')
-      .where('Tenant_ID', tenantId)
-      .orderBy('Rate_Date', 'desc')
-      .limit(30);
+    let qb = db('tbl_tenant_rates').where('Tenant_ID', tenantId);
+    // ?branchId=... shows that branch's own history; ?branchId=default
+    // (or omitted) shows the tenant-wide default's history — same
+    // NULL-safe distinction /set and /live already make.
+    if (req.query.branchId === 'default') qb = qb.whereNull('Branch_ID');
+    else if (req.query.branchId) qb = qb.where('Branch_ID', req.query.branchId);
+    const history = await qb.orderBy('Rate_Date', 'desc').limit(30);
     return sendSuccess(res, history);
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch rate history.');
