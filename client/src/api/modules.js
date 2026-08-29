@@ -28,6 +28,7 @@ export const masterApi = {
   createGemstone: (data) => api.post('/master/gemstones', data),
   getPurities: () => api.get('/master/purities'),
   createPurity: (data) => api.post('/master/purities', data),
+  updatePurity: (id, data) => api.put(`/master/purities/${id}`, data),
 };
 
 // ─── Ornaments / Inventory ────────────────────────────────────────────────────

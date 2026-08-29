@@ -177,6 +177,41 @@ describe('Purities', () => {
     expect(res.body.data.every(p => p.Metal_Type === 'Silver')).toBe(true);
     expect(res.body.data.some(p => p.Purity_Code === `${QA}-P3`)).toBe(true);
   });
+
+  /**
+   * FIXED (client-side, this pass): PUT /purities/:id didn't exist at all
+   * — the client hardcoded a fake "Contact Super Admin to add custom
+   * purities" message and blocked create/edit entirely, even though this
+   * endpoint requires nothing more than any authenticated tenant user, same
+   * as every other master route in this file. Added the missing route.
+   */
+  test('FIXED: PUT /purities/:id updates an existing purity (route did not exist before)', async () => {
+    const created = await request(app).post('/api/master/purities').set(auth())
+      .send({ Purity_Code: `${QA}-P4`, Karat: 14, Percentage: 58.5 });
+    expect(created.status).toBe(201);
+
+    const res = await request(app).put(`/api/master/purities/${created.body.data.Purity_ID}`).set(auth())
+      .send({ Percentage: 59.0, Hallmark_Standard: 'BIS 585' });
+    expect(res.status).toBe(200);
+    expect(Number(res.body.data.Percentage)).toBe(59.0);
+    expect(res.body.data.Hallmark_Standard).toBe('BIS 585');
+    expect(res.body.data.Purity_Code).toBe(`${QA}-P4`); // untouched by the partial update
+    expect(res.body.data.Modified_Date).toBeTruthy();
+  });
+
+  test('PUT /purities/:id validates Percentage/Metal_Type the same as create', async () => {
+    const created = await request(app).post('/api/master/purities').set(auth())
+      .send({ Purity_Code: `${QA}-P5`, Karat: 22, Percentage: 91.6 });
+
+    const res = await request(app).put(`/api/master/purities/${created.body.data.Purity_ID}`).set(auth())
+      .send({ Percentage: 150 });
+    expect(res.status).toBe(422);
+  });
+
+  test('PUT /purities/:id 404s for a nonexistent purity', async () => {
+    const res = await request(app).put('/api/master/purities/9999999').set(auth()).send({ Percentage: 50 });
+    expect(res.status).toBe(404);
+  });
 });
 
 // ── Collections / Sub-Categories / Brands / Making Charges (tenant-scoped) ──

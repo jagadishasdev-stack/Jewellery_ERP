@@ -319,10 +319,12 @@ export default function MasterHub() {
                   hint="24K, 22K, 18K — each purity has a rate multiplier for billing"
                   queryKey="purities"
                   fetchFn={masterApi.getPurities}
-                  createFn={() => message.info('Contact Super Admin to add custom purities') && Promise.reject()}
+                  createFn={masterApi.createPurity}
+                  updateFn={masterApi.updatePurity}
                   rowKey="Purity_ID"
                   fields={[
                     { name: 'Purity_Code', label: 'Code', required: true, placeholder: '22K' },
+                    { name: 'Metal_Type', label: 'Metal Type', type: 'select', options: ['Gold', 'Silver', 'Platinum'] },
                     { name: 'Karat', label: 'Karat', required: true, type: 'number' },
                     { name: 'Percentage', label: 'Purity %', required: true, type: 'number', step: 0.01 },
                     { name: 'Hallmark_Standard', label: 'Hallmark', placeholder: 'BIS 916' },

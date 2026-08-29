@@ -190,6 +190,32 @@ router.post('/purities', authenticate, [
   }
 });
 
+// Edit (or deactivate via Is_Active: false) an existing purity — was
+// entirely missing, forcing the client to hardcode a fake "Contact Super
+// Admin" message and block create/edit altogether even though this
+// endpoint requires nothing more than any authenticated tenant user, same
+// as every other master here.
+router.put('/purities/:id', authenticate, [
+  body('Karat').optional().isFloat({ min: 1 }),
+  body('Percentage').optional().isFloat({ min: 1, max: 100 }),
+  body('Metal_Type').optional().isIn(METAL_TYPES_WITH_PURITY),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const [updated] = await db('tbl_purity_master')
+      .where({ Purity_ID: req.params.id })
+      .update({ ...req.body, Modified_Date: new Date() })
+      .returning('*');
+    if (!updated) return sendError(res, 404, 'Purity not found.');
+    return sendSuccess(res, updated, 'Purity updated.');
+  } catch (err) {
+    if (err.code === '23505') return sendError(res, 409, 'Purity code already exists.');
+    console.error('Purity update error:', err.message);
+    return sendError(res, 500, 'Failed to update purity.');
+  }
+});
+
 // ─── Collections ──────────────────────────────────────────────────────────────
 router.get('/collections', authenticate, async (req, res) => {
   try {
