@@ -70,22 +70,38 @@ export default function ClosingReportPage() {
   const tourSteps = [
     { title: '1. Metal & Date Range', description: 'Pick a metal (or "All Metals") and the date range to reconcile — the report shows every item type\'s stock movement for that window.', target: () => filtersRef.current },
     { title: '2. Summary', description: 'Quick totals across every item type — opening/closing weight & pieces, and total tags on file.', target: () => summaryRef.current },
-    { title: '3. Item Type Grid', description: 'One row per item type: Opening Stock → Additions → Sales → Approval Issue/Receive → Closing Stock, plus how many tags/barcodes exist for it. Closing Stock is calculated automatically — it isn\'t entered anywhere, it\'s Opening + Add + Approval Receive − Sold − Approval Issue.', target: () => tableRef.current },
+    { title: '3. Item Type Grid', description: 'One row per item type: Opening Stock, Additions, Sales Returns, Approval/Workshop/Interbranch Receipts, then Sales, Approval/Workshop/Interbranch Issues, then Closing Stock — plus how many tags/barcodes exist for it. Closing Stock is calculated automatically from all of those, never entered directly. Melt Consumption shows separately below the grid, since a melt has no single item type to attribute it to.', target: () => tableRef.current },
     { title: '4. Export', description: 'Excel Export downloads a CSV (opens directly in Excel). Download PDF generates a formatted printable file. Print opens your browser\'s print dialog.', target: () => exportRef.current },
   ];
 
+  // Extended from 5 components to the full 12 the Transaction Menu spec
+  // names (Sales Return, Workshop Receipt/Issue, Interbranch Receipt/
+  // Issue) — Purchase Return is deliberately absent (no such workflow
+  // exists anywhere in this codebase yet); Melt Consumption is shown as
+  // its own summary figure below, not a column here, since a melt has no
+  // item-type to attribute it to.
   const columns = [
-    { title: 'Item Type', dataIndex: 'itemType', fixed: 'left', width: 130, render: (v) => <Text strong>{v}</Text> },
+    { title: 'Item Type', dataIndex: 'itemType', fixed: 'left', width: 150, render: (v) => <Text strong>{v}</Text> },
     { title: 'Opening Wt', dataIndex: 'openingWeight', width: 100, render: formatWeight },
     { title: 'Opening Pcs', dataIndex: 'openingPieces', width: 100 },
     { title: 'Add Pcs', dataIndex: 'addPieces', width: 90 },
     { title: 'Add Wt', dataIndex: 'addWeight', width: 90, render: formatWeight },
+    { title: 'Sales Return Pcs', dataIndex: 'salesReturnPieces', width: 120 },
+    { title: 'Sales Return Wt', dataIndex: 'salesReturnWeight', width: 120, render: formatWeight },
     { title: 'Sold Pcs', dataIndex: 'soldPieces', width: 90 },
     { title: 'Sold Wt', dataIndex: 'soldWeight', width: 90, render: formatWeight },
     { title: 'Appr. Issue Pcs', dataIndex: 'approvalIssuePieces', width: 110 },
     { title: 'Appr. Issue Wt', dataIndex: 'approvalIssueWeight', width: 110, render: formatWeight },
     { title: 'Appr. Receive Pcs', dataIndex: 'approvalReceivePieces', width: 120 },
     { title: 'Appr. Receive Wt', dataIndex: 'approvalReceiveWeight', width: 120, render: formatWeight },
+    { title: 'Workshop Issue Pcs', dataIndex: 'workshopIssuePieces', width: 130 },
+    { title: 'Workshop Issue Wt', dataIndex: 'workshopIssueWeight', width: 130, render: formatWeight },
+    { title: 'Workshop Receive Pcs', dataIndex: 'workshopReceivePieces', width: 140 },
+    { title: 'Workshop Receive Wt', dataIndex: 'workshopReceiveWeight', width: 140, render: formatWeight },
+    { title: 'Interbranch Issue Pcs', dataIndex: 'interbranchIssuePieces', width: 140 },
+    { title: 'Interbranch Issue Wt', dataIndex: 'interbranchIssueWeight', width: 140, render: formatWeight },
+    { title: 'Interbranch Receive Pcs', dataIndex: 'interbranchReceivePieces', width: 150 },
+    { title: 'Interbranch Receive Wt', dataIndex: 'interbranchReceiveWeight', width: 150, render: formatWeight },
     { title: 'Closing Wt', dataIndex: 'closingWeight', width: 100, render: (v) => <Text strong style={{ color: '#B8860B' }}>{formatWeight(v)}</Text> },
     { title: 'Closing Pcs', dataIndex: 'closingPieces', width: 100, render: (v) => <Text strong style={{ color: '#B8860B' }}>{v}</Text> },
     { title: 'Tags', dataIndex: 'tags', width: 80, fixed: 'right' },
@@ -169,20 +185,42 @@ export default function ClosingReportPage() {
                 <Table.Summary.Cell index={2}><Text strong>{totals.openingPieces || 0}</Text></Table.Summary.Cell>
                 <Table.Summary.Cell index={3}><Text strong>{totals.addPieces || 0}</Text></Table.Summary.Cell>
                 <Table.Summary.Cell index={4}><Text strong>{formatWeight(totals.addWeight)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={5}><Text strong>{totals.soldPieces || 0}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={6}><Text strong>{formatWeight(totals.soldWeight)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={7}><Text strong>{totals.approvalIssuePieces || 0}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={8}><Text strong>{formatWeight(totals.approvalIssueWeight)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={9}><Text strong>{totals.approvalReceivePieces || 0}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={10}><Text strong>{formatWeight(totals.approvalReceiveWeight)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={11}><Text strong style={{ color: '#B8860B' }}>{formatWeight(totals.closingWeight)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={12}><Text strong style={{ color: '#B8860B' }}>{totals.closingPieces || 0}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={13}><Text strong>{totals.tags || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={5}><Text strong>{totals.salesReturnPieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={6}><Text strong>{formatWeight(totals.salesReturnWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={7}><Text strong>{totals.soldPieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={8}><Text strong>{formatWeight(totals.soldWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={9}><Text strong>{totals.approvalIssuePieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={10}><Text strong>{formatWeight(totals.approvalIssueWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={11}><Text strong>{totals.approvalReceivePieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={12}><Text strong>{formatWeight(totals.approvalReceiveWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={13}><Text strong>{totals.workshopIssuePieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={14}><Text strong>{formatWeight(totals.workshopIssueWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={15}><Text strong>{totals.workshopReceivePieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={16}><Text strong>{formatWeight(totals.workshopReceiveWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={17}><Text strong>{totals.interbranchIssuePieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={18}><Text strong>{formatWeight(totals.interbranchIssueWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={19}><Text strong>{totals.interbranchReceivePieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={20}><Text strong>{formatWeight(totals.interbranchReceiveWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={21}><Text strong style={{ color: '#B8860B' }}>{formatWeight(totals.closingWeight)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={22}><Text strong style={{ color: '#B8860B' }}>{totals.closingPieces || 0}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell index={23}><Text strong>{totals.tags || 0}</Text></Table.Summary.Cell>
               </Table.Summary.Row>
             )}
           />
         </div>
       </Card>
+
+      {/* Melt Consumption — a separate tenant-wide figure, not a column in
+          the grid above: a melt has no item-type to attribute it to
+          (tbl_melting_refining_log carries no ornament/item-type reference). */}
+      {data?.meltConsumption && (data.meltConsumption.pieces > 0 || data.meltConsumption.weight > 0) && (
+        <Card className="erp-card" style={{ marginTop: 12 }} bodyStyle={{ padding: '12px 16px' }}>
+          <Space size={24}>
+            <Statistic title="Melt Consumption (all metals, this period)" value={formatWeight(data.meltConsumption.weight)} valueStyle={{ color: '#B8860B', fontSize: 18 }} />
+            <Statistic title="Melt Entries" value={data.meltConsumption.pieces} valueStyle={{ fontSize: 18 }} />
+          </Space>
+        </Card>
+      )}
 
       <PageTour steps={tourSteps} />
     </div>

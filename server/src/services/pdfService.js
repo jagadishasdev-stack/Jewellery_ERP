@@ -299,13 +299,21 @@ const buildClosingReportHTML = (tenant, report) => {
   const fmtWt = (v) => parseFloat(v || 0).toFixed(3) + 'g';
   const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN');
 
+  // Extended from 5 components to the full 12 the Transaction Menu spec
+  // names — see closingReportService.js's own comment for exactly which
+  // 12, and why Purchase Return isn't among them.
   const cols = [
     ['itemType', 'Item Type'], ['metal', 'Metal'],
     ['openingWeight', 'Opening Wt'], ['openingPieces', 'Opening Pcs'],
     ['addWeight', 'Add Wt'], ['addPieces', 'Add Pcs'],
+    ['salesReturnWeight', 'Sales Return Wt'], ['salesReturnPieces', 'Sales Return Pcs'],
     ['soldWeight', 'Sold Wt'], ['soldPieces', 'Sold Pcs'],
     ['approvalIssueWeight', 'Appr. Issue Wt'], ['approvalIssuePieces', 'Appr. Issue Pcs'],
     ['approvalReceiveWeight', 'Appr. Receive Wt'], ['approvalReceivePieces', 'Appr. Receive Pcs'],
+    ['workshopIssueWeight', 'Workshop Issue Wt'], ['workshopIssuePieces', 'Workshop Issue Pcs'],
+    ['workshopReceiveWeight', 'Workshop Receive Wt'], ['workshopReceivePieces', 'Workshop Receive Pcs'],
+    ['interbranchIssueWeight', 'Interbranch Issue Wt'], ['interbranchIssuePieces', 'Interbranch Issue Pcs'],
+    ['interbranchReceiveWeight', 'Interbranch Receive Wt'], ['interbranchReceivePieces', 'Interbranch Receive Pcs'],
     ['closingWeight', 'Closing Wt'], ['closingPieces', 'Closing Pcs'],
     ['tags', 'Tags'],
   ];
@@ -343,6 +351,11 @@ const buildClosingReportHTML = (tenant, report) => {
       ${totalRowHtml()}
     </tbody>
   </table>
+  ${report.meltConsumption && (report.meltConsumption.pieces > 0 || report.meltConsumption.weight > 0) ? `
+  <div class="meta" style="margin-top:12px;">
+    Melt Consumption (all metals, this period): ${fmtWt(report.meltConsumption.weight)} across ${report.meltConsumption.pieces} entr${report.meltConsumption.pieces === 1 ? 'y' : 'ies'}
+    — a melt has no single item type to attribute it to, so it isn't a column in the grid above.
+  </div>` : ''}
 </body></html>`;
 };
 

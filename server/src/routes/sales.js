@@ -1014,6 +1014,7 @@ router.post('/:id/return', authenticate, requirePermission('sales'), [
     await trx('tbl_sales_header').where({ Sale_ID: req.params.id }).update({
       Payment_Status: 'Cancelled', // same terminal status as /cancel — every existing report/query that already excludes 'Cancelled' sales correctly excludes a return too, with no separate status value to thread through dozens of unrelated queries
       Notes: `Returned: ${req.body.reason || 'No reason'} by ${req.user.username} — refunded via ${req.body.Refund_Mode}`,
+      Returned_Date: new Date(), // distinguishes a real return from a plain /cancel (which leaves this null) — the Running Stock report's Sales Return component reads this
     });
 
     await reverseSaleSideEffects(trx, sale, req);
