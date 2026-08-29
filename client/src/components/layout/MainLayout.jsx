@@ -354,7 +354,12 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   const stockChildren = [inventoryGroup, binGroup, floorGroup, packetStockItem, branchOrdersItem].filter(Boolean);
   if (stockChildren.length) transactionChildren.push({ key: 'txn-stock-group', type: 'group', label: 'STOCK', children: stockChildren });
 
-  const purchaseChildren = [purchaseGroup, karigarGroup].filter(Boolean);
+  // Dealer Transaction — genuinely new (Missing Feature Report), same
+  // gate as Karigar since dealers live in the same vendor master/permission
+  // surface.
+  const dealerTransactionItem = (permissions.karigar_management && (isEnabled('goldsmith') || isEnabled('manufacturing')))
+    ? { key: '/dealer-transaction', label: '🤝 Dealer Transaction' } : null;
+  const purchaseChildren = [purchaseGroup, karigarGroup, dealerTransactionItem].filter(Boolean);
   if (purchaseChildren.length) transactionChildren.push({ key: 'txn-purchase-group', type: 'group', label: 'PURCHASE', children: purchaseChildren });
 
   // Jobcard Prediction — genuinely new (Missing Feature Report), same gate

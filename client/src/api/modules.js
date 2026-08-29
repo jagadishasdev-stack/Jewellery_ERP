@@ -756,6 +756,14 @@ export const jobcardPredictionApi = {
   setStatus: (id, status) => api.put(`/jobcard-prediction/${id}/status`, { Status: status }),
 };
 
+// ─── Dealer Transaction ───────────────────────────────────────────────────────────
+export const dealerTransactionApi = {
+  list: (params) => api.get('/dealer-transaction', { params }),
+  outstanding: () => api.get('/dealer-transaction/outstanding'),
+  create: (data) => api.post('/dealer-transaction', data),
+  settle: (id) => api.post(`/dealer-transaction/${id}/settle`),
+};
+
 // ─── Branch Order Requests ────────────────────────────────────────────────────────
 export const branchOrderRequestApi = {
   list: (params) => api.get('/branch-order-request', { params }),

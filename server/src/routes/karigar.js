@@ -408,7 +408,12 @@ function pickVendorFields(body) {
 
 router.post('/vendor', authenticate, requireVendorManagePermission, [
   body('Vendor_Name').trim().notEmpty(),
-  body('Vendor_Type').isIn(['Supplier', 'Karigar', 'Both']),
+  // 'Dealer' added for the Dealer Transaction module — dealer-to-dealer
+  // trades of finished/semi-finished goods are a real, distinct
+  // relationship from Supplier (who sells raw stock) or Karigar (who
+  // works gold for a making charge), so it gets its own type rather than
+  // overloading one of those.
+  body('Vendor_Type').isIn(['Supplier', 'Karigar', 'Both', 'Dealer']),
   body('Mobile_1').trim().notEmpty(),
 ], async (req, res) => {
   const errors = validationResult(req);
