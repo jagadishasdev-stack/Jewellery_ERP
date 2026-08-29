@@ -308,6 +308,7 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
         { key: '/reports/branch-performance', label: '🏢 Branch Performance' },
         { key: '/reports/closing-report', label: '📊 Closing Report' },
         { key: '/reports/barcode-report', label: '🏷️ Barcode Report' },
+        { key: '/reports/vendor-ledger', label: '🏭 Vendor Ledger' },
         { key: 'reports-div2', type: 'divider' },
         { key: '/reports/sales', label: '📜 Legacy Sales' },
         { key: '/reports/day-close', label: '🔒 Day Close' },

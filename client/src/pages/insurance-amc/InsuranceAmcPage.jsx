@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Typography, Tabs, Tag, Button, Space, message } from 'antd';
-import { SafetyOutlined } from '@ant-design/icons';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Typography, Tabs, Tag, Button, Space, message, Modal, InputNumber, Form, Alert } from 'antd';
+import { SafetyOutlined, FileProtectOutlined } from '@ant-design/icons';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 import { insuranceAmcApi } from '../../api/modules';
 import { formatCurrency } from '../../utils/calculations';
@@ -32,29 +32,98 @@ function PoliciesTab() {
   );
 }
 
+// Renewal reminder — a policy expiring within 30 days (or already past its
+// Expiry_Date) gets flagged right on the Expiry column; there was no
+// reminder of any kind before, anywhere.
+const RENEWAL_WINDOW_DAYS = 30;
+function expiryFlag(expiryDate) {
+  if (!expiryDate) return null;
+  const daysLeft = dayjs(expiryDate).diff(dayjs(), 'day');
+  if (daysLeft < 0) return { color: 'red', label: 'Expired' };
+  if (daysLeft <= RENEWAL_WINDOW_DAYS) return { color: 'orange', label: `Renew in ${daysLeft}d` };
+  return null;
+}
+
 function CustomerInsuranceTab({ prefill }) {
   const qc = useQueryClient();
-  const [claimId, setClaimId] = useState(null);
+  const [claimTarget, setClaimTarget] = useState(null); // the row being claimed against
+  const [claimForm] = Form.useForm();
+
+  const claimMutation = useMutation({
+    mutationFn: ({ id, data }) => insuranceAmcApi.claimCustomerInsurance(id, data),
+    onSuccess: () => {
+      message.success('Claim recorded.');
+      qc.invalidateQueries({ queryKey: ['customer-insurance'] });
+      setClaimTarget(null);
+      claimForm.resetFields();
+    },
+    onError: (err) => message.error(err.response?.data?.message || 'Failed to record claim.'),
+  });
+
+  const { data: rows } = useQuery({
+    queryKey: ['customer-insurance'],
+    queryFn: () => insuranceAmcApi.getCustomerInsurance().then((r) => (Array.isArray(r.data.data) ? r.data.data : [])),
+  });
+  const expiringSoon = (rows || []).filter((r) => r.Status === 'Active' && expiryFlag(r.Expiry_Date));
+
   return (
-    <GenericCrudTab
-      queryKey={['customer-insurance']} listFn={insuranceAmcApi.getCustomerInsurance} createFn={insuranceAmcApi.createCustomerInsurance}
-      title="Enroll Customer" rowKey="Insurance_ID"
-      initialValues={prefill} autoOpen={!!prefill}
-      fields={[
-        { name: 'Customer_ID', label: 'Customer ID', type: 'number', required: true, placeholder: 'Numeric Customer_ID' },
-        { name: 'Policy_ID', label: 'Policy ID', type: 'number', placeholder: 'Numeric Policy_ID' },
-        { name: 'Sum_Insured', label: 'Sum Insured (₹)', type: 'number', required: true },
-        { name: 'Start_Date', label: 'Start Date', type: 'date', required: true },
-      ]}
-      columns={[
-        { title: 'Customer', dataIndex: 'Customer_Name' },
-        { title: 'Insurer', dataIndex: 'Insurer_Name' },
-        { title: 'Sum Insured', dataIndex: 'Sum_Insured', render: (v) => formatCurrency(v) },
-        { title: 'Premium', dataIndex: 'Premium_Amount', render: (v) => formatCurrency(v) },
-        { title: 'Expiry', dataIndex: 'Expiry_Date', render: (v) => v ? dayjs(v).format('DD-MMM-YYYY') : '-' },
-        { title: 'Status', dataIndex: 'Status', render: (v) => <Tag color={v === 'Active' ? 'green' : v === 'Claimed' ? 'orange' : 'default'}>{v}</Tag> },
-      ]}
-    />
+    <>
+      {expiringSoon.length > 0 && (
+        <Alert
+          type="warning" showIcon style={{ marginBottom: 12 }}
+          message={`${expiringSoon.length} polic${expiringSoon.length === 1 ? 'y is' : 'ies are'} expired or expiring within ${RENEWAL_WINDOW_DAYS} days`}
+          description={expiringSoon.map((r) => r.Customer_Name).join(', ')}
+        />
+      )}
+      <GenericCrudTab
+        queryKey={['customer-insurance']} listFn={insuranceAmcApi.getCustomerInsurance} createFn={insuranceAmcApi.createCustomerInsurance}
+        title="Enroll Customer" rowKey="Insurance_ID"
+        initialValues={prefill} autoOpen={!!prefill}
+        fields={[
+          { name: 'Customer_ID', label: 'Customer ID', type: 'number', required: true, placeholder: 'Numeric Customer_ID' },
+          { name: 'Policy_ID', label: 'Policy ID', type: 'number', placeholder: 'Numeric Policy_ID' },
+          { name: 'Sum_Insured', label: 'Sum Insured (₹)', type: 'number', required: true },
+          { name: 'Start_Date', label: 'Start Date', type: 'date', required: true },
+        ]}
+        columns={[
+          { title: 'Customer', dataIndex: 'Customer_Name' },
+          { title: 'Insurer', dataIndex: 'Insurer_Name' },
+          { title: 'Sum Insured', dataIndex: 'Sum_Insured', render: (v) => formatCurrency(v) },
+          { title: 'Premium', dataIndex: 'Premium_Amount', render: (v) => formatCurrency(v) },
+          {
+            title: 'Expiry', dataIndex: 'Expiry_Date',
+            render: (v) => {
+              const flag = expiryFlag(v);
+              return <span>{v ? dayjs(v).format('DD-MMM-YYYY') : '-'} {flag && <Tag color={flag.color} style={{ marginLeft: 4 }}>{flag.label}</Tag>}</span>;
+            },
+          },
+          { title: 'Status', dataIndex: 'Status', render: (v) => <Tag color={v === 'Active' ? 'green' : v === 'Claimed' ? 'orange' : 'default'}>{v}</Tag> },
+          {
+            title: 'Actions',
+            render: (_, r) => r.Status === 'Active' && (
+              <Button size="small" icon={<FileProtectOutlined />} onClick={() => setClaimTarget(r)}>File Claim</Button>
+            ),
+          },
+        ]}
+      />
+
+      <Modal
+        title={`File Claim — ${claimTarget?.Customer_Name || ''}`}
+        open={!!claimTarget}
+        onCancel={() => { setClaimTarget(null); claimForm.resetFields(); }}
+        footer={null} destroyOnClose
+      >
+        <Form form={claimForm} layout="vertical"
+          onFinish={(v) => claimMutation.mutate({ id: claimTarget.Insurance_ID, data: v })}>
+          <Form.Item name="Claim_Amount" label="Claim Amount (₹)" rules={[{ required: true, message: 'Claim amount is required' }]}>
+            <InputNumber style={{ width: '100%' }} min={0.01} placeholder={`Sum insured: ${formatCurrency(claimTarget?.Sum_Insured || 0)}`} />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block loading={claimMutation.isPending} style={{ background: '#B8860B', borderColor: '#B8860B' }}>
+            Submit Claim
+          </Button>
+        </Form>
+      </Modal>
+    </>
   );
 }
 

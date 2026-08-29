@@ -149,6 +149,7 @@ export const reportsApi = {
   customerLedger: (id) => api.get(`/reports/customer-ledger/${id}`),
   customerOutstanding: () => api.get('/reports/customer-outstanding'),
   supplierOutstanding: () => api.get('/reports/supplier-outstanding'),
+  supplierLedger: (id) => api.get(`/reports/supplier-ledger/${id}`),
   gstSummary: (params) => api.get('/reports/gst-summary', { params }),
   gstr1: (params) => api.get('/reports/gstr1', { params }),
   gstr3b: (params) => api.get('/reports/gstr3b', { params }),

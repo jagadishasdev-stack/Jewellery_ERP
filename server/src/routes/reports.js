@@ -912,6 +912,33 @@ router.get('/customer-outstanding', authenticate, requireValidBranch, async (req
 });
 
 // ─── GET /api/reports/supplier-outstanding ────────────────────────────────────
+// ─── GET /api/reports/supplier-ledger/:id ─────────────────────────────────────
+// A dedicated per-supplier running ledger didn't exist anywhere before —
+// only a pooled "Supplier Payable" Chart-of-Accounts account (everyone
+// mixed together) and the aggregate supplier-outstanding report below
+// (per-supplier totals, but no transaction list). Same shape as
+// GET /customer-ledger/:id above, one row per purchase.
+router.get('/supplier-ledger/:id', authenticate, requireValidBranch, async (req, res) => {
+  try {
+    const purchases = await withBranch(db('tbl_purchase_header as p')
+      .where('p.Supplier_ID', req.params.id)
+      .where('p.Tenant_ID', req.user.tenantId)
+      .whereNot('p.Status', 'Cancelled'), req, 'p.Branch_ID')
+      .orderBy('p.Purchase_Date', 'desc')
+      .select('p.Purchase_ID', 'p.Purchase_Number', 'p.Purchase_Date', 'p.Purchase_Type', 'p.Total_Amount', 'p.Amount_Paid', 'p.Balance_Amount', 'p.Payment_Mode', 'p.Payment_Status', 'p.Status');
+    const supplier = await db('tbl_vendor_master').where({ Vendor_ID: req.params.id, Tenant_ID: req.user.tenantId }).first();
+    const totals = {
+      total_purchases: purchases.length,
+      total_value: purchases.reduce((s, r) => s + parseFloat(r.Total_Amount || 0), 0),
+      total_paid: purchases.reduce((s, r) => s + parseFloat(r.Amount_Paid || 0), 0),
+      total_outstanding: purchases.reduce((s, r) => s + parseFloat(r.Balance_Amount || 0), 0),
+    };
+    return sendSuccess(res, { supplier, purchases, totals });
+  } catch (err) {
+    return sendError(res, 500, 'Failed to fetch supplier ledger.');
+  }
+});
+
 // Mirrors customer-outstanding — tbl_vendor_master.Current_Balance and
 // tbl_purchase_header.Balance_Amount already held exactly this data, but
 // there was no report surfacing it (only a per-invoice Balance Due column
