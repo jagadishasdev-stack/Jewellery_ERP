@@ -146,6 +146,14 @@ function App() {
       {/* Customer Display — no layout, fullscreen */}
       <Route path="/customer-display" element={<CustomerDisplayPage />} />
 
+      {/* Add Stock — no sidebar/layout, fullscreen, so the whole screen is
+          the entry form + what's just been added. Still requires login
+          (ProtectedRoute), just not wrapped in MainLayout — closing it
+          (Cancel, or its own navigate('/inventory') on edit-save) returns
+          to a normal route inside MainLayout, so the sidebar comes right
+          back for everything else. */}
+      <Route path="/inventory/add" element={<ProtectedRoute><AddOrnamentPage /></ProtectedRoute>} />
+
       {/* Auth Routes */}
       <Route element={<AuthLayout />}>
         <Route path="/login" element={<LoginPage />} />
@@ -165,7 +173,6 @@ function App() {
         <Route path="/billing" element={<ProtectedRoute permission="sales"><BillingHub /></ProtectedRoute>} />
         <Route path="/pos" element={<ProtectedRoute permission="sales"><POSPage /></ProtectedRoute>} />
         <Route path="/inventory" element={<StockManagementPage />} />
-        <Route path="/inventory/add" element={<AddOrnamentPage />} />
         <Route path="/inventory/old" element={<InventoryPage />} />
         <Route path="/karigar" element={<KarigarListPage />} />
         <Route path="/karigar/issue" element={<ProtectedRoute permission="karigar_management"><KarigarIssuePage /></ProtectedRoute>} />

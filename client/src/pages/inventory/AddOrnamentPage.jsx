@@ -95,6 +95,41 @@ export default function AddOrnamentPage() {
     setPriceCalc(result);
   };
 
+  // If something interrupts a new entry mid-typing (opened another page,
+  // an accidental refresh) what was already filled in isn't lost — best
+  // effort only (a browser with storage disabled just starts blank, same
+  // as before this existed), and deliberately per-browser/per-origin only,
+  // not per-tenant — a shared browser switching tenants (e.g. Super Admin
+  // impersonation) could see a stale draft from a different tenant here,
+  // an accepted rare edge case for what's meant to be a lightweight
+  // convenience, not a cross-tenant data feature.
+  const DRAFT_KEY = 'jewelleryErp_addStockDraft_v1';
+  const saveDraft = (values) => {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(values)); } catch { /* storage full/unavailable — best effort only */ }
+  };
+  const clearDraft = () => {
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* nothing to clean up if storage isn't available */ }
+  };
+  const onValuesChange = (_, allValues) => {
+    recalculate();
+    if (!editId) saveDraft(allValues);
+  };
+
+  // Restore an unsaved draft on first load — skipped entirely in edit
+  // mode, since that form is prefilled from a real fetched record instead.
+  useEffect(() => {
+    if (editId) return;
+    try {
+      const saved = localStorage.getItem(DRAFT_KEY);
+      if (saved) {
+        form.setFieldsValue(JSON.parse(saved));
+        recalculate();
+        message.info('Restored what you were entering before you left this screen.');
+      }
+    } catch { /* corrupted/unavailable storage — just start with a blank form */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Prefill for edit — form.setFieldsValue() is a PROGRAMMATIC update, which
   // Ant Design deliberately does not route through onValuesChange (that only
   // fires on real user input). Without the explicit recalculate() call here,
@@ -137,6 +172,7 @@ export default function AddOrnamentPage() {
       setRecentlyAdded((prev) => [res.data.data, ...prev]);
       form.resetFields();
       setPriceCalc(null);
+      clearDraft(); // this entry is safely saved — nothing left to restore
       // resetFields() only restores each field's own declared initialValue
       // — Current_Gold_Rate has none (it's set programmatically below,
       // same as the very first load) and would otherwise sit blank until
@@ -199,7 +235,7 @@ export default function AddOrnamentPage() {
         </Space>
       </div>
 
-      <Form form={form} layout="vertical" onFinish={onFinish} onValuesChange={recalculate}>
+      <Form form={form} layout="vertical" onFinish={onFinish} onValuesChange={onValuesChange}>
         <Row gutter={[16, 0]}>
           {/* Classification */}
           <Col xs={24} lg={16}>
