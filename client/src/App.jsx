@@ -40,6 +40,7 @@ import WindowPage from './pages/window/WindowPage';
 import SyncStatusPage from './pages/admin/SyncStatusPage';
 import VendorLedgerPage from './pages/reports/VendorLedgerPage';
 import PacketStockPage from './pages/inventory/PacketStockPage';
+import JobcardPredictionPage from './pages/manufacturing/JobcardPredictionPage';
 import BranchPerformancePage from './pages/reports/BranchPerformancePage';
 import DayClosePage from './pages/reports/DayClosePage';
 import InvoiceTemplatePage from './pages/invoice/InvoiceTemplatePage';
@@ -239,6 +240,7 @@ function App() {
         <Route path="/admin/sync-status" element={<SyncStatusPage />} />
         <Route path="/reports/vendor-ledger" element={<VendorLedgerPage />} />
         <Route path="/packet-stock" element={<PacketStockPage />} />
+        <Route path="/jobcard-prediction" element={<JobcardPredictionPage />} />
         <Route path="/repair" element={<RepairPage />} />
         <Route path="/repair/job-cards" element={<JobCardReport />} />
         <Route path="/pawnbroking" element={<PawnbrokingPage />} />

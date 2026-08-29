@@ -745,6 +745,14 @@ export const masterExtApi = {
   registerHUID: (data) => api.post('/master/huid', data),
 };
 
+// ─── Jobcard Prediction ──────────────────────────────────────────────────────────
+export const jobcardPredictionApi = {
+  list: (params) => api.get('/jobcard-prediction', { params }),
+  getById: (id) => api.get(`/jobcard-prediction/${id}`),
+  create: (data) => api.post('/jobcard-prediction', data),
+  setStatus: (id, status) => api.put(`/jobcard-prediction/${id}/status`, { Status: status }),
+};
+
 // ─── Packet Stock ────────────────────────────────────────────────────────────────
 export const packetStockApi = {
   list: (params) => api.get('/packet-stock', { params }),

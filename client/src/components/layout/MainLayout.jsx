@@ -352,7 +352,11 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
   const purchaseChildren = [purchaseGroup, karigarGroup].filter(Boolean);
   if (purchaseChildren.length) transactionChildren.push({ key: 'txn-purchase-group', type: 'group', label: 'PURCHASE', children: purchaseChildren });
 
-  if (manufacturingItem) transactionChildren.push({ key: 'txn-workshop-group', type: 'group', label: 'WORKSHOP', children: [manufacturingItem] });
+  // Jobcard Prediction — genuinely new (Missing Feature Report), same gate
+  // as Manufacturing since it's planning for the same workflow.
+  const jobcardPredictionItem = isEnabled('manufacturing_bom') ? { key: '/jobcard-prediction', label: '📐 Jobcard Prediction' } : null;
+  const workshopChildren = [jobcardPredictionItem, manufacturingItem].filter(Boolean);
+  if (workshopChildren.length) transactionChildren.push({ key: 'txn-workshop-group', type: 'group', label: 'WORKSHOP', children: workshopChildren });
 
   if (accountingGroup) transactionChildren.push({ key: 'txn-accounts-group', type: 'group', label: 'ACCOUNTS', children: [accountingGroup] });
 
