@@ -17,7 +17,7 @@ import {
   DashboardOutlined, ShoppingCartOutlined, AppstoreOutlined,
   TeamOutlined, BarChartOutlined, FileTextOutlined, SettingOutlined,
   UserOutlined, LogoutOutlined, GoldOutlined, KeyOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined,
   ApartmentOutlined, ToolOutlined, SafetyOutlined,
   MenuOutlined, CloseOutlined, HomeOutlined, ShopOutlined,
   WalletOutlined, PieChartOutlined, SearchOutlined, SwapOutlined,
@@ -33,6 +33,7 @@ import BranchSelector from './BranchSelector';
 import { authApi } from '../../api/modules';
 import GoldRateBar from '../GoldRateBar';
 import RecentWindows from '../RecentWindows';
+import NotificationBell from '../NotificationBell';
 import { useRecentWindowsStore } from '../../store/recentWindowsStore';
 import { useUiThemeStore } from '../../store/uiThemeStore';
 import { useNavLayoutStore } from '../../store/navLayoutStore';
@@ -886,10 +887,8 @@ export default function MainLayout() {
               </>
             )}
 
-            {/* Bell */}
-            <Badge count={0} showZero={false}>
-              <Button type="text" icon={<BellOutlined />} style={{ color: '#666', width: 36, height: 36 }} />
-            </Badge>
+            {/* Bell — previously a dead placeholder (Badge count={0} always) */}
+            <NotificationBell />
 
             {/* User avatar + dropdown */}
             <Dropdown menu={userMenu} trigger={['click']} placement="bottomRight">

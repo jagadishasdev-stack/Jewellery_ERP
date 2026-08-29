@@ -763,6 +763,11 @@ export const packetStockApi = {
   close: (id) => api.post(`/packet-stock/${id}/close`),
 };
 
+// ─── Notifications ───────────────────────────────────────────────────────────────
+export const notificationsApi = {
+  getSummary: () => api.get('/notifications/summary'),
+};
+
 // ─── Sync ───────────────────────────────────────────────────────────────────────
 // The cloud half of the sync engine (server/src/routes/sync.js) has always
 // been real and tested — this is its first client-side UI, previously
