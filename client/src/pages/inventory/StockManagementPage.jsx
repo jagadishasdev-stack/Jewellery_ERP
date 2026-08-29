@@ -40,6 +40,9 @@ import { useMetalTypes } from '../../hooks/useMetalTypes';
 const { Title, Text } = Typography;
 const { Option } = Select;
 
+// Matches utils/ornamentStatus.js's server-side Status values exactly.
+const STOCK_STATUS_COLOR = { Available: 'green', Sold: 'red', 'On Approval': 'blue', 'On Display': 'purple', 'In Transfer': 'gold', Unavailable: 'orange' };
+
 // ── Stock Entry Modal (handles all 6 entry types) ─────────────────────────────
 function StockEntryModal({ open, onClose, entryType, onSuccess }) {
   const [form] = Form.useForm();
@@ -527,15 +530,16 @@ export default function StockManagementPage() {
     { title: 'Making/g', dataIndex: 'Base_Making_Charge_Per_Gram', width: 90, render: v => <Text style={{fontSize:11}}>{formatCurrency(v)}</Text> },
     { title: 'MRP', dataIndex: 'Total_Price', width: 120, render: v => <Text strong style={{color:'#B8860B',fontSize:13}}>{formatCurrency(v)}</Text> },
     {
+      // Server-computed, single authoritative field (utils/ornamentStatus.js)
+      // — this used to re-derive its own status client-side, including a
+      // dead `r.Is_Reserved` check (that column was renamed to
+      // Is_On_Approval when the Approval module was built, so "Reserved"
+      // silently never rendered since). Now also shows "In Transfer",
+      // which the client couldn't previously know at all.
       title: 'Status',
       width: 100,
-      render: (_, r) => {
-        if (r.Is_Sold) return <Tag color="red">Sold</Tag>;
-        if (r.Is_Reserved) return <Tag color="blue">Reserved</Tag>;
-        if (r.Is_On_Display) return <Tag color="purple">On Display</Tag>;
-        if (!r.Is_Stock_Available) return <Tag color="orange">Unavailable</Tag>;
-        return <Tag color="green">Available</Tag>;
-      },
+      dataIndex: 'Status',
+      render: (v) => <Tag color={STOCK_STATUS_COLOR[v] || 'default'}>{v || 'Available'}</Tag>,
     },
     { title: 'Location', dataIndex: 'Physical_Location', width: 100, render: v => <Text style={{fontSize:11,fontFamily:'monospace'}}>{v || '-'}</Text> },
     {

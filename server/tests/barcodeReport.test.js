@@ -75,4 +75,23 @@ describe('Barcode Report', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.items.length).toBe(0);
   });
+
+  test('status=in_transfer picks up an item with a Pending interbranch transfer — a status not derivable from any single stored column', async () => {
+    const branchA = `${tenant.tenantId}_BARA`, branchB = `${tenant.tenantId}_BARB`;
+    await db('tbl_branch_master').insert([
+      { Branch_ID: branchA, Tenant_ID: tenant.tenantId, Branch_Name: 'QA Barcode Transfer A', Branch_Code: 'BARA', Is_Active: true },
+      { Branch_ID: branchB, Tenant_ID: tenant.tenantId, Branch_Name: 'QA Barcode Transfer B', Branch_Code: 'BARB', Is_Active: true },
+    ]);
+    const ornament = await createOrnament('QABAR-0004', { Branch_ID: branchA });
+    await request(app).post('/api/transfer/create').set(auth()).send({
+      Transfer_Type: 'Branch', From_Branch_ID: branchA, To_Branch_ID: branchB,
+      items: [{ Ornament_ID: ornament.Ornament_ID }],
+    });
+
+    const res = await request(app).get('/api/reports/barcode-report').set(auth()).query({ status: 'in_transfer' });
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.some((r) => r.Article_Number === 'QABAR-0004')).toBe(true);
+
+    await db('tbl_branch_master').whereIn('Branch_ID', [branchA, branchB]).del();
+  });
 });

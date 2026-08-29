@@ -18,7 +18,7 @@ import dayjs from 'dayjs';
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
-const STATUS_COLOR = { Available: 'green', Sold: 'default', 'On Approval': 'orange', 'On Display': 'blue', Unavailable: 'red' };
+const STATUS_COLOR = { Available: 'green', Sold: 'default', 'On Approval': 'orange', 'On Display': 'blue', 'In Transfer': 'gold', Unavailable: 'red' };
 
 export default function BarcodeReportPage() {
   const { user } = useAuthStore();
@@ -100,6 +100,7 @@ export default function BarcodeReportPage() {
               { value: 'available', label: 'Available' },
               { value: 'sold', label: 'Sold' },
               { value: 'on_approval', label: 'On Approval' },
+              { value: 'in_transfer', label: 'In Transfer' },
             ]} />
           <RangePicker value={dateRange} onChange={setDateRange} format="DD-MMM-YYYY" />
         </Space>

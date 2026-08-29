@@ -5,6 +5,7 @@ const { authenticate } = require('../middleware/auth');
 const { modeVal, applyStockVisibility, excludeHiddenStockSales } = require('../utils/dataModeFilter');
 const { computeClosingReport } = require('../services/closingReportService');
 const { getAllowedBranches, requireValidBranch, withBranch } = require('../utils/branchAccess');
+const { attachOrnamentStatus } = require('../utils/ornamentStatus');
 const { generateClosingReportPDF } = require('../services/pdfService');
 const dayjs = require('dayjs');
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -676,12 +677,22 @@ router.get('/barcode-report', authenticate, requireValidBranch, async (req, res)
       if (!lastPrintMap[p.Document_Number]) lastPrintMap[p.Document_Number] = p;
     }
 
-    const enriched = rows.map(r => ({
+    // Shared with ornaments.js's own list/detail routes (utils/
+    // ornamentStatus.js) — one authoritative Status derivation, not two
+    // hand-maintained copies that could drift. Now also picks up "In
+    // Transfer" for free, which this route's own inline version didn't
+    // have.
+    const withStatus = await attachOrnamentStatus(rows, tenantId);
+    let enriched = withStatus.map(r => ({
       ...r,
-      Status: r.Is_Sold ? 'Sold' : r.Is_On_Approval ? 'On Approval' : r.Is_On_Display ? 'On Display' : r.Is_Stock_Available ? 'Available' : 'Unavailable',
       Last_Printed_Date: lastPrintMap[r.Article_Number]?.Printed_Date || null,
       Last_Print_Status: lastPrintMap[r.Article_Number]?.Status || null,
     }));
+    // "In Transfer" isn't a stored column — it's only knowable after
+    // attachOrnamentStatus runs, so unlike sold/available/on_approval
+    // above this filters the already-enriched array rather than the SQL
+    // query. Fine at this route's existing 2000-row cap.
+    if (status === 'in_transfer') enriched = enriched.filter(r => r.Status === 'In Transfer');
 
     return sendSuccess(res, { items: enriched, truncated: rows.length === 2000 });
   } catch (err) {

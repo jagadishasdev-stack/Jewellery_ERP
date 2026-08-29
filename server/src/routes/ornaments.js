@@ -8,6 +8,7 @@ const { auditLog } = require('../utils/auditLogger');
 const { modeFilter, modeVal, applyStockVisibility } = require('../utils/dataModeFilter');
 const { requireValidBranch, withBranch, resolveBranchForInsert } = require('../utils/branchAccess');
 const { isValidMetalType, getMetalTypes } = require('../utils/metalTypes');
+const { attachOrnamentStatus } = require('../utils/ornamentStatus');
 
 // ─── GET /api/ornaments  (with filters) ───────────────────────────────────────
 router.get('/', authenticate, requireValidBranch, async (req, res) => {
@@ -102,8 +103,9 @@ router.get('/', authenticate, requireValidBranch, async (req, res) => {
     if (trayId) countBase.where('Tray_ID', trayId);
     const [{ count }] = await countBase.count('Ornament_ID as count');
     const data = await qb.orderBy('o.Created_Date', 'desc').limit(parseInt(limit)).offset(offset);
+    const items = await attachOrnamentStatus(data, req.user.tenantId);
 
-    return sendSuccess(res, { items: data, total: parseInt(count), page: parseInt(page), limit: parseInt(limit) });
+    return sendSuccess(res, { items, total: parseInt(count), page: parseInt(page), limit: parseInt(limit) });
   } catch (err) {
     console.error('Ornaments list error:', err);
     return sendError(res, 500, 'Failed to fetch ornaments.');
@@ -186,7 +188,8 @@ router.get('/:id', authenticate, async (req, res) => {
     const ornament = await qb.first();
 
     if (!ornament) return sendError(res, 404, 'Ornament not found.');
-    return sendSuccess(res, ornament);
+    const [withStatus] = await attachOrnamentStatus([ornament], ornament.Tenant_ID);
+    return sendSuccess(res, withStatus);
   } catch (err) {
     return sendError(res, 500, 'Failed to fetch ornament.');
   }
