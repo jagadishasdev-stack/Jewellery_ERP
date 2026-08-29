@@ -110,9 +110,30 @@ export default function AddOrnamentPage() {
   const clearDraft = () => {
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* nothing to clean up if storage isn't available */ }
   };
-  const onValuesChange = (_, allValues) => {
+  // Net Gold Weight used to be a second field the admin had to fill in by
+  // hand alongside Gross Weight, with no relationship between the two —
+  // real friction, and the actual reason the Price Calculator so often
+  // sat stuck on its "Fill in weight..." placeholder: Current_Gold_Rate
+  // auto-fills and Making Charge gets typed, but Net_Gold_Weight is the
+  // one field nobody thought to fill in separately. Now it auto-derives
+  // from Gross Weight minus Stone Weight — the same formula
+  // StockManagementPage.jsx's own entry modal already falls back to at
+  // save time, just applied live as you type instead of silently only at
+  // the end. A manual edit to Net Gold Weight itself is respected from
+  // then on (e.g. extra wastage not reflected in stone weight alone) —
+  // this only fills it in automatically until the admin overrides it.
+  const [netWeightManuallySet, setNetWeightManuallySet] = useState(false);
+
+  const onValuesChange = (changed, allValues) => {
+    if ('Net_Gold_Weight' in changed) {
+      setNetWeightManuallySet(true);
+    } else if (('Gross_Weight' in changed || 'Stone_Weight' in changed) && !netWeightManuallySet && !isDiamond) {
+      const gross = parseFloat(allValues.Gross_Weight || 0);
+      const stone = parseFloat(allValues.Stone_Weight || 0);
+      form.setFieldValue('Net_Gold_Weight', Math.max(0, Math.round((gross - stone) * 1000) / 1000));
+    }
     recalculate();
-    if (!editId) saveDraft(allValues);
+    if (!editId) saveDraft(form.getFieldsValue());
   };
 
   // Restore an unsaved draft on first load — skipped entirely in edit
@@ -172,6 +193,7 @@ export default function AddOrnamentPage() {
       setRecentlyAdded((prev) => [res.data.data, ...prev]);
       form.resetFields();
       setPriceCalc(null);
+      setNetWeightManuallySet(false); // next piece starts with auto-derived Net Gold Weight again
       clearDraft(); // this entry is safely saved — nothing left to restore
       // resetFields() only restores each field's own declared initialValue
       // — Current_Gold_Rate has none (it's set programmatically below,
@@ -319,8 +341,8 @@ export default function AddOrnamentPage() {
                 <Col xs={12} md={6}>
                   {/* A Diamond parcel has no gold content — 0 is a real,
                       valid value for it, not a missing field. */}
-                  <Form.Item name="Net_Gold_Weight" label="Net Gold Weight" initialValue={isDiamond ? 0 : undefined} rules={[{ required: !isDiamond }]}>
-                    <InputNumber style={{ width: '100%' }} step={0.001} min={0} placeholder={isDiamond ? '0 (no gold content)' : '24.100'} />
+                  <Form.Item name="Net_Gold_Weight" label={isDiamond ? 'Net Gold Weight' : 'Net Gold Weight (auto-calculated)'} initialValue={isDiamond ? 0 : undefined} rules={[{ required: !isDiamond }]}>
+                    <InputNumber style={{ width: '100%' }} step={0.001} min={0} placeholder={isDiamond ? '0 (no gold content)' : 'Gross Weight − Stone Weight'} />
                   </Form.Item>
                 </Col>
                 <Col xs={12} md={6}>
