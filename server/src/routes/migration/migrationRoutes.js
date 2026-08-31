@@ -34,6 +34,8 @@ const { validateRecord } = require('./migrationValidate');
 const { checkDuplicate, VALID_DUPLICATE_ACTIONS } = require('./migrationDuplicate');
 const { getTenantDb } = require('../../db/tenantDbResolver');
 const { runWithTenantDb } = require('../../db/tenantDb');
+const { runMigration } = require('./migrationProcessor');
+const { buildReconciliation } = require('./migrationReconcile');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -393,6 +395,89 @@ router.post('/:id/duplicates/resolve', authenticate, requireSuperAdmin, [
       .update({ Duplicate_Action: req.body.action });
     return sendSuccess(res, { updated: count }, `${count} record(s) marked ${req.body.action}.`);
   } catch (err) { return sendError(res, 500, 'Failed to resolve duplicates.'); }
+});
+
+// ── POST /api/migrations/:id/approve — READY -> APPROVED, the explicit sign-off before anything writes to production ──
+router.post('/:id/approve', authenticate, requireSuperAdmin, [
+  body('confirmed').equals('true').withMessage('You must explicitly confirm before approving a production migration.'),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    assertMigrationStatus(migration, ['READY']);
+    const [updated] = await db('migrations').where('Migration_ID', req.params.id).update({ Status: 'APPROVED' }).returning('*');
+    return sendSuccess(res, updated, 'Migration approved. It can now be started.');
+  } catch (err) {
+    if (err.statusCode === 400) return sendError(res, 400, err.message);
+    return sendError(res, 500, 'Failed to approve migration.');
+  }
+});
+
+// ── POST /api/migrations/:id/start — APPROVED -> RUNNING, kicks off the processor without waiting for it to finish ──
+router.post('/:id/start', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    assertMigrationStatus(migration, ['APPROVED']);
+    await db('migrations').where('Migration_ID', req.params.id).update({ Status: 'RUNNING', Started_Date: new Date() });
+
+    // Deliberately not awaited — this can run for a long time on a real
+    // migration; the caller polls GET /:id/status (or listens for the
+    // migration-progress socket event) instead of holding the HTTP
+    // connection open. See migrationProcessor.js's own header comment
+    // for why there's no queue/worker behind this.
+    const io = req.app.get('io');
+    runMigration(req.params.id, io).catch((err) => {
+      db('migrations').where('Migration_ID', req.params.id).update({ Status: 'FAILED', Failure_Reason: err.message }).catch(() => {});
+    });
+
+    return sendSuccess(res, { Migration_ID: req.params.id, Status: 'RUNNING' }, 'Migration started.');
+  } catch (err) {
+    if (err.statusCode === 400) return sendError(res, 400, err.message);
+    return sendError(res, 500, 'Failed to start migration.');
+  }
+});
+
+// ── GET /api/migrations/:id/status — poll target, source of truth alongside the socket push ──
+router.get('/:id/status', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    return sendSuccess(res, {
+      Migration_ID: migration.Migration_ID, Status: migration.Status,
+      Total_Records: migration.Total_Records, Success_Records: migration.Success_Records,
+      Warning_Records: migration.Warning_Records, Error_Records: migration.Error_Records,
+      Started_Date: migration.Started_Date, Completed_Date: migration.Completed_Date, Failure_Reason: migration.Failure_Reason,
+    });
+  } catch (err) { return sendError(res, 500, 'Failed to fetch status.'); }
+});
+
+// ── GET /api/migrations/:id/report — final summary (doc §50) ──────────────────
+router.get('/:id/report', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    const byEntity = await db('migration_staging_records')
+      .where('Migration_ID', req.params.id).select('Entity_Type', 'Import_Status').count('* as c').groupBy('Entity_Type', 'Import_Status');
+    const summary = {};
+    for (const row of byEntity) {
+      summary[row.Entity_Type] ||= { Imported: 0, Skipped: 0, Failed: 0, Pending: 0 };
+      summary[row.Entity_Type][row.Import_Status] = parseInt(row.c);
+    }
+    const errorLogs = await db('migration_logs').where({ Migration_ID: req.params.id, Status: 'ERROR' }).orderBy('Log_ID', 'desc').limit(200);
+    return sendSuccess(res, { migration, byEntity: summary, errorLogs });
+  } catch (err) { return sendError(res, 500, 'Failed to build report.'); }
+});
+
+// ── GET /api/migrations/:id/reconciliation — doc §51-52 ────────────────────────
+router.get('/:id/reconciliation', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await buildReconciliation(req.params.id);
+    if (!result) return sendError(res, 404, 'Migration not found.');
+    return sendSuccess(res, result);
+  } catch (err) { return sendError(res, 500, 'Failed to build reconciliation.'); }
 });
 
 module.exports = router;
