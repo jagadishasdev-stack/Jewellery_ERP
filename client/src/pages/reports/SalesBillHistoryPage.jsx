@@ -9,7 +9,7 @@ import {
   Card, Table, Input, DatePicker, Select, Space, Tag, Button, Typography,
   Drawer, message, Col, Modal, Form, Radio, Alert, Grid,
 } from 'antd';
-import { SearchOutlined, EyeOutlined, FileTextOutlined, StopOutlined, RollbackOutlined } from '@ant-design/icons';
+import { SearchOutlined, EyeOutlined, FileTextOutlined, StopOutlined, RollbackOutlined, PrinterOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { salesApi, bankChequeApi } from '../../api/modules';
 import { useAuthStore } from '../../store/authStore';
@@ -45,6 +45,12 @@ export default function SalesBillHistoryPage() {
   const [returnModal, setReturnModal] = useState(null);
   const [cancelForm] = Form.useForm();
   const [returnForm] = Form.useForm();
+  // "Selected Bill Print" — Master/Reports/Utility audit gap: reprint
+  // already existed per-row, but there was no way to batch-reprint a
+  // chosen set of bills (e.g. every bill from a busy morning) without
+  // opening each one individually.
+  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+  const [bulkPrinting, setBulkPrinting] = useState(false);
 
   const { data: bankAccounts } = useQuery({
     queryKey: ['bank-accounts-for-returns'],
@@ -147,12 +153,27 @@ export default function SalesBillHistoryPage() {
     }
   };
 
+  // Sequential, not parallel — each reprint opens the browser/native print
+  // dialog (or hits a configured printer); firing them all at once would
+  // either race each other or spam multiple dialogs open simultaneously.
+  const printSelected = async () => {
+    if (!selectedRowKeys.length) { message.warning('Select at least one bill to print.'); return; }
+    setBulkPrinting(true);
+    let done = 0;
+    for (const saleId of selectedRowKeys) {
+      try { await reprint(saleId); done++; } catch { /* reprint() already surfaces its own error message */ }
+    }
+    setBulkPrinting(false);
+    setSelectedRowKeys([]);
+    message.success(`Printed ${done} of ${selectedRowKeys.length} selected bill(s).`);
+  };
+
   // ── Walkthrough tour refs ───────────────────────────────────────────────────
   const filtersRef = useRef(null);
   const tableRef = useRef(null);
   const tourSteps = [
     { title: '1. Search & Filter', description: 'Search by invoice number, customer name, or mobile number, narrow by date range or payment status.', target: () => filtersRef.current },
-    { title: '2. Every Bill Ever Created', description: 'Click the eye icon to see full item-by-item details and payment breakdown, or the printer icon to reprint that exact bill using your Invoice Studio design.', target: () => tableRef.current },
+    { title: '2. Every Bill Ever Created', description: 'Click the eye icon to see full item-by-item details and payment breakdown, or the printer icon to reprint that exact bill using your Invoice Studio design. Tick the checkboxes on the left to select several bills and use "Print Selected" above the table to reprint them all in one go.', target: () => tableRef.current },
   ];
 
   const columns = [
@@ -189,6 +210,11 @@ export default function SalesBillHistoryPage() {
           <div className="page-header-title"><FileTextOutlined style={{ color: '#B8860B', marginRight: 8 }} />Sales Bill History</div>
           <div className="page-header-sub">Every sales bill ever created — search, view, and reprint any past invoice.</div>
         </div>
+        {selectedRowKeys.length > 0 && (
+          <Button icon={<PrinterOutlined />} loading={bulkPrinting} onClick={printSelected} type="primary" style={{ background: '#B8860B', borderColor: '#B8860B' }}>
+            Print Selected ({selectedRowKeys.length})
+          </Button>
+        )}
       </div>
 
       <Card className="erp-card" style={{ marginBottom: 14 }} bodyStyle={{ padding: '14px 16px' }}>
@@ -221,6 +247,7 @@ export default function SalesBillHistoryPage() {
             rowKey="Sale_ID"
             loading={isLoading}
             size="small"
+            rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
             pagination={{
               total: data?.total || 0, pageSize: 25, current: page,
               onChange: setPage, showTotal: (t) => `${t} bills`,
