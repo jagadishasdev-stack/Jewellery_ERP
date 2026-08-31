@@ -70,6 +70,16 @@ const ENTITY_DEFS = {
       Stone_Weight: ['stone_wt', 'stone_weight', 'stonewt'],
       Purchase_Cost: ['purchase_rate', 'cost', 'rate', 'purchase_cost'],
       Hallmark_Certificate_No: ['hallmark_no', 'hallmark', 'huid', 'huid_no'],
+      // "Virtual" target fields — not literal tbl_ornament_master columns
+      // (Type_ID/Design_ID/Purity_ID are foreign keys into GLOBAL, no-
+      // Tenant_ID masters). The product migrator upserts-by-code against
+      // those shared masters and resolves these text values to real IDs,
+      // rather than the mapping step trying to guess an ID directly.
+      Type_Name: ['item_type', 'itemtype', 'type', 'category', 'item_category'],
+      Design_Name: ['design', 'design_code', 'design_name'],
+      Purity_Text: ['purity', 'karat', 'fineness'],
+      Metal_Type: ['metal', 'metal_type', 'metaltype'],
+      Stock_Quantity: ['quantity', 'qty', 'stock_qty', 'stock_quantity'],
     },
   },
   purchase: {
