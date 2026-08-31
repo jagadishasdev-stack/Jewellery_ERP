@@ -660,6 +660,9 @@ export const complianceApi = {
   getLoyaltySlabs: () => api.get('/compliance/loyalty-slabs'),
   createLoyaltySlab: (data) => api.post('/compliance/loyalty-slabs', data),
   calculateLoyaltyPoints: (params) => api.get('/compliance/loyalty-slabs/calculate', { params }),
+  issueLoyaltyCard: (data) => api.post('/compliance/loyalty-card/issue', data),
+  getLoyaltyCardMembers: () => api.get('/compliance/loyalty-card/members'),
+  getLoyaltyDaySheet: (date) => api.get('/compliance/loyalty-card/day-sheet', { params: { date } }),
 };
 
 // ─── Operations Masters (Repair Category, Size, Item Weight Range, Cost Centre, Purchase Rate Type, Design Reorder Level) ──

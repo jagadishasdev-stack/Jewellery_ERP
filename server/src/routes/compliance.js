@@ -117,4 +117,57 @@ router.get('/loyalty-slabs/calculate', authenticate, requireModuleAccess('hsn_ei
   } catch (err) { return sendError(res, 500, 'Failed to calculate loyalty points.'); }
 });
 
+// ── Loyalty Card (Members + Day Sheet) ──────────────────────────────────────────
+// A card number tied to the EXISTING points engine above — not a new
+// tier/benefit system. Master/Reports/Utility audit gap: only points math
+// existed, no card identifier, no member list, no day sheet.
+router.post('/loyalty-card/issue', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'Add'),
+  [body('Customer_ID').notEmpty(), body('Card_Number').trim().notEmpty()], async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+    try {
+      const customer = await db('tbl_customer_master').where({ Customer_ID: req.body.Customer_ID, Tenant_ID: req.user.tenantId }).first();
+      if (!customer) return sendError(res, 404, 'Customer not found.');
+      const [updated] = await db('tbl_customer_master')
+        .where({ Customer_ID: req.body.Customer_ID, Tenant_ID: req.user.tenantId })
+        .update({ Loyalty_Card_Number: req.body.Card_Number, Loyalty_Card_Issue_Date: db.fn.now() })
+        .returning('*');
+      return sendSuccess(res, updated, `Loyalty card ${req.body.Card_Number} issued to ${customer.Customer_Name}.`);
+    } catch (err) {
+      if (err.code === '23505') return sendError(res, 409, 'That card number is already assigned to another customer.');
+      return sendError(res, 500, 'Failed to issue loyalty card.');
+    }
+  });
+
+router.get('/loyalty-card/members', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'View'), async (req, res) => {
+  try {
+    const rows = await db('tbl_customer_master')
+      .where('Tenant_ID', req.user.tenantId).whereNotNull('Loyalty_Card_Number')
+      .select('Customer_ID', 'Customer_Name', 'Mobile_1', 'Loyalty_Card_Number', 'Loyalty_Card_Issue_Date', 'Loyalty_Points')
+      .orderBy('Loyalty_Card_Issue_Date', 'desc');
+    return sendSuccess(res, rows);
+  } catch (err) { return sendError(res, 500, 'Failed to fetch loyalty card members.'); }
+});
+
+// GET /loyalty-card/day-sheet?date=YYYY-MM-DD — every loyalty point
+// transaction (Earned/Redeemed/Expired/Adjusted) across ALL customers for
+// one day, so a day's loyalty activity can be reviewed as a whole rather
+// than customer-by-customer (dayClose.js's GET /loyalty/:customerId, still
+// there, unchanged, is the per-customer equivalent).
+router.get('/loyalty-card/day-sheet', authenticate, requireModuleAccess('hsn_einvoice_loyalty', 'View'), async (req, res) => {
+  const date = req.query.date;
+  if (!date) return sendError(res, 400, 'date query param (YYYY-MM-DD) is required.');
+  try {
+    const rows = await db('tbl_loyalty_transactions as l')
+      .leftJoin('tbl_customer_master as c', 'l.Customer_ID', 'c.Customer_ID')
+      .where('l.Tenant_ID', req.user.tenantId)
+      .whereRaw('DATE(l."Created_Date") = ?', [date])
+      .select('l.*', 'c.Customer_Name', 'c.Loyalty_Card_Number')
+      .orderBy('l.Created_Date', 'desc');
+    const earned = rows.filter((r) => r.Txn_Type === 'Earned').reduce((s, r) => s + parseFloat(r.Points || 0), 0);
+    const redeemed = rows.filter((r) => r.Txn_Type === 'Redeemed').reduce((s, r) => s + parseFloat(r.Points || 0), 0);
+    return sendSuccess(res, { date, transactions: rows, totalEarned: earned, totalRedeemed: redeemed });
+  } catch (err) { return sendError(res, 500, 'Failed to fetch loyalty day sheet.'); }
+});
+
 module.exports = router;

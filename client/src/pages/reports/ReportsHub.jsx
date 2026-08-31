@@ -42,7 +42,7 @@ const REPORT_CATEGORIES = [
     key: 'customer', icon: <TeamOutlined style={{ fontSize: 32, color: '#722ed1' }} />,
     title: 'Customer Reports', color: '#722ed1', badge: 'CRM', badgeColor: 'purple',
     route: '/reports/customer-reports',
-    reports: ['Customer Ledger', 'Purchase History', 'Customer Outstanding', 'Customer Ageing (Days Db/Cr)'],
+    reports: ['Customer Ledger', 'Purchase History', 'Customer Outstanding', 'Customer Ageing (Days Db/Cr)', 'Loyalty Card (Members + Day Sheet)'],
   },
   {
     key: 'scheme', icon: <LineChartOutlined style={{ fontSize: 32, color: '#fa8c16' }} />,

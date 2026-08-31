@@ -80,6 +80,7 @@ import CustomerReportsPage from './pages/reports/CustomerReportsPage';
 import MastersReportPage from './pages/reports/MastersReportPage';
 import RateEntryPage from './pages/utility/RateEntryPage';
 import StockReconciliationPage from './pages/inventory/StockReconciliationPage';
+import LoyaltyCardPage from './pages/reports/LoyaltyCardPage';
 import GiftVoucherManagementPage from './pages/reports/GiftVoucherManagementPage';
 import GstReturnsPage from './pages/reports/GstReturnsPage';
 import SchemeReportsPage from './pages/reports/SchemeReportsPage';
@@ -239,6 +240,7 @@ function App() {
         <Route path="/reports/masters" element={<MastersReportPage />} />
         <Route path="/utility/rate-entry" element={<RateEntryPage />} />
         <Route path="/inventory/stock-reconciliation" element={<ProtectedRoute permission="inventory"><StockReconciliationPage /></ProtectedRoute>} />
+        <Route path="/reports/loyalty-card" element={<LoyaltyCardPage />} />
         <Route path="/reports/gift-vouchers" element={<GiftVoucherManagementPage />} />
         <Route path="/reports/gst-returns" element={<GstReturnsPage />} />
         <Route path="/reports/scheme-reports" element={<SchemeReportsPage />} />
