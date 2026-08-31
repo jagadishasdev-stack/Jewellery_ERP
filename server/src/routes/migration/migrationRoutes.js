@@ -27,8 +27,13 @@ const { sendSuccess, sendError, sendValidationError } = require('../../utils/res
 const { authenticate, requireSuperAdmin } = require('../../middleware/auth');
 const { body, validationResult } = require('express-validator');
 const { parseUploadedFiles, saveUploadedFile } = require('./migrationParser');
-const { detectSheetEntity } = require('./migrationDetection');
+const { detectSheetEntity, suggestColumnMapping, AUTO_APPROVE_THRESHOLD } = require('./migrationDetection');
 const { assertMigrationStatus, nextMigrationId, getMigrationOrNull } = require('./migrationShared');
+const { applyTransformation } = require('./migrationTransform');
+const { validateRecord } = require('./migrationValidate');
+const { checkDuplicate, VALID_DUPLICATE_ACTIONS } = require('./migrationDuplicate');
+const { getTenantDb } = require('../../db/tenantDbResolver');
+const { runWithTenantDb } = require('../../db/tenantDb');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -188,6 +193,206 @@ router.get('/:id/analysis', authenticate, requireSuperAdmin, async (req, res) =>
       .groupBy('Entity_Type', 'Source_File', 'Source_Sheet');
     return sendSuccess(res, summary.map((s) => ({ ...s, row_count: parseInt(s.row_count) })));
   } catch (err) { return sendError(res, 500, 'Failed to fetch analysis.'); }
+});
+
+// ── GET /api/migrations/:id/mapping — suggested (or previously-saved) column mapping per sheet ──
+router.get('/:id/mapping', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+
+    const saved = await db('migration_mappings').where('Migration_ID', req.params.id);
+    const savedByKey = new Map(saved.map((m) => [`${m.Entity_Type}|${m.Source_File}|${m.Source_Sheet}|${m.Source_Field}`, m]));
+
+    // Group staged rows by (entity, file, sheet) and take one sample row's
+    // keys as the header list — every row in a sheet shares the same
+    // headers (they came from the same Excel sheet).
+    const groups = await db('migration_staging_records')
+      .where('Migration_ID', req.params.id)
+      .select('Entity_Type', 'Source_File', 'Source_Sheet')
+      .groupBy('Entity_Type', 'Source_File', 'Source_Sheet');
+
+    const result = [];
+    for (const g of groups) {
+      const sample = await db('migration_staging_records')
+        .where({ Migration_ID: req.params.id, Entity_Type: g.Entity_Type, Source_File: g.Source_File, Source_Sheet: g.Source_Sheet })
+        .first();
+      const headers = Object.keys(sample.Raw_Data || {});
+      const suggested = suggestColumnMapping(headers, g.Entity_Type);
+      const fields = suggested.map((s) => {
+        const key = `${g.Entity_Type}|${g.Source_File}|${g.Source_Sheet}|${s.sourceField}`;
+        const existing = savedByKey.get(key);
+        return existing
+          ? { sourceField: s.sourceField, targetField: existing.Target_Field, confidence: parseFloat(existing.Confidence), status: existing.Mapping_Type === 'Manual' ? 'manual' : s.status, isApproved: existing.Is_Approved }
+          : { ...s, isApproved: s.status === 'auto' };
+      });
+      result.push({ entityType: g.Entity_Type, sourceFile: g.Source_File, sourceSheet: g.Source_Sheet, fields });
+    }
+    return sendSuccess(res, result);
+  } catch (err) { return sendError(res, 500, 'Failed to fetch mapping.'); }
+});
+
+// ── POST /api/migrations/:id/mapping — save/correct the mapping (repeatable while still in MAPPING) ──
+router.post('/:id/mapping', authenticate, requireSuperAdmin, [
+  body('mappings').isArray({ min: 1 }),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    assertMigrationStatus(migration, ['MAPPING']);
+
+    for (const m of req.body.mappings) {
+      if (!m.entityType || !m.sourceFile || !m.sourceSheet || !m.sourceField) continue; // skip malformed rows rather than fail the whole save
+      const existing = await db('migration_mappings').where({
+        Migration_ID: req.params.id, Entity_Type: m.entityType, Source_File: m.sourceFile, Source_Sheet: m.sourceSheet, Source_Field: m.sourceField,
+      }).first();
+      const row = {
+        Target_Field: m.targetField || null, Mapping_Type: 'Manual', Confidence: m.confidence ?? 100,
+        Transformation_Rule: m.transformationRule ? JSON.stringify(m.transformationRule) : null,
+        Is_Approved: m.isApproved !== false,
+      };
+      if (existing) await db('migration_mappings').where('Mapping_ID', existing.Mapping_ID).update(row);
+      else await db('migration_mappings').insert({ Migration_ID: req.params.id, Entity_Type: m.entityType, Source_File: m.sourceFile, Source_Sheet: m.sourceSheet, Source_Field: m.sourceField, ...row });
+    }
+    return sendSuccess(res, null, 'Mapping saved.');
+  } catch (err) {
+    if (err.statusCode === 400) return sendError(res, 400, err.message);
+    return sendError(res, 500, `Failed to save mapping: ${err.message}`);
+  }
+});
+
+// ── POST /api/migrations/:id/validate — build Mapped_Data, run validation + duplicate checks ──
+router.post('/:id/validate', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    assertMigrationStatus(migration, ['MAPPING']);
+    await db('migrations').where('Migration_ID', req.params.id).update({ Status: 'VALIDATING' });
+
+    // Any source FIELD with no saved mapping row yet gets the auto-
+    // suggested one persisted now — a Super Admin who only corrected one
+    // or two fields (or none at all) never has to explicitly map every
+    // remaining field by hand first. Checked per-field, not per-sheet —
+    // a sheet with even one manually-saved field must not skip
+    // generating the rest of that same sheet's fields.
+    const groups = await db('migration_staging_records')
+      .where('Migration_ID', req.params.id)
+      .select('Entity_Type', 'Source_File', 'Source_Sheet')
+      .groupBy('Entity_Type', 'Source_File', 'Source_Sheet');
+    const existingMappings = await db('migration_mappings').where('Migration_ID', req.params.id);
+    const existingKeys = new Set(existingMappings.map((m) => `${m.Entity_Type}|${m.Source_File}|${m.Source_Sheet}|${m.Source_Field}`));
+    for (const g of groups) {
+      const sample = await db('migration_staging_records').where({ Migration_ID: req.params.id, Entity_Type: g.Entity_Type, Source_File: g.Source_File, Source_Sheet: g.Source_Sheet }).first();
+      const suggested = suggestColumnMapping(Object.keys(sample.Raw_Data || {}), g.Entity_Type);
+      const toInsert = suggested.filter((s) => s.targetField && !existingKeys.has(`${g.Entity_Type}|${g.Source_File}|${g.Source_Sheet}|${s.sourceField}`));
+      if (toInsert.length) {
+        await db('migration_mappings').insert(toInsert.map((s) => ({
+          Migration_ID: req.params.id, Entity_Type: g.Entity_Type, Source_File: g.Source_File, Source_Sheet: g.Source_Sheet,
+          Source_Field: s.sourceField, Target_Field: s.targetField, Mapping_Type: 'Auto', Confidence: s.confidence,
+          Is_Approved: s.confidence >= AUTO_APPROVE_THRESHOLD,
+        })));
+      }
+    }
+
+    const allMappings = await db('migration_mappings').where('Migration_ID', req.params.id);
+    const mapByKey = new Map(allMappings.map((m) => [`${m.Entity_Type}|${m.Source_File}|${m.Source_Sheet}|${m.Source_Field}`, m]));
+
+    const targetConn = await getTenantDb(migration.Tenant_ID);
+    const counts = { Valid: 0, Warning: 0, Error: 0 };
+    let duplicateCount = 0;
+
+    await runWithTenantDb(targetConn, async () => {
+      const CHUNK = 500;
+      let offset = 0;
+      // Ordered pagination over a potentially huge staging set, processed
+      // in bounded-size chunks rather than loading everything into memory
+      // at once — same batching philosophy as the DLJ migration scripts.
+      while (true) {
+        const chunk = await db('migration_staging_records').where('Migration_ID', req.params.id).orderBy('Staging_ID').offset(offset).limit(CHUNK);
+        if (!chunk.length) break;
+        await Promise.all(chunk.map(async (record) => {
+          const raw = record.Raw_Data || {};
+          const mapped = {};
+          for (const [sourceField, rawValue] of Object.entries(raw)) {
+            const key = `${record.Entity_Type}|${record.Source_File}|${record.Source_Sheet}|${sourceField}`;
+            const m = mapByKey.get(key);
+            if (!m || !m.Target_Field || !m.Is_Approved) continue; // unmapped or not-yet-approved columns don't make it into Mapped_Data
+            mapped[m.Target_Field] = applyTransformation(rawValue, m.Transformation_Rule ? JSON.parse(m.Transformation_Rule) : null);
+          }
+          const { status, messages } = validateRecord(record.Entity_Type, mapped);
+          const dup = await checkDuplicate(migration.Tenant_ID, record.Entity_Type, mapped);
+          counts[status]++;
+          if (dup) duplicateCount++;
+          await db('migration_staging_records').where('Staging_ID', record.Staging_ID).update({
+            Mapped_Data: JSON.stringify(mapped),
+            Validation_Status: status,
+            Validation_Messages: JSON.stringify(messages),
+            Is_Duplicate: !!dup,
+            Duplicate_Match_Id: dup ? dup.matchId : null,
+          });
+        }));
+        offset += CHUNK;
+      }
+    });
+
+    await db('migrations').where('Migration_ID', req.params.id).update({ Status: 'READY' });
+    return sendSuccess(res, { ...counts, duplicates: duplicateCount, total: counts.Valid + counts.Warning + counts.Error }, 'Validation complete.');
+  } catch (err) {
+    if (err.statusCode === 400) return sendError(res, 400, err.message);
+    await db('migrations').where('Migration_ID', req.params.id).update({ Status: 'FAILED', Failure_Reason: err.message });
+    return sendError(res, 500, `Validation failed: ${err.message}`);
+  }
+});
+
+// ── GET /api/migrations/:id/preview — validation summary, per entity, for the pre-approval review screen ──
+router.get('/:id/preview', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    const byEntity = await db('migration_staging_records')
+      .where('Migration_ID', req.params.id)
+      .select('Entity_Type', 'Validation_Status')
+      .count('* as count')
+      .groupBy('Entity_Type', 'Validation_Status');
+
+    const summary = {};
+    for (const row of byEntity) {
+      summary[row.Entity_Type] ||= { Valid: 0, Warning: 0, Error: 0, Pending: 0, total: 0 };
+      summary[row.Entity_Type][row.Validation_Status] = parseInt(row.count);
+      summary[row.Entity_Type].total += parseInt(row.count);
+    }
+    const [{ duplicateCount }] = await db('migration_staging_records').where({ Migration_ID: req.params.id, Is_Duplicate: true }).count('* as duplicateCount');
+    return sendSuccess(res, { migration: { Migration_ID: migration.Migration_ID, Tenant_ID: migration.Tenant_ID, Status: migration.Status }, byEntity: summary, duplicateCount: parseInt(duplicateCount) });
+  } catch (err) { return sendError(res, 500, 'Failed to build preview.'); }
+});
+
+// ── GET /api/migrations/:id/duplicates — the actual duplicate rows, for review/resolution ──
+router.get('/:id/duplicates', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    const rows = await db('migration_staging_records').where({ Migration_ID: req.params.id, Is_Duplicate: true }).orderBy('Staging_ID');
+    return sendSuccess(res, rows);
+  } catch (err) { return sendError(res, 500, 'Failed to fetch duplicates.'); }
+});
+
+// ── POST /api/migrations/:id/duplicates/resolve — apply one resolution action to a set of staging rows ──
+router.post('/:id/duplicates/resolve', authenticate, requireSuperAdmin, [
+  body('stagingIds').isArray({ min: 1 }),
+  body('action').isIn(VALID_DUPLICATE_ACTIONS),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const migration = await getMigrationOr404(req.params.id, res);
+    if (!migration) return;
+    const count = await db('migration_staging_records')
+      .where('Migration_ID', req.params.id).whereIn('Staging_ID', req.body.stagingIds)
+      .update({ Duplicate_Action: req.body.action });
+    return sendSuccess(res, { updated: count }, `${count} record(s) marked ${req.body.action}.`);
+  } catch (err) { return sendError(res, 500, 'Failed to resolve duplicates.'); }
 });
 
 module.exports = router;
