@@ -31,6 +31,9 @@ router.post('/agents', authenticate, requireModuleAccess('rate_booking_agent_com
     const [row] = await db('tbl_agent_master').insert({
       ...req.body, Tenant_ID: tenantId,
       Agent_Code: req.body.Agent_Code || `AGT-${tenantId.replace('_', '')}-${(last?.Agent_ID || 0) + 1}`,
+      // Kumudu Schema Audit — distinguishes this from savingsScheme.js's
+      // field collection agents, which now share the same table.
+      Agent_Type: 'Rate_Booking',
       Created_By: req.user.username,
     }).returning('*');
     return sendSuccess(res, row, 'Agent created.', 201);

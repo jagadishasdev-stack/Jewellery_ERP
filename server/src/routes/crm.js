@@ -104,17 +104,88 @@ router.get('/feedback', authenticate, requireModuleAccess('crm', 'View'), async 
       .where('f.Tenant_ID', req.user.tenantId)
       .select('f.*', 'c.Customer_Name');
     if (status) qb = qb.where('f.Status', status);
-    return sendSuccess(res, await qb.orderBy('f.Created_Date', 'desc'));
+    const rows = await qb.orderBy('f.Created_Date', 'desc');
+    // Kumudu Schema Audit — attach each feedback's itemized ratings (if
+    // any were given) rather than a separate round-trip per row.
+    const ids = rows.map((r) => r.Feedback_ID);
+    const itemized = ids.length
+      ? await db('tbl_crm_feedback_ratings as r').join('tbl_crm_rating_criteria as c', 'r.Criteria_ID', 'c.Criteria_ID')
+          .whereIn('r.Feedback_ID', ids).select('r.Feedback_ID', 'c.Criteria_Name', 'r.Score')
+      : [];
+    const byFeedback = {};
+    itemized.forEach((i) => { (byFeedback[i.Feedback_ID] ||= []).push({ Criteria_Name: i.Criteria_Name, Score: i.Score }); });
+    return sendSuccess(res, rows.map((r) => ({ ...r, Itemized_Ratings: byFeedback[r.Feedback_ID] || [] })));
   } catch (err) { return sendError(res, 500, 'Failed to fetch feedback.'); }
 });
 
 router.post('/feedback', authenticate, requireModuleAccess('crm', 'Add'), [body('Rating').isInt({ min: 1, max: 5 })], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  // Kumudu Schema Audit — optional itemized breakdown on top of the
+  // existing single aggregate Rating (e.g. Showroom/Staff/Product
+  // Quality each scored separately), never required so existing callers
+  // keep working unchanged.
+  const { Ratings, ...feedbackBody } = req.body;
+  const trx = await db.transaction();
   try {
-    const [row] = await db('tbl_customer_feedback').insert({ ...req.body, Tenant_ID: req.user.tenantId, Status: 'Open' }).returning('*');
+    const [row] = await trx('tbl_customer_feedback').insert({ ...feedbackBody, Tenant_ID: req.user.tenantId, Status: 'Open' }).returning('*');
+    if (Array.isArray(Ratings) && Ratings.length) {
+      for (const r of Ratings) {
+        if (!r.Criteria_ID || !Number.isInteger(r.Score) || r.Score < 1 || r.Score > 5) continue; // skip malformed entries rather than fail the whole submission
+        await trx('tbl_crm_feedback_ratings').insert({ Feedback_ID: row.Feedback_ID, Criteria_ID: r.Criteria_ID, Score: r.Score });
+      }
+    }
+    await trx.commit();
     return sendSuccess(res, row, 'Feedback recorded.', 201);
-  } catch (err) { return sendError(res, 500, 'Failed to record feedback.'); }
+  } catch (err) {
+    await trx.rollback();
+    return sendError(res, 500, 'Failed to record feedback.');
+  }
+});
+
+// ── Feedback Rating Criteria (tenant-configurable, e.g. Showroom / Staff / Making Charges) ──
+router.get('/rating-criteria', authenticate, requireModuleAccess('crm', 'View'), async (req, res) => {
+  try {
+    return sendSuccess(res, await db('tbl_crm_rating_criteria').where({ Tenant_ID: req.user.tenantId, Is_Active: true }).orderBy('Sort_Order'));
+  } catch (err) { return sendError(res, 500, 'Failed to fetch rating criteria.'); }
+});
+
+router.post('/rating-criteria', authenticate, requireModuleAccess('crm', 'Add'), [body('Criteria_Name').notEmpty()], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const [row] = await db('tbl_crm_rating_criteria').insert({ ...req.body, Tenant_ID: req.user.tenantId }).returning('*');
+    return sendSuccess(res, row, 'Rating criteria added.', 201);
+  } catch (err) {
+    if (err.code === '23505') return sendError(res, 409, 'That criteria already exists.');
+    return sendError(res, 500, 'Failed to add rating criteria.');
+  }
+});
+
+// ── Configurable dropdown lists (Lead Source / Enquiry Source / Info Source / Newspaper / Place / Profession) ──
+// One generic, List_Type-discriminated table rather than six near-identical
+// ones — replaces the hardcoded Source enum's fixed options with something
+// tenant-editable, without changing the existing free-string Source column.
+const LIST_TYPES = ['LeadSource', 'EnquirySource', 'InfoSource', 'Newspaper', 'Place', 'Profession'];
+
+router.get('/lists/:type', authenticate, requireModuleAccess('crm', 'View'), async (req, res) => {
+  if (!LIST_TYPES.includes(req.params.type)) return sendError(res, 400, `Unknown list type. Use: ${LIST_TYPES.join(', ')}`);
+  try {
+    return sendSuccess(res, await db('tbl_crm_list_master').where({ Tenant_ID: req.user.tenantId, List_Type: req.params.type, Is_Active: true }).orderBy('Sort_Order'));
+  } catch (err) { return sendError(res, 500, 'Failed to fetch list.'); }
+});
+
+router.post('/lists/:type', authenticate, requireModuleAccess('crm', 'Add'), [body('Value').notEmpty()], async (req, res) => {
+  if (!LIST_TYPES.includes(req.params.type)) return sendError(res, 400, `Unknown list type. Use: ${LIST_TYPES.join(', ')}`);
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    const [row] = await db('tbl_crm_list_master').insert({ Tenant_ID: req.user.tenantId, List_Type: req.params.type, Value: req.body.Value, Sort_Order: req.body.Sort_Order || 0 }).returning('*');
+    return sendSuccess(res, row, 'Added.', 201);
+  } catch (err) {
+    if (err.code === '23505') return sendError(res, 409, 'That value already exists in this list.');
+    return sendError(res, 500, 'Failed to add to list.');
+  }
 });
 
 router.put('/feedback/:id/resolve', authenticate, requireModuleAccess('crm', 'Edit'), [body('Resolution_Notes').notEmpty()], async (req, res) => {

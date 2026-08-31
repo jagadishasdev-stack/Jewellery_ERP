@@ -144,7 +144,11 @@ router.put('/groups/:id', authenticate, async (req, res) => {
   // open just 5 of them to the app afterward. This is what
   // GET /api/core/getGroups (the app's own group list) actually checks —
   // see savingsAppCore.js.
-  const { Group_Name, Group_Image_URL, Group_Terms_Text, Status, Bonus_Amount, App_Join_Allowed, Counter_Join_Allowed } = req.body;
+  const {
+    Group_Name, Group_Image_URL, Group_Terms_Text, Status, Bonus_Amount, App_Join_Allowed, Counter_Join_Allowed,
+    // Kumudu Schema Audit additions.
+    Min_Installment_Amount, Max_Installment_Amount, Is_Flexible_Installment, Payment_Due_Day,
+  } = req.body;
   const updates = {};
   if (Group_Name !== undefined) updates.Group_Name = Group_Name;
   if (Group_Image_URL !== undefined) updates.Group_Image_URL = Group_Image_URL;
@@ -153,6 +157,10 @@ router.put('/groups/:id', authenticate, async (req, res) => {
   if (Bonus_Amount !== undefined) updates.Bonus_Amount = Bonus_Amount;
   if (App_Join_Allowed !== undefined) updates.App_Join_Allowed = App_Join_Allowed;
   if (Counter_Join_Allowed !== undefined) updates.Counter_Join_Allowed = Counter_Join_Allowed;
+  if (Min_Installment_Amount !== undefined) updates.Min_Installment_Amount = Min_Installment_Amount;
+  if (Max_Installment_Amount !== undefined) updates.Max_Installment_Amount = Max_Installment_Amount;
+  if (Is_Flexible_Installment !== undefined) updates.Is_Flexible_Installment = Is_Flexible_Installment;
+  if (Payment_Due_Day !== undefined) updates.Payment_Due_Day = Payment_Due_Day;
 
   try {
     const [group] = await db('tbl_scheme_groups')
@@ -366,7 +374,11 @@ router.get('/members/:id', authenticate, async (req, res) => {
 
 // PUT /api/savings/members/:id — self-service / staff profile edit
 router.put('/members/:id', authenticate, async (req, res) => {
-  const { Member_Name, Mobile, Email, Address_Line1, Pincode, Installment_Amount } = req.body;
+  const {
+    Member_Name, Mobile, Email, Address_Line1, Pincode, Installment_Amount,
+    // Kumudu Schema Audit additions.
+    Default_Collection_Mode, Duplicate_Card_Issued,
+  } = req.body;
   const updates = {};
   if (Member_Name !== undefined) updates.Member_Name = Member_Name;
   if (Mobile !== undefined) updates.Mobile = Mobile;
@@ -374,6 +386,13 @@ router.put('/members/:id', authenticate, async (req, res) => {
   if (Address_Line1 !== undefined) updates.Address_Line1 = Address_Line1;
   if (Pincode !== undefined) updates.Pincode = Pincode;
   if (Installment_Amount !== undefined) updates.Installment_Amount = Installment_Amount;
+  if (Default_Collection_Mode !== undefined) updates.Default_Collection_Mode = Default_Collection_Mode;
+  if (Duplicate_Card_Issued !== undefined) {
+    updates.Duplicate_Card_Issued = Duplicate_Card_Issued;
+    // A reissue always gets a fresh timestamp — never silently backdated
+    // to whatever the client happens to send.
+    if (Duplicate_Card_Issued) updates.Duplicate_Card_Date = db.fn.now();
+  }
 
   try {
     const [member] = await db('tbl_scheme_members')
@@ -457,6 +476,13 @@ router.post('/collect', authenticate, [
       // ignoring the active branch context entirely.
       Branch_ID: resolveBranchForInsert(req, req.body.Branch_ID),
       Agent_Code: req.body.Agent_Code || req.user.agentCode || null,
+      // Kumudu Schema Audit — a field agent's collection had no way to
+      // capture a customer signature or the GPS location it was
+      // collected at (the dump's `collections` table does both). Both
+      // optional: a counter collection has neither.
+      Signature_Data: req.body.Signature_Data || null,
+      Latitude: req.body.Latitude ?? null,
+      Longitude: req.body.Longitude ?? null,
       Data_Mode: modeVal(req),
       Created_By: req.user.username,
     }).returning('*');
@@ -1247,6 +1273,10 @@ router.post('/agents', authenticate, [
       Tenant_ID:   tid,
       Agent_Code:  agentCode,
       Status:      req.body.Status || 'Active',
+      // Kumudu Schema Audit — tbl_agent_master is shared with
+      // rateBookingAgent.js's rate-lock commission agents; this route is
+      // specifically the field collection agent path.
+      Agent_Type:  'Collection',
       Created_By:  req.user.username,
     }).returning('*');
 
