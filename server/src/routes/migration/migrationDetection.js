@@ -90,6 +90,8 @@ const ENTITY_DEFS = {
       Purchase_Date: ['purchase_date', 'date', 'invoice_date'],
       Supplier_Invoice_No: ['invoice_no', 'supplier_invoice_no', 'bill_no'],
       Total_Amount: ['total_amount', 'amount', 'total', 'net_amount'],
+      Amount_Paid: ['amount_paid', 'paid_amount', 'advance', 'advance_paid'],
+      Payment_Mode: ['mode', 'payment_mode', 'pmode'],
     },
   },
   sale: {
@@ -97,6 +99,9 @@ const ENTITY_DEFS = {
     sheetKeywords: ['sales register', 'sale', 'sales', 'invoice register'],
     fields: {
       Invoice_Number: ['invoice_no', 'invoice_number', 'bill_no', 'billno'],
+      Amount_Paid: ['amount_paid', 'paid_amount', 'advance'],
+      Payment_Mode: ['mode', 'payment_mode', 'pmode'],
+      Is_Returned: ['returned', 'is_returned', 'return_status'],
       Sale_Date: ['sale_date', 'date', 'invoice_date', 'bill_date'],
       Customer_Name: ['customer_name', 'customer', 'party_name'],
       Net_Payable_Amount: ['net_amount', 'total_amount', 'amount', 'net_payable'],
@@ -110,6 +115,10 @@ const ENTITY_DEFS = {
       Payment_Mode: ['mode', 'payment_mode', 'pmode'],
       Payment_Date: ['date', 'payment_date', 'receipt_date'],
       Payment_Reference: ['reference', 'ref_no', 'utr'],
+      // Which document this payment settles — a receipt register almost
+      // always references the original invoice/purchase number, not a
+      // raw internal ID.
+      Against_Number: ['invoice_no', 'against_invoice', 'bill_no', 'purchase_no', 'against_number'],
     },
   },
 };
