@@ -25,6 +25,17 @@ api.interceptors.request.use((config) => {
     // (server treats a missing header as "don't filter," not as an error).
     const branchId = localStorage.getItem('erp_branch_id');
     if (branchId) config.headers['X-Branch-ID'] = branchId;
+    // Data Migration Center step-up re-auth — deliberately sessionStorage
+    // (cleared on tab close), never localStorage, and only ever attached
+    // to /migrations calls. See MasterReauthGate.jsx for how this gets
+    // set, and requireMigrationReauth (server) for how it's checked.
+    if (config.url?.includes('/migrations')) {
+      const migAuth = sessionStorage.getItem('erp_migration_auth');
+      if (migAuth) {
+        const { token, expiresAt } = JSON.parse(migAuth);
+        if (token && expiresAt > Date.now()) config.headers['X-Migration-Auth'] = token;
+      }
+    }
   } catch (_) {}
   return config;
 }, (error) => Promise.reject(error));

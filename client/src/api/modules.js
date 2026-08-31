@@ -355,6 +355,7 @@ export const tenantApi = {
 
 // ─── Data Migration Center (Super Admin only) ──────────────────────────────────
 export const migrationApi = {
+  verifyMaster: (username, password) => api.post('/migrations/verify-master', { username, password }),
   create: (data) => api.post('/migrations', data),
   getAll: () => api.get('/migrations'),
   getById: (id) => api.get(`/migrations/${id}`),

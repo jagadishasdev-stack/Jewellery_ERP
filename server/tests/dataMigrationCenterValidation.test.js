@@ -11,8 +11,8 @@ const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
 
-let tenant, saToken, tenantToken, saUserId, migrationId, existingCustomerMobile;
-const saAuth = () => ({ Authorization: `Bearer ${saToken}` });
+let tenant, saToken, tenantToken, saUserId, migrationId, existingCustomerMobile, migrationAuthToken;
+const saAuth = () => ({ Authorization: `Bearer ${saToken}`, 'X-Migration-Auth': migrationAuthToken });
 
 const SA_USERNAME = 'qatest_sa_migval';
 const SA_PASSWORD = 'QaTestSA@2026mv';
@@ -37,6 +37,9 @@ beforeAll(async () => {
 
   const saRes = await request(app).post('/api/auth/login').send({ username: SA_USERNAME, password: SA_PASSWORD, tenantId: 'SA_MASTER' });
   saToken = saRes.body.data.token;
+
+  const verify = await request(app).post('/api/migrations/verify-master').set({ Authorization: `Bearer ${saToken}` }).send({ username: SA_USERNAME, password: SA_PASSWORD });
+  migrationAuthToken = verify.body.data.token;
 
   const tRes = await request(app).post('/api/auth/login').send({ username: tenant.username, password: tenant.password, tenantId: tenant.tenantId });
   tenantToken = tRes.body.data.token;

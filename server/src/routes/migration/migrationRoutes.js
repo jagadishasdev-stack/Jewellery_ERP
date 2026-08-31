@@ -22,13 +22,15 @@
 const router = require('express').Router();
 const multer = require('multer');
 const fs = require('fs');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const db = require('../../db/knex'); // control-plane connection — same as superAdmin.js
 const { sendSuccess, sendError, sendValidationError } = require('../../utils/response');
 const { authenticate, requireSuperAdmin } = require('../../middleware/auth');
 const { body, validationResult } = require('express-validator');
 const { parseUploadedFiles, saveUploadedFile } = require('./migrationParser');
 const { detectSheetEntity, suggestColumnMapping, AUTO_APPROVE_THRESHOLD } = require('./migrationDetection');
-const { assertMigrationStatus, nextMigrationId, getMigrationOrNull } = require('./migrationShared');
+const { assertMigrationStatus, nextMigrationId, getMigrationOrNull, requireMigrationReauth, MIGRATION_REAUTH_TTL } = require('./migrationShared');
 const { applyTransformation } = require('./migrationTransform');
 const { validateRecord } = require('./migrationValidate');
 const { checkDuplicate, VALID_DUPLICATE_ACTIONS } = require('./migrationDuplicate');
@@ -52,8 +54,36 @@ async function getMigrationOr404(id, res) {
   return migration;
 }
 
+// ── POST /api/migrations/verify-master — step-up re-authentication ────────────
+// Requires an already-valid Super Admin session (authenticate,
+// requireSuperAdmin) PLUS re-entering that SAME account's own password —
+// this is a re-check, not a way to log in as a different Super Admin.
+// On success, mints a separate, short-lived (30 min) token the client
+// must send as X-Migration-Auth on every other /api/migrations/* call
+// (see requireMigrationReauth, migrationShared.js). Deliberately NOT the
+// normal session JWT — a left-open browser tab's session token alone is
+// not enough to reach this feature.
+router.post('/verify-master', authenticate, requireSuperAdmin, [
+  body('username').notEmpty(), body('password').notEmpty(),
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return sendValidationError(res, errors.array());
+  try {
+    if (req.body.username !== req.user.username) {
+      return sendError(res, 403, 'Re-enter the same Super Admin account you are currently logged in as.');
+    }
+    const user = await db('tbl_user_master').where({ Tenant_ID: 'SA_MASTER', Username: req.body.username, Is_Active: true }).first();
+    if (!user) return sendError(res, 401, 'Invalid credentials.');
+    const valid = await bcrypt.compare(req.body.password, user.Password_Hash);
+    if (!valid) return sendError(res, 401, 'Invalid credentials.');
+
+    const token = jwt.sign({ userId: user.User_ID, username: user.Username, purpose: 'migration-access' }, process.env.JWT_SECRET, { expiresIn: MIGRATION_REAUTH_TTL });
+    return sendSuccess(res, { token, expiresInMinutes: 30 }, 'Verified.');
+  } catch (err) { return sendError(res, 500, 'Verification failed.'); }
+});
+
 // ── POST /api/migrations — create a new migration record (DRAFT) ──────────────
-router.post('/', authenticate, requireSuperAdmin, [
+router.post('/', authenticate, requireSuperAdmin, requireMigrationReauth, [
   body('Tenant_ID').notEmpty().withMessage('Target tenant is required'),
   body('Migration_Type').isIn(['Full', 'Master', 'OpeningBalance', 'Transaction']),
 ], async (req, res) => {
@@ -78,7 +108,7 @@ router.post('/', authenticate, requireSuperAdmin, [
 });
 
 // ── GET /api/migrations — dashboard list ───────────────────────────────────────
-router.get('/', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const rows = await db('migrations as m')
       .leftJoin('tbl_tenant_master as t', 'm.Tenant_ID', 't.Tenant_ID')
@@ -89,7 +119,7 @@ router.get('/', authenticate, requireSuperAdmin, async (req, res) => {
   } catch (err) { return sendError(res, 500, 'Failed to fetch migrations.'); }
 });
 
-router.get('/:id', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -99,7 +129,7 @@ router.get('/:id', authenticate, requireSuperAdmin, async (req, res) => {
 });
 
 // ── POST /api/migrations/:id/files — upload (multi-file + zip) ────────────────
-router.post('/:id/files', authenticate, requireSuperAdmin, upload.array('files', 20), async (req, res) => {
+router.post('/:id/files', authenticate, requireSuperAdmin, requireMigrationReauth, upload.array('files', 20), async (req, res) => {
   if (!req.files?.length) return sendError(res, 400, 'No files uploaded.');
   try {
     const migration = await getMigrationOr404(req.params.id, res);
@@ -125,7 +155,7 @@ router.post('/:id/files', authenticate, requireSuperAdmin, upload.array('files',
 });
 
 // ── POST /api/migrations/:id/analyze — parse every uploaded file, detect sheets/entities/columns ──
-router.post('/:id/analyze', authenticate, requireSuperAdmin, async (req, res) => {
+router.post('/:id/analyze', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -184,7 +214,7 @@ router.post('/:id/analyze', authenticate, requireSuperAdmin, async (req, res) =>
 });
 
 // ── GET /api/migrations/:id/analysis — re-fetch the analysis summary without re-parsing ──
-router.get('/:id/analysis', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id/analysis', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -198,7 +228,7 @@ router.get('/:id/analysis', authenticate, requireSuperAdmin, async (req, res) =>
 });
 
 // ── GET /api/migrations/:id/mapping — suggested (or previously-saved) column mapping per sheet ──
-router.get('/:id/mapping', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id/mapping', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -235,7 +265,7 @@ router.get('/:id/mapping', authenticate, requireSuperAdmin, async (req, res) => 
 });
 
 // ── POST /api/migrations/:id/mapping — save/correct the mapping (repeatable while still in MAPPING) ──
-router.post('/:id/mapping', authenticate, requireSuperAdmin, [
+router.post('/:id/mapping', authenticate, requireSuperAdmin, requireMigrationReauth, [
   body('mappings').isArray({ min: 1 }),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -266,7 +296,7 @@ router.post('/:id/mapping', authenticate, requireSuperAdmin, [
 });
 
 // ── POST /api/migrations/:id/validate — build Mapped_Data, run validation + duplicate checks ──
-router.post('/:id/validate', authenticate, requireSuperAdmin, async (req, res) => {
+router.post('/:id/validate', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -349,7 +379,7 @@ router.post('/:id/validate', authenticate, requireSuperAdmin, async (req, res) =
 });
 
 // ── GET /api/migrations/:id/preview — validation summary, per entity, for the pre-approval review screen ──
-router.get('/:id/preview', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id/preview', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -371,7 +401,7 @@ router.get('/:id/preview', authenticate, requireSuperAdmin, async (req, res) => 
 });
 
 // ── GET /api/migrations/:id/duplicates — the actual duplicate rows, for review/resolution ──
-router.get('/:id/duplicates', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id/duplicates', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -381,7 +411,7 @@ router.get('/:id/duplicates', authenticate, requireSuperAdmin, async (req, res) 
 });
 
 // ── POST /api/migrations/:id/duplicates/resolve — apply one resolution action to a set of staging rows ──
-router.post('/:id/duplicates/resolve', authenticate, requireSuperAdmin, [
+router.post('/:id/duplicates/resolve', authenticate, requireSuperAdmin, requireMigrationReauth, [
   body('stagingIds').isArray({ min: 1 }),
   body('action').isIn(VALID_DUPLICATE_ACTIONS),
 ], async (req, res) => {
@@ -398,7 +428,7 @@ router.post('/:id/duplicates/resolve', authenticate, requireSuperAdmin, [
 });
 
 // ── POST /api/migrations/:id/approve — READY -> APPROVED, the explicit sign-off before anything writes to production ──
-router.post('/:id/approve', authenticate, requireSuperAdmin, [
+router.post('/:id/approve', authenticate, requireSuperAdmin, requireMigrationReauth, [
   body('confirmed').equals('true').withMessage('You must explicitly confirm before approving a production migration.'),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -416,7 +446,7 @@ router.post('/:id/approve', authenticate, requireSuperAdmin, [
 });
 
 // ── POST /api/migrations/:id/start — APPROVED -> RUNNING, kicks off the processor without waiting for it to finish ──
-router.post('/:id/start', authenticate, requireSuperAdmin, async (req, res) => {
+router.post('/:id/start', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -441,7 +471,7 @@ router.post('/:id/start', authenticate, requireSuperAdmin, async (req, res) => {
 });
 
 // ── GET /api/migrations/:id/status — poll target, source of truth alongside the socket push ──
-router.get('/:id/status', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id/status', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -455,7 +485,7 @@ router.get('/:id/status', authenticate, requireSuperAdmin, async (req, res) => {
 });
 
 // ── GET /api/migrations/:id/report — final summary (doc §50) ──────────────────
-router.get('/:id/report', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id/report', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const migration = await getMigrationOr404(req.params.id, res);
     if (!migration) return;
@@ -472,7 +502,7 @@ router.get('/:id/report', authenticate, requireSuperAdmin, async (req, res) => {
 });
 
 // ── GET /api/migrations/:id/reconciliation — doc §51-52 ────────────────────────
-router.get('/:id/reconciliation', authenticate, requireSuperAdmin, async (req, res) => {
+router.get('/:id/reconciliation', authenticate, requireSuperAdmin, requireMigrationReauth, async (req, res) => {
   try {
     const result = await buildReconciliation(req.params.id);
     if (!result) return sendError(res, 404, 'Migration not found.');

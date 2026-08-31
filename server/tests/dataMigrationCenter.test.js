@@ -12,8 +12,11 @@ const { app } = require('../src/index');
 const db = require('../src/db/knex');
 const testTenant = require('./helpers/testTenant');
 
-let tenant, saToken, tenantToken, saUserId, migrationId;
-const saAuth = () => ({ Authorization: `Bearer ${saToken}` });
+let tenant, saToken, tenantToken, saUserId, migrationId, migrationAuthToken;
+// Every real /api/migrations/* route (besides verify-master itself) now
+// also requires the short-lived X-Migration-Auth step-up token — see
+// requireMigrationReauth in migrationShared.js.
+const saAuth = () => ({ Authorization: `Bearer ${saToken}`, 'X-Migration-Auth': migrationAuthToken });
 const tenantAuth = () => ({ Authorization: `Bearer ${tenantToken}` });
 
 const SA_USERNAME = 'qatest_sa_migration';
@@ -51,6 +54,9 @@ beforeAll(async () => {
   const saRes = await request(app).post('/api/auth/login').send({ username: SA_USERNAME, password: SA_PASSWORD, tenantId: 'SA_MASTER' });
   saToken = saRes.body.data.token;
 
+  const verify = await request(app).post('/api/migrations/verify-master').set({ Authorization: `Bearer ${saToken}` }).send({ username: SA_USERNAME, password: SA_PASSWORD });
+  migrationAuthToken = verify.body.data.token;
+
   const tRes = await request(app).post('/api/auth/login').send({ username: tenant.username, password: tenant.password, tenantId: tenant.tenantId });
   tenantToken = tRes.body.data.token;
 });
@@ -74,6 +80,31 @@ test('a non-Super-Admin (even a tenant\'s own admin) cannot create a migration f
 test('an unauthenticated request is rejected before the Super Admin check even runs', async () => {
   const res = await request(app).post('/api/migrations').send({ Tenant_ID: tenant.tenantId, Migration_Type: 'Full' });
   expect(res.status).toBe(401);
+});
+
+test('a valid Super Admin session WITHOUT the step-up X-Migration-Auth token is still rejected', async () => {
+  const res = await request(app).post('/api/migrations').set({ Authorization: `Bearer ${saToken}` }).send({ Tenant_ID: tenant.tenantId, Migration_Type: 'Full' });
+  expect(res.status).toBe(401);
+  expect(res.body.message).toMatch(/fresh Super Admin sign-in/);
+});
+
+test('verify-master rejects a wrong password, and rejects re-entering a DIFFERENT Super Admin account than the one currently logged in', async () => {
+  const wrongPassword = await request(app).post('/api/migrations/verify-master').set({ Authorization: `Bearer ${saToken}` }).send({ username: SA_USERNAME, password: 'not the real password' });
+  expect(wrongPassword.status).toBe(401);
+
+  const differentAccount = await request(app).post('/api/migrations/verify-master').set({ Authorization: `Bearer ${saToken}` }).send({ username: 'some_other_admin', password: SA_PASSWORD });
+  expect(differentAccount.status).toBe(403);
+});
+
+test('a tampered/forged X-Migration-Auth token is rejected even with a real Super Admin session', async () => {
+  const res = await request(app).post('/api/migrations').set({ Authorization: `Bearer ${saToken}`, 'X-Migration-Auth': 'not-a-real-token' }).send({ Tenant_ID: tenant.tenantId, Migration_Type: 'Full' });
+  expect(res.status).toBe(401);
+});
+
+test('the real verify-master token actually grants access to a protected route', async () => {
+  expect(migrationAuthToken).toBeTruthy();
+  const res = await request(app).get('/api/migrations').set(saAuth());
+  expect(res.status).toBe(200);
 });
 
 test('Super Admin creates a migration for a real target tenant, starting in DRAFT', async () => {
