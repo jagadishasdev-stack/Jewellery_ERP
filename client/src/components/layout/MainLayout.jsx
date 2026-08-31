@@ -472,6 +472,10 @@ const buildMenuItems = (permissions = {}, isEnabled = () => true, isUnofficial =
     if (permissions.global_master) {
       adminChildren.push({ key: '/admin/modules', label: '📦 Module Management' });
       if (isEnabled('sms_whatsapp_integration')) adminChildren.push({ key: '/admin/sms-settings', label: '💬 SMS Settings' });
+      // Data Migration Center — bulk-imports a customer's old ERP data
+      // into a chosen tenant, so it's Super-Admin-only (global_master)
+      // the same way every other cross-tenant screen in this group is.
+      adminChildren.push({ key: '/admin/data-migration', label: '🔄 Data Migration' });
     }
     items.push({ key: 'admin-group', icon: <SettingOutlined />, label: 'Admin', children: adminChildren });
   }

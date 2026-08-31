@@ -353,6 +353,27 @@ export const tenantApi = {
   deleteRole: (id) => api.delete(`/tenant/roles/${id}`),
 };
 
+// ─── Data Migration Center (Super Admin only) ──────────────────────────────────
+export const migrationApi = {
+  create: (data) => api.post('/migrations', data),
+  getAll: () => api.get('/migrations'),
+  getById: (id) => api.get(`/migrations/${id}`),
+  uploadFiles: (id, formData) => api.post(`/migrations/${id}/files`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  analyze: (id) => api.post(`/migrations/${id}/analyze`),
+  getAnalysis: (id) => api.get(`/migrations/${id}/analysis`),
+  getMapping: (id) => api.get(`/migrations/${id}/mapping`),
+  saveMapping: (id, mappings) => api.post(`/migrations/${id}/mapping`, { mappings }),
+  validate: (id) => api.post(`/migrations/${id}/validate`),
+  getPreview: (id) => api.get(`/migrations/${id}/preview`),
+  getDuplicates: (id) => api.get(`/migrations/${id}/duplicates`),
+  resolveDuplicates: (id, stagingIds, action) => api.post(`/migrations/${id}/duplicates/resolve`, { stagingIds, action }),
+  approve: (id) => api.post(`/migrations/${id}/approve`, { confirmed: 'true' }),
+  start: (id) => api.post(`/migrations/${id}/start`),
+  getStatus: (id) => api.get(`/migrations/${id}/status`),
+  getReport: (id) => api.get(`/migrations/${id}/report`),
+  getReconciliation: (id) => api.get(`/migrations/${id}/reconciliation`),
+};
+
 // ─── Approval Issue / Receive ───────────────────────────────────────────────
 export const approvalApi = {
   getParties: (params) => api.get('/approval/parties', { params }),

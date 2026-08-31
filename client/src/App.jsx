@@ -51,6 +51,8 @@ import InvoiceTemplatePage from './pages/invoice/InvoiceTemplatePage';
 import InvoiceStudio from './pages/invoice/InvoiceStudio';
 import CustomerDisplayPage from './pages/customer-display/CustomerDisplayPage';
 import TenantManagePage from './pages/admin/TenantManagePage';
+import MigrationDashboard from './pages/admin/migration/MigrationDashboard';
+import NewMigrationWizard from './pages/admin/migration/NewMigrationWizard';
 import DeviceLicensesPage from './pages/admin/DeviceLicensesPage';
 import MasterDataPage from './pages/admin/MasterDataPage';
 import CompleteMasterPage from './pages/admin/CompleteMasterPage';
@@ -209,6 +211,9 @@ function App() {
         <Route path="/invoice/template" element={<InvoiceTemplatePage />} />
         <Route path="/invoice/studio" element={<InvoiceStudio />} />
         <Route path="/admin/tenants" element={<ProtectedRoute permission="global_master"><TenantManagePage /></ProtectedRoute>} />
+        <Route path="/admin/data-migration" element={<ProtectedRoute permission="global_master"><MigrationDashboard /></ProtectedRoute>} />
+        <Route path="/admin/data-migration/new" element={<ProtectedRoute permission="global_master"><NewMigrationWizard /></ProtectedRoute>} />
+        <Route path="/admin/data-migration/:id" element={<ProtectedRoute permission="global_master"><NewMigrationWizard /></ProtectedRoute>} />
         <Route path="/admin/device-licenses" element={<ProtectedRoute permission="global_master"><DeviceLicensesPage /></ProtectedRoute>} />
         <Route path="/admin/sa-dashboard" element={<ProtectedRoute permission="global_master"><SuperAdminDashboard /></ProtectedRoute>} />
         <Route path="/admin/master" element={<ProtectedRoute permission="global_master"><MasterDataPage /></ProtectedRoute>} />
